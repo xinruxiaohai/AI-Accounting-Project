@@ -1,6 +1,6 @@
 from datetime import date
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, render_template, request
 
 import database
 
@@ -15,8 +15,8 @@ database.init_db()
 
 @app.route("/", methods=["GET"])
 def index():
-    """首页路由：返回服务状态和项目名，用于确认后端已正常启动。"""
-    return jsonify(status="ok", project="AI记账管家")
+    """首页路由：返回记一笔页面。模板默认从同级的 templates 目录里找。"""
+    return render_template("index.html")
 
 
 @app.route("/health", methods=["GET"])
