@@ -1,410 +1,574 @@
-// 前端逻辑：三张统计卡片 + 记一笔/编辑 + 删除 + 账户筛选 + 账户管理弹窗
-const formTitle = document.getElementById("form-title");
-const amountInput = document.getElementById("amount");
-const categoryInput = document.getElementById("category");
-const accountInput = document.getElementById("account");
-const dateInput = document.getElementById("date");
-const noteInput = document.getElementById("note");
-const submitBtn = document.getElementById("submit-btn");
-const cancelBtn = document.getElementById("cancel-btn");
-const recordList = document.getElementById("record-list");
-const emptyTip = document.getElementById("empty-tip");
-const filterAccount = document.getElementById("filter-account");
-const accountList = document.getElementById("account-list");
+/* ============================================================
+   AI记账管家 · 前端业务逻辑
+   ------------------------------------------------------------
+   只做三件事：
+   1. 把后端接口拿到的数据填进页面（卡片 / 表格 / 资产页 / 日历）
+   2. 把用户操作（记一笔 / 编辑 / 删除 / 改余额）变成对应的接口请求
+   3. 每次写操作成功后重新拉一次数据，做到「不刷新页面数字也变」
+   ============================================================ */
 
-const statIncome = document.getElementById("stat-income");
-const statExpense = document.getElementById("stat-expense");
-const statBalance = document.getElementById("stat-balance");
+/* ---------------- 全局状态 ---------------- */
 
-// null = 正在新增；数字 = 正在编辑这条 id
+// null = 新增；数字 = 正在编辑的那条记录的 id
 let editingId = null;
 
-// 账户管理弹窗用一个实例反复 show，不要每次点击都 new
-const accountModalEl = document.getElementById("account-modal");
-const accountModal = window.bootstrap ? new bootstrap.Modal(accountModalEl) : null;
+// 最近一次拉到的账目，日历页和编辑回填都从这里取，避免再请求一次
+let allRecords = [];
 
-// 金额统一格式化成 ¥12.50；负数显示成 -¥773.23 而不是 ¥-773.23
-function money(n) {
-  const v = Number(n) || 0;
-  return (v < 0 ? "-" : "") + "¥" + Math.abs(v).toFixed(2);
+// Bootstrap 弹窗实例，第一次用时才创建
+let recordModal = null;
+
+// 侧边栏菜单对应的页面标题
+const PAGE_TITLES = { home: "首页", calendar: "日历", assets: "资产", profile: "我的" };
+
+/* ---------------- 小工具 ---------------- */
+
+function $(id) {
+  return document.getElementById(id);
 }
 
-// 带收支符号的金额：收入 +¥10.00，支出 -¥10.00
+// 数字 -> "¥12.30" / "-¥773.23"（负号放在最前面，不是 ¥-773）
+function money(value) {
+  const num = Number(value) || 0;
+  const sign = num < 0 ? "-" : "";
+  return sign + "¥" + Math.abs(num).toFixed(2);
+}
+
+// 带收支符号的金额：收入 +¥ / 支出 -¥
 function signedMoney(amount, type) {
-  return (type === "income" ? "+" : "-") + money(amount);
+  const abs = Math.abs(Number(amount) || 0).toFixed(2);
+  return (type === "income" ? "+¥" : "-¥") + abs;
 }
 
-// 今天的本地日期，格式 YYYY-MM-DD（toLocaleDateString 的 sv-SE 正好是这个格式）
-function todayString() {
-  return new Date().toLocaleDateString("sv-SE");
+// "2026-10-25 00:00" -> "2026-10-25 00:00"；顺带把可能出现的 T 换成空格
+function displayDate(value) {
+  return String(value || "").replace("T", " ");
 }
 
-// 当前选中的收支类型
+// "2026-10-25 00:00" -> "2026-10-25T00:00"（datetime-local 只认这种格式）
+function toInputValue(value) {
+  const text = String(value || "").replace(" ", "T");
+  return text.length >= 16 ? text.slice(0, 16) : text;
+}
+
+// 客户端当前时间，格式和 datetime-local 对齐
+function nowInputValue() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return (
+    d.getFullYear() +
+    "-" + pad(d.getMonth() + 1) +
+    "-" + pad(d.getDate()) +
+    "T" + pad(d.getHours()) +
+    ":" + pad(d.getMinutes())
+  );
+}
+
+// 拼 HTML 时把用户输入转义，避免备注里带 < > 把表格撑坏
+function escapeHtml(text) {
+  return String(text == null ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// 读当前选中的收支类型
 function currentType() {
   const checked = document.querySelector('input[name="record-type"]:checked');
   return checked ? checked.value : "expense";
 }
 
-// ---------- 统计卡片 ----------
-async function loadStatistics() {
-  const resp = await fetch("/api/statistics");
-  const s = await resp.json();
-
-  statIncome.textContent = money(s.income_total);
-  statExpense.textContent = money(s.expense_total);
-  statBalance.textContent = money(s.balance_total);
-
-  // 余额为负显示红色，非负显示蓝色 —— 换 class 而不是改 style，样式仍由 CSS 管
-  statBalance.className =
-    "stat-number " + (Number(s.balance_total) < 0 ? "text-danger" : "text-primary");
-}
-
-// ---------- 账户 ----------
-// 把账户列表同步到三个地方：筛选下拉框、表单的账户下拉框、账户管理弹窗
-function syncAccountOptions(names) {
-  // 记住当前选中值，重建后尽量还原，避免刷新把用户的选择冲掉
-  const filterValue = filterAccount.value;
-  const accountValue = accountInput.value;
-
-  filterAccount.innerHTML = "";
-  const all = document.createElement("option");
-  all.value = "";
-  all.textContent = "全部账户";
-  filterAccount.appendChild(all);
-
-  accountInput.innerHTML = "";
-
-  names.forEach((name) => {
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    filterAccount.appendChild(opt);
-
-    const opt2 = document.createElement("option");
-    opt2.value = name;
-    opt2.textContent = name;
-    accountInput.appendChild(opt2);
-  });
-
-  filterAccount.value = names.includes(filterValue) ? filterValue : "";
-  accountInput.value = names.includes(accountValue) ? accountValue : names[0] || "";
-}
-
-// 渲染账户管理弹窗里的每一行
-function renderAccountRows(accounts) {
-  accountList.innerHTML = "";
-
-  accounts.forEach((a) => {
-    const tr = document.createElement("tr");
-
-    const nameTd = document.createElement("td");
-    nameTd.textContent = a.name;
-    tr.appendChild(nameTd);
-
-    // 余额为负也标红，和顶部卡片保持一致
-    const balTd = document.createElement("td");
-    balTd.textContent = money(a.balance);
-    balTd.className = Number(a.balance) < 0 ? "text-danger fw-semibold" : "fw-semibold";
-    tr.appendChild(balTd);
-
-    const inputTd = document.createElement("td");
-    const input = document.createElement("input");
-    input.type = "number";
-    input.step = "0.01";
-    input.className = "form-control form-control-sm";
-    input.value = a.balance;
-    inputTd.appendChild(input);
-    tr.appendChild(inputTd);
-
-    const btnTd = document.createElement("td");
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "button";
-    saveBtn.className = "btn btn-sm btn-outline-primary w-100";
-    saveBtn.textContent = "保存";
-    saveBtn.addEventListener("click", () => saveBalance(a.name, input, saveBtn));
-    btnTd.appendChild(saveBtn);
-    tr.appendChild(btnTd);
-
-    accountList.appendChild(tr);
-  });
-}
-
-// 手动改某个账户的余额
-async function saveBalance(name, input, btn) {
-  const balance = Number(input.value);
-  if (Number.isNaN(balance)) {
-    alert("请输入数字");
-    return;
-  }
-
-  btn.disabled = true;
-  try {
-    const resp = await fetch(`/api/accounts/${encodeURIComponent(name)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ balance: balance }),
-    });
-
-    if (!resp.ok) {
-      const err = await resp.json();
-      alert("修改失败：" + (err.error || resp.status));
-      return;
-    }
-
-    // 不弹 alert，改成按钮上闪一下"已保存"，操作更顺
-    btn.textContent = "已保存";
-    await loadAccounts();
-    await loadStatistics();
-    setTimeout(() => {
-      btn.textContent = "保存";
-    }, 1200);
-  } catch (e) {
-    alert("网络错误：" + e.message);
-  } finally {
-    btn.disabled = false;
+// 设置收支类型（编辑回填时用）
+function setType(type) {
+  const el = $("type-" + (type === "income" ? "income" : "expense"));
+  if (el) {
+    el.checked = true;
   }
 }
 
-// 拉账户列表，同时喂给下拉框和弹窗
-async function loadAccounts() {
-  const resp = await fetch("/api/accounts");
-  const data = await resp.json();
-  const names = data.accounts.map((a) => a.name);
-  syncAccountOptions(names);
-  renderAccountRows(data.accounts);
-}
-
-// ---------- 账目列表 ----------
-// 处理「记录里的分类/账户不在下拉选项里」的情况（比如老数据里的"卫浴"）
+// 下拉框里没有这个值就临时补一项，否则 select.value = xxx 会静默失败
 function ensureOption(select, value) {
-  if (!value) {
-    return;
-  }
-  const exists = Array.from(select.options).some((o) => o.value === value);
-  if (!exists) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = value;
-    // 打上标记，退出编辑时清掉，不让临时值污染下拉列表
-    opt.dataset.temp = "1";
-    select.appendChild(opt);
-  }
-  select.value = value;
+  if (!select || !value) return;
+  const exists = Array.prototype.some.call(select.options, function (opt) {
+    return opt.value === value;
+  });
+  if (exists) return;
+
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = value;
+  opt.setAttribute("data-temp", "1");
+  select.appendChild(opt);
 }
 
-// 清掉 ensureOption 临时加进去的选项
+// 清掉临时补的项，避免编辑一条「卫浴」之后下拉框里永远多一个「卫浴」
 function clearTempOptions(select) {
-  Array.from(select.querySelectorAll('option[data-temp="1"]')).forEach((o) => o.remove());
-}
-
-// 造一个表格单元格，用 textContent 赋值，避免备注里的特殊字符破坏页面
-function cell(text, className) {
-  const td = document.createElement("td");
-  if (className) {
-    td.className = className;
-  }
-  td.textContent = text;
-  return td;
-}
-
-// 从后端拿列表，渲染成表格行（顺序由后端 SQL 决定，前端不重排）
-async function loadRecords() {
-  const account = filterAccount.value;
-  const url = account ? `/api/records?account=${encodeURIComponent(account)}` : "/api/records";
-
-  const resp = await fetch(url);
-  const data = await resp.json();
-  recordList.innerHTML = "";
-
-  if (data.count === 0) {
-    emptyTip.textContent = account ? `「${account}」还没有记录` : "还没有记录，先记一笔吧";
-    emptyTip.classList.remove("d-none");
-    return;
-  }
-  emptyTip.classList.add("d-none");
-
-  data.records.forEach((r) => {
-    const tr = document.createElement("tr");
-    const isIncome = r.type === "income";
-
-    tr.appendChild(cell(r.date));
-
-    // 类型用 Bootstrap 徽章区分，一眼能看出是收还是支
-    const typeBadge = document.createElement("span");
-    typeBadge.className = "badge " + (isIncome ? "bg-success" : "bg-danger");
-    typeBadge.textContent = isIncome ? "收入" : "支出";
-    const typeTd = document.createElement("td");
-    typeTd.appendChild(typeBadge);
-    tr.appendChild(typeTd);
-
-    tr.appendChild(cell(r.category));
-    tr.appendChild(cell(r.account));
-
-    // 支出是负数，收入是正数，和余额的算法对得上
-    tr.appendChild(
-      cell(signedMoney(r.amount, r.type), "text-end fw-semibold " + (isIncome ? "text-success" : "text-danger"))
-    );
-    tr.appendChild(cell(r.note || "—", "text-muted"));
-
-    const actions = document.createElement("td");
-    actions.className = "text-end";
-
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "btn btn-sm btn-warning me-2";
-    editBtn.textContent = "编辑";
-    editBtn.addEventListener("click", () => startEdit(r));
-
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.className = "btn btn-sm btn-danger";
-    delBtn.textContent = "删除";
-    delBtn.addEventListener("click", () => handleDelete(r.id));
-
-    actions.appendChild(editBtn);
-    actions.appendChild(delBtn);
-    tr.appendChild(actions);
-
-    recordList.appendChild(tr);
+  if (!select) return;
+  const temps = select.querySelectorAll('option[data-temp="1"]');
+  Array.prototype.forEach.call(temps, function (opt) {
+    opt.remove();
   });
 }
 
-// ---------- 新增 / 编辑 ----------
-// 新增和编辑共用一套表单，提交时按 editingId 决定发 POST 还是 PUT
-async function handleSubmit() {
-  const amount = Number(amountInput.value);
-  if (!amount || amount <= 0) {
-    alert("请输入大于 0 的金额");
+/* ---------------- 数据加载 ---------------- */
+
+// 三张统计卡片
+async function loadStatistics() {
+  const res = await fetch("/api/statistics");
+  const data = await res.json();
+
+  $("stat-income").textContent = money(data.income_total);
+  $("stat-expense").textContent = money(data.expense_total);
+
+  const balanceEl = $("stat-balance");
+  const balance = Number(data.balance_total) || 0;
+  balanceEl.textContent = money(balance);
+  // 余额为负时变红，其他情况回到主题蓝
+  balanceEl.classList.toggle("text-danger", balance < 0);
+  balanceEl.classList.toggle("text-primary", balance >= 0);
+}
+
+// 账户列表：资产页的表格 + 两个下拉框的选项一起更新
+async function loadAccounts() {
+  const res = await fetch("/api/accounts");
+  const data = await res.json();
+  const accounts = data.accounts || [];
+
+  renderAccountRows(accounts);
+  syncAccountOptions(accounts.map((a) => a.name));
+}
+
+// 资产页：每个账户一行，带一个输入框和一个保存按钮
+function renderAccountRows(accounts) {
+  const tbody = $("account-list");
+  if (!tbody) return;
+
+  if (!accounts.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">还没有账户</td></tr>';
     return;
   }
 
-  const payload = {
-    amount: amount,
-    category: categoryInput.value,
-    account: accountInput.value,
-    date: dateInput.value || todayString(),
-    note: noteInput.value.trim(),
-    type: currentType(),
-  };
+  tbody.innerHTML = accounts
+    .map(function (account) {
+      const name = escapeHtml(account.name);
+      const negative = Number(account.balance) < 0;
+      return (
+        '<tr>' +
+        '<td class="fw-semibold">' + name + "</td>" +
+        '<td class="text-end ' + (negative ? "text-danger" : "text-body") + '">' +
+        money(account.balance) +
+        "</td>" +
+        '<td class="text-end">' +
+        '<div class="balance-editor">' +
+        '<input class="form-control form-control-sm balance-input" type="number" step="0.01" ' +
+        'data-account="' + name + '" value="' + (Number(account.balance) || 0).toFixed(2) + '">' +
+        '<button class="btn btn-sm btn-outline-primary" data-save-account="' + name + '">保存</button>' +
+        "</div>" +
+        "</td>" +
+        "</tr>"
+      );
+    })
+    .join("");
+}
 
-  const isEdit = editingId !== null;
-  const url = isEdit ? `/api/records/${editingId}` : "/api/records";
+// 用真实的账户名重建两个下拉框，尽量保留用户当前选中的值
+function syncAccountOptions(names) {
+  const selects = [$("account"), $("filter-account")];
+  selects.forEach(function (select) {
+    if (!select) return;
+    const previous = select.value;
 
-  submitBtn.disabled = true;
-  try {
-    const resp = await fetch(url, {
-      method: isEdit ? "PUT" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    // 清空后重建：第一个选项是「全部账户」（只有筛选框有）
+    const keepCurrent = select.id === "filter-account";
+    const first = keepCurrent ? '<option value="">全部账户</option>' : "";
+    select.innerHTML =
+      first +
+      names
+        .map(function (name) {
+          const safe = escapeHtml(name);
+          return '<option value="' + safe + '">' + safe + "</option>";
+        })
+        .join("");
 
-    if (!resp.ok) {
-      // 后端 400/404 时会返回 {"error": "..."}，直接弹给用户看
-      const err = await resp.json();
-      alert((isEdit ? "修改失败：" : "记账失败：") + (err.error || resp.status));
-      return;
+    if (previous && (names.indexOf(previous) >= 0 || keepCurrent)) {
+      select.value = previous;
     }
+  });
+}
 
-    alert(isEdit ? "修改成功" : "记账成功");
-    resetForm();
-    await refresh();
-  } catch (e) {
-    alert("网络错误：" + e.message);
-  } finally {
-    // 不管成功失败都把按钮恢复可点，否则一次失败就再也点不动
-    submitBtn.disabled = false;
+// 账单列表（支持按账户筛选）
+async function loadRecords() {
+  const filter = $("filter-account");
+  const account = filter ? filter.value : "";
+  const url = account
+    ? "/api/records?account=" + encodeURIComponent(account)
+    : "/api/records";
+
+  const res = await fetch(url);
+  const data = await res.json();
+  allRecords = data.records || [];
+
+  renderRecords(allRecords, account);
+  renderCalendar(allRecords);
+}
+
+// 表格主体
+function renderRecords(records, account) {
+  const tbody = $("record-list");
+  if (!tbody) return;
+
+  if (!records.length) {
+    const text = account
+      ? "「" + escapeHtml(account) + "」还没有记录"
+      : "还没有记录，点右上角「+ 记一笔」开始吧";
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">' + text + "</td></tr>";
+    return;
+  }
+
+  tbody.innerHTML = records
+    .map(function (record) {
+      const isIncome = record.type === "income";
+      return (
+        '<tr data-id="' + record.id + '">' +
+        '<td class="col-time">' + escapeHtml(displayDate(record.date)) + "</td>" +
+        '<td><span class="badge ' + (isIncome ? "bg-success" : "bg-danger") + '">' +
+        (isIncome ? "收入" : "支出") + "</span></td>" +
+        "<td>" + escapeHtml(record.category) + "</td>" +
+        "<td>" + escapeHtml(record.account) + "</td>" +
+        '<td class="text-end col-amount ' + (isIncome ? "text-success" : "text-danger") + '">' +
+        signedMoney(record.amount, record.type) + "</td>" +
+        '<td class="note-cell">' + escapeHtml(record.note || "—") + "</td>" +
+        '<td class="text-end">' +
+        '<button class="btn btn-sm btn-outline-warning me-1" data-action="edit" data-id="' + record.id + '">编辑</button>' +
+        '<button class="btn btn-sm btn-outline-danger" data-action="delete" data-id="' + record.id + '">删除</button>' +
+        "</td>" +
+        "</tr>"
+      );
+    })
+    .join("");
+}
+
+// 日历：当月网格，每格写当天支出合计（数据直接复用 allRecords，不额外请求）
+function renderCalendar(records) {
+  const grid = $("calendar-grid");
+  if (!grid) return;
+
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth(); // 0 = 一月
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  // 周一作为一周第一天：getDay() 里周日是 0，换算成 0~6
+  const lead = (firstDay.getDay() + 6) % 7;
+
+  // 先按日期把支出加起来
+  const dailyExpense = {};
+  records.forEach(function (record) {
+    if (record.type !== "expense") return;
+    const day = String(record.date).slice(0, 10);
+    dailyExpense[day] = (dailyExpense[day] || 0) + (Number(record.amount) || 0);
+  });
+
+  const pad = (n) => String(n).padStart(2, "0");
+  const todayKey = year + "-" + pad(month + 1) + "-" + pad(today.getDate());
+
+  const cells = [];
+  for (let i = 0; i < lead; i++) {
+    cells.push('<div class="cal-cell is-empty"></div>');
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const key = year + "-" + pad(month + 1) + "-" + pad(day);
+    const sum = dailyExpense[key];
+    cells.push(
+      '<div class="cal-cell' + (key === todayKey ? " is-today" : "") + '">' +
+      '<span class="cal-day">' + day + "</span>" +
+      (sum ? '<span class="cal-sum">' + money(-sum) + "</span>" : "") +
+      "</div>"
+    );
+  }
+
+  grid.innerHTML = cells.join("");
+  $("calendar-title").textContent = year + " 年 " + (month + 1) + " 月支出";
+}
+
+/* ---------------- 弹窗 ---------------- */
+
+function getRecordModal() {
+  if (!recordModal && window.bootstrap) {
+    recordModal = window.bootstrap.Modal.getOrCreateInstance($("record-modal"));
+  }
+  return recordModal;
+}
+
+function openRecordModal() {
+  const modal = getRecordModal();
+  if (modal) {
+    modal.show();
+  } else {
+    alert("弹窗组件还没加载好，刷新一下页面再试");
   }
 }
 
-// 点某一行的「编辑」：把该行数据回填到表单，按钮切成「保存修改」
-function startEdit(record) {
-  clearTempOptions(categoryInput);
-  clearTempOptions(accountInput);
-
-  editingId = record.id;
-  amountInput.value = record.amount;
-  ensureOption(categoryInput, record.category);
-  ensureOption(accountInput, record.account);
-  dateInput.value = record.date;
-  noteInput.value = record.note || "";
-
-  // 回填收支类型（点住对应的 radio）
-  const typeRadio = document.getElementById(
-    record.type === "income" ? "type-income" : "type-expense"
-  );
-  typeRadio.checked = true;
-
-  formTitle.textContent = `正在编辑 #${record.id}`;
-  submitBtn.textContent = "保存修改";
-  submitBtn.className = "btn btn-success";
-  cancelBtn.classList.remove("d-none");
-
-  // 表单在页面上方，滚回去让用户看见回填结果
-  window.scrollTo({ top: 0, behavior: "smooth" });
+function closeRecordModal() {
+  const modal = getRecordModal();
+  if (modal) {
+    modal.hide();
+  }
 }
 
 // 把表单恢复成「新增」状态
 function resetForm() {
   editingId = null;
 
-  amountInput.value = "";
-  noteInput.value = "";
-  dateInput.value = todayString();
-  document.getElementById("type-expense").checked = true;
+  $("amount").value = "";
+  $("note").value = "";
+  setType("expense");
+  clearTempOptions($("category"));
+  clearTempOptions($("account"));
+  $("record-time").value = nowInputValue();
 
-  clearTempOptions(categoryInput);
-  clearTempOptions(accountInput);
-  categoryInput.selectedIndex = 0;
-  accountInput.selectedIndex = 0;
-
-  formTitle.textContent = "记一笔";
-  submitBtn.textContent = "记一笔";
-  submitBtn.className = "btn btn-primary";
-  cancelBtn.classList.add("d-none");
+  $("record-modal-title").textContent = "记一笔";
+  $("save-btn").textContent = "保存";
 }
 
-// 删除一条记录：先确认，再发 DELETE，成功后刷新
-async function handleDelete(id) {
-  if (!confirm("确定删除这条记录吗？删除后无法恢复")) {
+// 点「编辑」：把这条记录回填到弹窗里，并切到「保存修改」模式
+function startEdit(id) {
+  const record = allRecords.filter(function (r) {
+    return Number(r.id) === Number(id);
+  })[0];
+  if (!record) return;
+
+  editingId = record.id;
+
+  setType(record.type);
+  $("amount").value = (Number(record.amount) || 0).toFixed(2);
+
+  ensureOption($("category"), record.category);
+  $("category").value = record.category;
+
+  ensureOption($("account"), record.account);
+  $("account").value = record.account;
+
+  $("record-time").value = toInputValue(record.date);
+  $("note").value = record.note || "";
+
+  $("record-modal-title").textContent = "编辑记录 #" + record.id;
+  $("save-btn").textContent = "保存修改";
+
+  openRecordModal();
+}
+
+// 点「保存」：editingId 有值就 PUT，否则 POST
+async function saveRecord() {
+  const payload = {
+    type: currentType(),
+    amount: Number($("amount").value),
+    category: $("category").value,
+    account: $("account").value,
+    date: $("record-time").value, // "2026-10-26T14:30"
+    note: $("note").value.trim(),
+  };
+
+  // 只拦最明显的错误，详细规则以后端为准
+  if (!payload.amount || payload.amount <= 0) {
+    alert("金额必须是大于 0 的数字");
     return;
   }
+  if (!payload.date) {
+    alert("请选择时间");
+    return;
+  }
+
+  const button = $("save-btn");
+  const isEdit = editingId !== null;
+  button.disabled = true;
+
   try {
-    const resp = await fetch(`/api/records/${id}`, { method: "DELETE" });
-    if (!resp.ok) {
-      const err = await resp.json();
-      alert("删除失败：" + (err.error || resp.status));
+    const res = await fetch(isEdit ? "/api/records/" + editingId : "/api/records", {
+      method: isEdit ? "PUT" : "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(function () {
+      return {};
+    });
+
+    if (!res.ok) {
+      alert(data.error || "保存失败，请检查输入");
       return;
     }
-    // 删的正好是正在编辑的那条，就把表单退回新增状态
-    if (editingId === id) {
-      resetForm();
-    }
-    await refresh();
-  } catch (e) {
-    alert("网络错误：" + e.message);
+
+    closeRecordModal();
+    resetForm();
+    await refresh(); // 不刷新页面，卡片和表格自己更新
+  } catch (err) {
+    console.error(err);
+    alert("网络异常，保存失败");
+  } finally {
+    button.disabled = false;
   }
 }
 
-// ---------- 刷新 ----------
-// 卡片、表格、账户三处一起刷新，避免数字互相打架
+// 点「删除」
+async function removeRecord(id) {
+  const record = allRecords.filter(function (r) {
+    return Number(r.id) === Number(id);
+  })[0];
+  const label = record ? displayDate(record.date) + " 的这条记录" : "这条记录";
+
+  if (!confirm("确定删除" + label + "吗？删除后余额会一起回滚。")) {
+    return;
+  }
+
+  const res = await fetch("/api/records/" + id, { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(function () {
+      return {};
+    });
+    alert(data.error || "删除失败");
+    return;
+  }
+
+  await refresh();
+}
+
+// 资产页：把某个账户的余额改成输入框里的值
+async function saveAccountBalance(name, button) {
+  let input = null;
+  const inputs = document.querySelectorAll(".balance-input");
+  Array.prototype.forEach.call(inputs, function (el) {
+    if (el.dataset.account === name) input = el;
+  });
+  if (!input) return;
+
+  const balance = Number(input.value);
+  if (input.value === "" || Number.isNaN(balance)) {
+    alert("余额必须是数字");
+    return;
+  }
+
+  button.disabled = true;
+  button.textContent = "保存中…";
+
+  try {
+    const res = await fetch("/api/accounts/" + encodeURIComponent(name), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ balance: balance }),
+    });
+    const data = await res.json().catch(function () {
+      return {};
+    });
+
+    if (!res.ok) {
+      alert(data.error || "保存失败");
+      button.disabled = false;
+      button.textContent = "保存";
+      return;
+    }
+
+    // 余额变了，总余额卡片也要跟着变
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    alert("网络异常，保存失败");
+    button.disabled = false;
+    button.textContent = "保存";
+  }
+}
+
+/* ---------------- 事件绑定 ---------------- */
+
+// 侧边栏切页
+function bindSidebar() {
+  const items = document.querySelectorAll(".nav-item");
+
+  Array.prototype.forEach.call(items, function (item) {
+    item.addEventListener("click", function (event) {
+      event.preventDefault();
+
+      Array.prototype.forEach.call(items, function (other) {
+        other.classList.remove("active");
+      });
+      item.classList.add("active");
+
+      const page = item.dataset.page;
+      Array.prototype.forEach.call(document.querySelectorAll(".page"), function (section) {
+        section.classList.remove("active");
+      });
+
+      const target = $("page-" + page);
+      if (target) target.classList.add("active");
+      $("page-title").textContent = PAGE_TITLES[page] || "";
+    });
+  });
+}
+
+// 表格里的「编辑 / 删除」是动态生成的，用事件委托，绑一次就够
+function onRecordListClick(event) {
+  const target = event.target;
+  if (!target || typeof target.closest !== "function") return;
+
+  const button = target.closest("button[data-action]");
+  if (!button) return;
+
+  const id = Number(button.dataset.id);
+  if (button.dataset.action === "edit") {
+    startEdit(id);
+  } else if (button.dataset.action === "delete") {
+    removeRecord(id);
+  }
+}
+
+// 资产页的「保存」同理，用事件委托
+function onAccountListClick(event) {
+  const target = event.target;
+  if (!target || typeof target.closest !== "function") return;
+
+  const button = target.closest("button[data-save-account]");
+  if (!button) return;
+
+  saveAccountBalance(button.dataset.saveAccount, button);
+}
+
+// 一次刷新：卡片 + 账户 + 账单（日历跟着账单走）
 async function refresh() {
   await Promise.all([loadStatistics(), loadAccounts(), loadRecords()]);
 }
 
-submitBtn.addEventListener("click", handleSubmit);
-cancelBtn.addEventListener("click", resetForm);
+function init() {
+  bindSidebar();
 
-// 切换筛选账户就重新拉列表，不动统计卡片（统计卡是全局的，不跟着筛）
-filterAccount.addEventListener("change", loadRecords);
-
-// 账户管理弹窗
-document.getElementById("manage-accounts-btn").addEventListener("click", () => {
-  if (accountModal) {
-    accountModal.show();
-  } else {
-    alert("Bootstrap 脚本没加载成功，弹窗打不开");
+  // 顶部「+ 记一笔」：只是打开弹窗，表单是空的
+  const addButton = document.querySelector('[data-bs-target="#record-modal"]');
+  if (addButton) {
+    addButton.addEventListener("click", function () {
+      if (editingId !== null) resetForm();
+      $("record-modal-title").textContent = "记一笔";
+      $("save-btn").textContent = "保存";
+    });
   }
-});
 
-// 页面一打开就拉数据
-refresh();
+  $("save-btn").addEventListener("click", saveRecord);
+
+  // 弹窗关掉（保存成功、取消、点遮罩、按 Esc）时都复位表单，避免下次带着上次的编辑状态
+  $("record-modal").addEventListener("hidden.bs.modal", resetForm);
+
+  $("record-list").addEventListener("click", onRecordListClick);
+  $("account-list").addEventListener("click", onAccountListClick);
+
+  const filter = $("filter-account");
+  if (filter) {
+    filter.addEventListener("change", loadRecords);
+  }
+
+  refresh().catch(function (err) {
+    console.error(err);
+  });
+}
+
+document.addEventListener("DOMContentLoaded", init);
