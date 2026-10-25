@@ -72,3 +72,35 @@
 - 支出 / 收入做成分段单选按钮，列表用徽章区分类型（支出红、收入绿），金额按 `-¥` / `+¥` 渲染。
 - 卡片 header 内嵌账户筛选下拉，对应 `GET /api/records?account=微信`；切换筛选只重拉列表、不动统计。
 - 「账户管理」弹窗可逐个改余额，直接调 `PUT /api/accounts/<name>`；负余额在卡片与弹窗中统一标红。
+
+## v0.04-DEV (2026-10-26) PC 端后台改版与分钟级时间：涵盖后台布局、分钟级时间、编辑与删除、资产页与日历。
+
+对应提交：`feat: support minute-level record time` → `docs: add v0.04 dev log and prompt snapshot`（共 4 个 commit，Tag 打在最后一次提交）
+
+**分钟级时间**
+
+- 老数据只有 `YYYY-MM-DD`，`normalize_date()` 只在**读时**补 `00:00`，库里物理值不动；新数据写入即 16 位 `YYYY-MM-DD HH:MM`。
+- `_parse_datetime()` 同时接受 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM` 以及带秒的两种；秒被截断到分；空值取当前时间；其余格式一律 400。
+- 前端改用 `<input type="datetime-local">`，默认值由服务端注入（带 `T`），避免浏览器与服务器时区不一致时显示成空白。
+
+**PC 端后台布局**
+
+- 左侧 220px 深色侧边栏（`#1e293b`）承载 Logo + 首页 / 日历 / 资产 / 我的，右侧主区吃满剩余宽度，`100vh` 不出整页滚动条，只有 `.content` 自己滚。
+- 顶栏固定 64px 白底带阴影，左侧标题跟随菜单变化，右侧「+ 记一笔」是唯一主按钮。
+- 记账从页内表单改为居中的 Bootstrap Modal（`modal-dialog-centered`），弹窗关闭时统一复位表单。
+- Bootstrap 5.3.3 改为**本地引用**（`static/vendor/`，CSS 232803 B + JS 80721 B），断网也能跑 —— 比赛现场网络不可控。
+- 资产页承载账户余额编辑（每行一个输入框 + 保存），日历页做当月网格，格子里的数字是当天支出合计。
+
+**前端业务逻辑**
+
+- `script.js` 重写为「拉数据 → 渲染 → 事件委托」三段式：`refresh()` = `Promise.all([loadStatistics(), loadAccounts(), loadRecords()])`，写操作成功后只重拉数据，页面不刷新。
+- 编辑复用同一个弹窗：`editingId` 区分 POST / PUT，标题变「编辑记录 #id」、按钮变「保存修改」；`hidden.bs.modal` 事件里复位，取消编辑不会把状态带进下一次新增。
+- 动态生成的表格行与账户行用**事件委托**（`#record-list`、`#account-list` 各绑一次），重渲染不会丢监听。
+- `ensureOption()` / `clearTempOptions()` 处理「卫浴」这类不在下拉选项里的分类，避免 `select.value = xxx` 静默失败。
+- 日历不额外请求接口，直接复用列表数据按日期聚合，切页零延迟。
+
+**联调验证**
+
+- Node + 极简 DOM 桩把 `script.js` 真跑在真实接口上：34 条断言全过（首屏卡片 / 表格 / 资产页 / 日历、POST 后不刷新即更新、编辑回填、PUT、筛选、DELETE、改余额、切页），全程 `alert` 触发 0 次。
+- 再用 Edge headless 渲染真实页面复核：卡片 `¥0.01 / ¥783.13 / ¥2830.10`，表格首行 `2026-10-26 14:30 | 支出 | 餐饮 | 微信 | -¥9.90`，日历 34 格，资产页 4 个账户。
+
