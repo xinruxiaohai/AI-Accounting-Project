@@ -1,60 +1,59 @@
-/* 极简样式：能看清、能点就行，不引任何框架 */
+/* 只放 Bootstrap 覆盖不到的那几处，其余样式全交给 Bootstrap */
 body {
-  max-width: 640px;
-  margin: 40px auto;
-  padding: 0 16px;
-  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  background: #f5f7fa;
   color: #222;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
 }
 
-h1 {
-  font-size: 22px;
+/* 导航栏标题稍微加点字距，看起来不那么挤 */
+.navbar-brand {
+  letter-spacing: 0.5px;
 }
 
-.form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 24px;
+/* 统计卡片里的大数字 */
+.stat-number {
+  font-size: 32px;
+  font-weight: 600;
+  line-height: 1.1;
 }
 
-.form input {
-  flex: 1 1 140px;
-  padding: 8px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
+/* 表格单元格垂直居中，备注列太长就换行，不把操作按钮挤出去 */
+.table > :not(caption) > * > * {
+  vertical-align: middle;
+}
+
+#record-list td {
+  word-break: break-all;
   font-size: 14px;
 }
 
-.form button {
-  flex: 0 0 auto;
-  padding: 8px 20px;
-  border: none;
-  border-radius: 4px;
-  background: #2563eb;
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
+/* 列表里的类型徽章不要太大，免得每行都被撑高 */
+#record-list .badge {
+  font-weight: 500;
+  padding: 0.35em 0.5em;
 }
 
-.form button:disabled {
-  background: #9ca3af;
-  cursor: not-allowed;
+/* 表格表头字号小一点，和数据区分开 */
+.table thead th {
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  white-space: nowrap;
 }
 
-#record-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
+/* 卡片圆角统一一点，默认的 4px 略生硬 */
+.card {
+  border-radius: 10px;
 }
 
-#record-list li {
-  padding: 10px 12px;
-  border-bottom: 1px solid #eee;
-  font-size: 14px;
+/* 账户管理弹窗里的余额输入框窄一点，别把行撑得太宽 */
+#account-list input {
+  max-width: 120px;
 }
 
-#record-list li.empty {
-  color: #888;
-  text-align: center;
+/* 小屏（手机）下统计数字略缩小，三张卡片才不会溢出 */
+@media (max-width: 576px) {
+  .stat-number {
+    font-size: 26px;
+  }
 }
