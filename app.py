@@ -13,6 +13,41 @@ app.json.ensure_ascii = False
 database.init_db()
 
 
+def _parse_datetime(value):
+    """把请求里的日期时间统一成「YYYY-MM-DD HH:MM」，返回 (字符串, 错误信息)。
+
+    - 不传 / 空串：取当前时间，精确到分钟
+    - 只给日期 2026-10-26：补成 2026-10-26 00:00（兼容老前端和手写 curl）
+    - <input type="datetime-local"> 给的是 2026-10-26T14:30，也接受
+    - 带秒的 2026-10-26 14:30:59 会截断到分钟
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), None
+
+    if not isinstance(value, str):
+        return None, "date 必须是字符串"
+
+    text = value.strip()
+
+    # 只有日期：补 00:00
+    if len(text) == 10:
+        try:
+            parsed = datetime.datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return None, "date 不是合法日期，应形如 2026-10-26"
+        return parsed.strftime("%Y-%m-%d %H:%M"), None
+
+    # 带时间：四种常见写法都收，统一输出成「空格 + 到分钟」
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            parsed = datetime.datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return parsed.strftime("%Y-%m-%d %H:%M"), None
+
+    return None, "date 格式必须是 YYYY-MM-DD HH:MM（或只给 YYYY-MM-DD）"
+
+
 def _parse_record(data):
     """把请求体校验成一份干净的记录字段。
 
@@ -37,12 +72,17 @@ def _parse_record(data):
     if record_type not in database.RECORD_TYPES:
         return None, (jsonify(error="type 只能是 expense 或 income"), 400)
 
+    # 时间精确到分钟：老前端只给日期也能收，统一成 2026-10-26 14:30 这种形态
+    date, date_error = _parse_datetime(data.get("date"))
+    if date_error is not None:
+        return None, (jsonify(error=date_error), 400)
+
     # 先清洗成干净的值，再统一入库和返回，避免两边不一致
     payload = {
         "amount": amount,
         "category": category.strip(),
         "note": (data.get("note") or "").strip(),
-        "date": data.get("date") or datetime.date.today().isoformat(),
+        "date": date,
         # 账户允许自定义，前端不传时给默认值"现金"
         "account": (data.get("account") or database.DEFAULT_ACCOUNT).strip(),
         "type": record_type,
@@ -58,6 +98,8 @@ def index():
         categories=database.get_all_categories(),
         accounts=database.get_all_accounts(),
         today=datetime.date.today().isoformat(),
+        # 给前端的 datetime-local 一个默认值，格式正好是它要的「YYYY-MM-DDTHH:MM」
+        now=datetime.datetime.now().strftime("%Y-%m-%dT%H:%M"),
     )
 
 

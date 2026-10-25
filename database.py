@@ -33,6 +33,21 @@ def _signed(amount, record_type):
     return amount if record_type == "income" else -amount
 
 
+def normalize_date(value):
+    """把 date 统一成「YYYY-MM-DD HH:MM」，让老数据和新数据长得一样。
+
+    - 老数据只有 10 位日期（2026-10-25）：补成 2026-10-25 00:00
+    - 新数据可能带秒、也可能用 T 分隔（2026-10-26T14:30）：统一成空格 + 截到分钟
+    注意这是「读时补全」，不回头改库里的老数据，所以升级零风险。
+    """
+    if not value:
+        return ""
+    text = str(value).strip().replace("T", " ")
+    if len(text) <= 10:
+        return text + " 00:00"
+    return text[:16]  # 2026-10-26 14:30:59 → 2026-10-26 14:30
+
+
 def _apply_balance(conn, account, delta):
     """在同一个事务里把某账户余额加减 delta。
 
@@ -117,7 +132,7 @@ def add_record(amount, category, note, date, account=DEFAULT_ACCOUNT, record_typ
                 INSERT INTO records (amount, category, note, date, account, type)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (amount, category, note, date, account, record_type),
+                (amount, category, note, normalize_date(date), account, record_type),
             )
             _apply_balance(conn, account, _signed(amount, record_type))
             return cur.lastrowid
@@ -156,7 +171,7 @@ def update_record(
                    SET amount = ?, category = ?, note = ?, date = ?, account = ?, type = ?
                  WHERE id = ?
                 """,
-                (amount, category, note, date, account, record_type, record_id),
+                (amount, category, note, normalize_date(date), account, record_type, record_id),
             )
             _apply_balance(conn, old["account"], -_signed(old["amount"], old["type"]))
             _apply_balance(conn, account, _signed(amount, record_type))
@@ -197,7 +212,11 @@ def list_records(account=None):
     try:
         rows = conn.execute(sql, params).fetchall()
         # sqlite3.Row 不是标准 dict，转一下才能被 jsonify 直接序列化
-        return [dict(row) for row in rows]
+        records = [dict(row) for row in rows]
+        # 老数据只有日期，这里统一补成「YYYY-MM-DD 00:00」，前端只处理一种格式
+        for record in records:
+            record["date"] = normalize_date(record["date"])
+        return records
     finally:
         conn.close()
 
