@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI记账管家</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <h1>AI记账管家</h1>
+
+  <!-- 记一笔：三个输入框 + 一个按钮 -->
+  <div class="form">
+    <input id="amount" type="number" step="0.01" min="0.01" placeholder="金额，例如 25.5">
+    <input id="category" type="text" placeholder="分类，例如 餐饮">
+    <input id="note" type="text" placeholder="备注，例如 午饭（可不填）">
+    <button id="submit-btn">记一笔</button>
+  </div>
+
+  <!-- 历史记录列表，内容是 script.js 填进去的 -->
+  <ul id="record-list"></ul>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

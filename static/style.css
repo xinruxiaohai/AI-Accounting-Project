@@ -1,0 +1,60 @@
+/* 极简样式：能看清、能点就行，不引任何框架 */
+body {
+  max-width: 640px;
+  margin: 40px auto;
+  padding: 0 16px;
+  font-family: system-ui, "Microsoft YaHei", sans-serif;
+  color: #222;
+}
+
+h1 {
+  font-size: 22px;
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.form input {
+  flex: 1 1 140px;
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.form button {
+  flex: 0 0 auto;
+  padding: 8px 20px;
+  border: none;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.form button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+#record-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+#record-list li {
+  padding: 10px 12px;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+}
+
+#record-list li.empty {
+  color: #888;
+  text-align: center;
+}
