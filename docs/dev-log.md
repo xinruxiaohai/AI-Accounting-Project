@@ -1,5 +1,50 @@
 # 开发日志
 
-## 2026-10-25 项目目录重构
+> 版本策略：按「功能里程碑」打 Tag，而不是每次 commit 都升版本。
+> 命名规则：`v0.XX-DEV`，`XX` 为里程碑序号，尾缀 `-DEV` 表示开发中、接口随时可能调整。
 
-完成项目目录重构，将项目从杂乱的 D:\AI 迁移至 D:\Project\AI-Accounting-Project，验证运行无误后清理了旧文件，实现纯净工程化管理。
+## v0.01-DEV (2026-10-25) 项目基建与基础 CRUD 跑通：涵盖环境搭建、SQLite接入、前端极简UI。
+
+对应提交：`54b13fc` → `da15180`（共 7 个 commit，Tag 打在 `da15180`）
+
+**环境搭建**
+
+- 机器上原本没有 Python：`python` 指向微软商店占位符，执行即报 `Python was not found`。
+- 用 `winget install Python.Python.3.12 --scope user` 装好 Python 3.12.10，用户级 PATH 自动带上 `Python312` 与 `Scripts`。
+- 在项目根目录建 `venv`，`pip install -r requirements.txt` 装上 Flask 3.1.3，依赖清单锁进 `requirements.txt`。
+- `.gitignore` 覆盖 `venv/`、`__pycache__/`、`*.db`、`.env` —— 环境、缓存、本地数据、密钥一律不进 Git。
+
+**SQLite 接入**
+
+- `database.py` 用内置 `sqlite3`，四个函数：`get_conn()` / `init_db()` / `add_record()` / `list_records()`。
+- `CREATE TABLE IF NOT EXISTS records (id, amount, category, note, date)`，启动即建表，重启不重复建。
+- 持久化用「杀进程 → 重启 → 再 GET」验证通过：`count` 不变，数据仍在。
+- 整个过程零新增依赖，`requirements.txt` 始终只有一行 `flask>=3.0`。
+
+**前端极简 UI**
+
+- `templates/index.html` + `static/style.css` + `static/script.js`，原生 JS，不引任何框架。
+- 金额 / 分类 / 备注三个输入框 +「记一笔」按钮，`fetch` POST 成功后弹窗提示、清空输入框、自动刷新列表。
+- 首屏自动 `GET /api/records` 渲染 `<ul id="record-list">`，空库显示「还没有记录，先记一笔吧」。
+- `/` 由 JSON 探针改为 `render_template("index.html")`，`/health` 与 `/api/records` 行为保持不变。
+
+**目录重构**
+
+- 项目从杂乱的 `D:\AI` 迁到 `D:\Project\AI-Accounting-Project`，同盘符移动 `.git` 保留全部历史。
+- 旧环境 `venv` 删除后重建，旧目录里的项目文件清理干净，私人文件夹（backup、Deepseek harness 等）未动。
+
+## v0.02-DEV (2026-10-25) 完善比赛文档与版本规范：涵盖补齐 Prompt 快照与踩坑记录。
+
+对应提交：`docs: complete dev log, bug tracker, and prompt snapshots`（Tag 打在本次提交）
+
+**版本规范**
+
+- 确立「功能里程碑 Tag」策略：`v0.01-DEV` 覆盖基建 + CRUD + 前端，`v0.02-DEV` 覆盖文档补齐。
+- Tag 使用 annotated（`git tag -a`），带打标人与说明文字，`git log --oneline --decorate` 里可直接看出里程碑边界。
+
+**文档资产补齐**
+
+- `docs/prompts/` 三份 Prompt 快照齐全：`01-flask-skeleton.md`、`02-memory-api.md`、`03-sqlite.md`。
+  每份固定记录「这一步要解决什么 / 用户原始 Prompt 摘录 / AI 给出的方案要点 / 验证记录 / 踩坑与结论」。
+- `docs/bugs-and-solutions.md` 沉淀真实踩过的三个坑：终端切盘、Git root-commit、Python 商店占位符。
+- `docs/dev-log.md`（本文件）改为按里程碑分段，成为版本演进的唯一时间线。
