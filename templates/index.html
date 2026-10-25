@@ -4,65 +4,209 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI记账管家</title>
-  <!-- Bootstrap 5 的 CSS 走 CDN（本机已验证 jsdelivr 返回 200） -->
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- 自己的少量样式放在 Bootstrap 之后，才能覆盖它 -->
+  <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
+  <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
+  <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <!-- 顶部导航栏 -->
-  <nav class="navbar navbar-expand navbar-dark bg-primary shadow-sm">
-    <div class="container">
-      <span class="navbar-brand mb-0 h1">AI记账管家</span>
-      <div class="d-flex align-items-center gap-3">
-        <span class="navbar-text text-white-50 small d-none d-md-inline">记一笔，看清钱都去哪了</span>
-        <!-- 账户管理入口：点开弹窗，能看每个账户余额并手动改 -->
-        <button id="manage-accounts-btn" class="btn btn-sm btn-light" type="button">账户管理</button>
-      </div>
-    </div>
-  </nav>
 
-  <div class="container py-4">
+<div class="app">
 
-    <!-- 统计卡片：数字由 script.js 调 /api/statistics 填进来 -->
-    <div class="row g-3 mb-4">
-      <div class="col-12 col-md-4">
-        <div class="card border-0 shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-muted small mb-1">总收入</div>
-            <div class="stat-number text-success" id="stat-income">¥0.00</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-4">
-        <div class="card border-0 shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-muted small mb-1">总支出</div>
-            <div class="stat-number text-danger" id="stat-expense">¥0.00</div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-4">
-        <div class="card border-0 shadow-sm h-100">
-          <div class="card-body">
-            <div class="text-muted small mb-1">总余额</div>
-            <!-- 负数时 script.js 会给它换成 text-danger（红色） -->
-            <div class="stat-number text-primary" id="stat-balance">¥0.00</div>
-          </div>
-        </div>
-      </div>
+  <!-- ================= 左侧侧边栏 ================= -->
+  <aside class="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">AI</span>
+      <span class="brand-text">AI记账管家</span>
     </div>
 
-    <!-- 记一笔 / 编辑表单 -->
-    <div class="card border-0 shadow-sm mb-4">
-      <div class="card-body">
-        <h2 class="h6 text-muted mb-3" id="form-title">记一笔</h2>
+    <nav class="sidebar-nav">
+      <!-- data-page 对应下面 page-xxx 的 id，点一下切换显示 -->
+      <a class="nav-item active" href="#" data-page="home">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path><path d="M9.5 21v-6h5v6"></path>
+        </svg>
+        <span>首页</span>
+      </a>
+      <a class="nav-item" href="#" data-page="calendar">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="5" width="17" height="15.5" rx="2"></rect><path d="M8 3v4M16 3v4M3.5 10h17"></path>
+        </svg>
+        <span>日历</span>
+      </a>
+      <a class="nav-item" href="#" data-page="assets">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="6.5" width="18" height="12" rx="2.5"></rect><path d="M3 10.5h18"></path><circle cx="16.5" cy="14.5" r="1.2"></circle>
+        </svg>
+        <span>资产</span>
+      </a>
+      <a class="nav-item" href="#" data-page="profile">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="8.5" r="3.8"></circle><path d="M4.5 20.5c1.6-3.4 4.3-5 7.5-5s5.9 1.6 7.5 5"></path>
+        </svg>
+        <span>我的</span>
+      </a>
+    </nav>
 
-        <!-- onsubmit 返回 false：防止回车触发表单默认提交导致页面刷新 -->
-        <form class="row g-2" onsubmit="return false;">
-          <div class="col-12 col-md-3">
-            <label class="form-label small mb-1">收支类型</label>
-            <!-- btn-check + label：用单选按钮做成"分段按钮"的样子，值仍然是 radio -->
+    <div class="sidebar-footer">v0.04-DEV · 开发中</div>
+  </aside>
+
+  <!-- ================= 右侧主内容区 ================= -->
+  <div class="main">
+
+    <!-- 顶部导航：左标题 + 右主按钮 -->
+    <header class="topbar">
+      <h1 class="topbar-title" id="page-title">首页</h1>
+      <!-- data-bs-toggle / data-bs-target 由 Bootstrap 自己处理，不需要写 JS -->
+      <button class="btn btn-primary btn-add" type="button" data-bs-toggle="modal" data-bs-target="#record-modal">
+        + 记一笔
+      </button>
+    </header>
+
+    <div class="content">
+
+      <!-- ============ 首页 ============ -->
+      <section class="page active" id="page-home">
+
+        <!-- 统计卡片：数字下一步由 JS 调 /api/statistics 填 -->
+        <div class="row g-3 mb-4">
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">总收入</div>
+              <div class="stat-number text-success" id="stat-income">¥0.00</div>
+              <div class="stat-hint">已记录的收入合计</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">总支出</div>
+              <div class="stat-number text-danger" id="stat-expense">¥0.00</div>
+              <div class="stat-hint">已记录的支出合计</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">总余额</div>
+              <div class="stat-number text-primary" id="stat-balance">¥0.00</div>
+              <div class="stat-hint">各账户余额之和</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 账单列表 -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">账单流水</span>
+            <div class="panel-tools">
+              <label class="form-label mb-0" for="filter-account">账户</label>
+              <select id="filter-account" class="form-select form-select-sm">
+                <option value="">全部账户</option>
+                {% for a in accounts %}
+                <option value="{{ a }}">{{ a }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th class="col-time">时间</th>
+                  <th class="col-type">类型</th>
+                  <th>分类</th>
+                  <th class="col-account">账户</th>
+                  <th class="text-end col-amount">金额</th>
+                  <th>备注</th>
+                  <th class="text-end col-action">操作</th>
+                </tr>
+              </thead>
+              <!-- 数据由下一步的 script.js 塞进来 -->
+              <tbody id="record-list">
+                <tr id="empty-row">
+                  <td colspan="7" class="empty-cell">
+                    还没有记录，点右上角「+ 记一笔」开始吧
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ============ 日历 ============ -->
+      <section class="page" id="page-calendar">
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title" id="calendar-title">本月支出</span>
+            <span class="panel-sub">格子里的数字是当天支出合计</span>
+          </div>
+          <div class="calendar-wrap">
+            <div class="calendar-week">
+              <span>一</span><span>二</span><span>三</span><span>四</span>
+              <span>五</span><span>六</span><span>日</span>
+            </div>
+            <!-- 由 script.js 按本月天数生成 -->
+            <div class="calendar-grid" id="calendar-grid"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 资产 ============ -->
+      <section class="page" id="page-assets">
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title">账户余额</span>
+            <span class="panel-sub">可以手动改余额，保存后写回数据库</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>账户</th>
+                  <th class="text-end col-amount">当前余额</th>
+                  <th class="text-end col-balance-edit">修改为</th>
+                </tr>
+              </thead>
+              <!-- 账户行由 script.js 渲染 -->
+              <tbody id="account-list">
+                <tr>
+                  <td colspan="3" class="empty-cell">正在加载账户…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 我的 ============ -->
+      <section class="page" id="page-profile">
+        <div class="placeholder-box">
+          <div class="placeholder-icon">👤</div>
+          <div class="placeholder-title">我的页面开发中</div>
+          <div class="placeholder-text">之后会放个人信息、数据导出和偏好设置。</div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- ================= 记账弹窗 ================= -->
+<div class="modal fade" id="record-modal" tabindex="-1" aria-labelledby="record-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="record-modal-title">记一笔</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+
+      <div class="modal-body">
+        <form id="record-form" onsubmit="return false;">
+
+          <!-- 收支类型：btn-check + label，看起来是分段按钮，值仍是 radio -->
+          <div class="mb-3">
+            <label class="form-label">收支类型</label>
             <div class="btn-group w-100" role="group">
               <input type="radio" class="btn-check" name="record-type" id="type-expense" value="expense" checked>
               <label class="btn btn-outline-danger" for="type-expense">支出</label>
@@ -71,119 +215,59 @@
             </div>
           </div>
 
-          <div class="col-6 col-md-2">
-            <label class="form-label small mb-1" for="amount">金额</label>
-            <input id="amount" class="form-control" type="number" step="0.01" min="0.01" placeholder="例如 25.5">
-          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label" for="amount">金额</label>
+              <div class="input-group">
+                <span class="input-group-text">¥</span>
+                <input id="amount" class="form-control" type="number" step="0.01" min="0.01" placeholder="25.50">
+              </div>
+            </div>
 
-          <div class="col-6 col-md-2">
-            <label class="form-label small mb-1" for="category">分类</label>
-            <!-- 选项由后端注入，见 app.py 的 index() -->
-            <select id="category" class="form-select">
-              {% for c in categories %}
-              <option value="{{ c }}">{{ c }}</option>
-              {% endfor %}
-            </select>
-          </div>
+            <div class="col-6">
+              <label class="form-label" for="category">分类</label>
+              <select id="category" class="form-select">
+                {% for c in categories %}
+                <option value="{{ c }}">{{ c }}</option>
+                {% endfor %}
+              </select>
+            </div>
 
-          <div class="col-6 col-md-2">
-            <label class="form-label small mb-1" for="account">支付账户</label>
-            <select id="account" class="form-select">
-              {% for a in accounts %}
-              <option value="{{ a }}">{{ a }}</option>
-              {% endfor %}
-            </select>
-          </div>
+            <div class="col-6">
+              <label class="form-label" for="account">账户</label>
+              <select id="account" class="form-select">
+                {% for a in accounts %}
+                <option value="{{ a }}">{{ a }}</option>
+                {% endfor %}
+              </select>
+            </div>
 
-          <div class="col-6 col-md-3">
-            <label class="form-label small mb-1" for="date">日期</label>
-            <!-- 默认填今天，由后端传入 today -->
-            <input id="date" class="form-control" type="date" value="{{ today }}">
-          </div>
+            <div class="col-6">
+              <label class="form-label" for="record-time">时间</label>
+              <!-- datetime-local：浏览器给出「年-月-日 时:分」选择器，精确到分钟 -->
+              <input id="record-time" class="form-control" type="datetime-local" value="{{ now }}">
+            </div>
 
-          <div class="col-12">
-            <label class="form-label small mb-1" for="note">备注</label>
-            <input id="note" class="form-control" type="text" placeholder="例如 午饭（可不填）">
-          </div>
-
-          <div class="col-12 d-flex gap-2 mt-2">
-            <button id="submit-btn" class="btn btn-primary" type="button">记一笔</button>
-            <button id="cancel-btn" class="btn btn-outline-secondary d-none" type="button">取消编辑</button>
+            <div class="col-12">
+              <label class="form-label" for="note">备注</label>
+              <input id="note" class="form-control" type="text" placeholder="例如：午饭（可不填）">
+            </div>
           </div>
         </form>
       </div>
-    </div>
 
-    <!-- 历史记录 + 账户筛选 -->
-    <div class="card border-0 shadow-sm">
-      <div class="card-header bg-white d-flex flex-wrap align-items-center justify-content-between gap-2">
-        <span class="text-muted small fw-semibold">账单流水</span>
-        <div class="d-flex align-items-center gap-2">
-          <label class="form-label small mb-0 text-muted" for="filter-account">按账户筛选</label>
-          <select id="filter-account" class="form-select form-select-sm" style="width: 150px;">
-            <option value="">全部账户</option>
-            {% for a in accounts %}
-            <option value="{{ a }}">{{ a }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <div class="card-body p-0">
-        <table class="table table-hover table-bordered align-middle mb-0">
-          <thead class="table-light">
-            <tr>
-              <th style="width: 110px;">日期</th>
-              <th style="width: 80px;">类型</th>
-              <th>分类</th>
-              <th style="width: 100px;">账户</th>
-              <th class="text-end" style="width: 120px;">金额</th>
-              <th>备注</th>
-              <th class="text-end" style="width: 150px;">操作</th>
-            </tr>
-          </thead>
-          <tbody id="record-list"></tbody>
-        </table>
-      </div>
-      <div class="card-footer bg-white text-center text-muted small d-none" id="empty-tip">
-        还没有记录，先记一笔吧
-      </div>
-    </div>
-
-  </div>
-
-  <!-- 账户管理弹窗：列出所有账户余额，可逐行手动修改 -->
-  <div class="modal fade" id="account-modal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title">账户管理</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
-        </div>
-        <div class="modal-body">
-          <p class="text-muted small mb-2">
-            余额会随记账自动增减；如果和实际对不上，直接在这里改成正确的数字。
-          </p>
-          <table class="table table-sm align-middle mb-0">
-            <thead class="table-light">
-              <tr>
-                <th style="width: 90px;">账户</th>
-                <th>当前余额</th>
-                <th style="width: 150px;">改为</th>
-                <th style="width: 70px;"></th>
-              </tr>
-            </thead>
-            <tbody id="account-list"></tbody>
-          </table>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-        </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="save-btn">保存</button>
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Bootstrap 的 JS（弹窗需要它），必须放在 script.js 之前 -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script src="/static/script.js"></script>
+<!-- Bootstrap 的 JS（弹窗靠它），必须在使用弹窗的标签之后加载 -->
+<script src="/static/vendor/bootstrap.bundle.min.js"></script>
+<!-- 业务逻辑：侧边栏切页、统计卡片、账单列表、记账弹窗、资产页、日历 -->
+<script src="/static/script.js"></script>
+
 </body>
 </html>
