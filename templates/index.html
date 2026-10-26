@@ -138,19 +138,94 @@
 
       <!-- ============ 日历 ============ -->
       <section class="page" id="page-calendar">
+
+        <!-- 上：当前所选范围（月 / 年 / 某天）的收入、支出、结余 -->
+        <div class="row g-3 mb-4">
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">总收入</div>
+              <div class="stat-number text-success" id="cal-stat-income">¥0.00</div>
+              <div class="stat-hint" id="cal-range-label">2026 年 10 月</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">总支出</div>
+              <div class="stat-number text-danger" id="cal-stat-expense">¥0.00</div>
+              <div class="stat-hint">所选范围内的支出合计</div>
+            </div>
+          </div>
+          <div class="col-12 col-md-4">
+            <div class="stat-card">
+              <div class="stat-label">结余</div>
+              <div class="stat-number text-primary" id="cal-stat-net">¥0.00</div>
+              <div class="stat-hint">收入 − 支出</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日历主体：月视图 / 年视图切换 -->
         <div class="panel">
           <div class="panel-head">
-            <span class="panel-title" id="calendar-title">本月支出</span>
-            <span class="panel-sub">格子里的数字是当天支出合计</span>
+            <!-- 左：年月切换 -->
+            <div class="calendar-toolbar">
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev">‹ 上一月</button>
+              <span class="calendar-title" id="calendar-title">2026 年 10 月</span>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next">下一月 ›</button>
+            </div>
+            <!-- 右：说明 + 年视图开关 -->
+            <div class="panel-tools">
+              <span class="calendar-legend">
+                <span class="legend-dot is-income"></span>有收入
+                <span class="legend-dot is-expense"></span>有支出
+              </span>
+              <button class="btn btn-sm btn-primary" type="button" id="cal-year-btn">按年查看</button>
+            </div>
           </div>
-          <div class="calendar-wrap">
+
+          <!-- 月视图：格子由 script.js 渲染（有收入绿底、有支出红底、两类都有红绿分割） -->
+          <div class="calendar-wrap" id="calendar-month">
             <div class="calendar-week">
               <span>一</span><span>二</span><span>三</span><span>四</span>
               <span>五</span><span>六</span><span>日</span>
             </div>
             <div class="calendar-grid" id="calendar-grid"></div>
           </div>
+
+          <!-- 年视图：12 个月的汇总格子，点某个月回到该月月视图 -->
+          <div class="calendar-year d-none" id="calendar-year">
+            <div class="year-grid" id="calendar-year-grid"></div>
+          </div>
         </div>
+
+        <!-- 下：选中日期（或选中月份）的详细账单 -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title" id="day-title">账单明细</span>
+            <span class="panel-sub" id="day-sub">点日历上的某一天，这里显示当天的账单</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th class="col-time">时间</th>
+                  <th class="col-type">类型</th>
+                  <th>分类</th>
+                  <th class="col-account">账户</th>
+                  <th class="text-end col-amount">金额</th>
+                  <th>备注</th>
+                  <th class="text-end col-action">操作</th>
+                </tr>
+              </thead>
+              <tbody id="day-records">
+                <tr>
+                  <td colspan="7" class="empty-cell">还没有选择日期</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
       </section>
 
       <!-- ============ 资产 ============ -->

@@ -391,6 +391,52 @@ body {
 }
 
 /* ===================== 日历网格 ===================== */
+/* 顶部年月切换条 */
+.calendar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.calendar-title {
+  min-width: 128px;
+  text-align: center;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.calendar-toolbar .btn {
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+/* 图例：绿=有收入，红=有支出 */
+.calendar-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.legend-dot.is-income {
+  background: #bbf7d0;
+  border: 1px solid #86efac;
+}
+
+.legend-dot.is-expense {
+  background: #fecaca;
+  border: 1px solid #fca5a5;
+}
+
 .calendar-wrap {
   padding: 16px 20px 20px;
 }
@@ -416,7 +462,7 @@ body {
 }
 
 .cal-cell {
-  min-height: 72px;
+  min-height: 84px;
   padding: 6px 8px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -424,32 +470,151 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.cal-cell:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+/* 只有收入 → 浅绿底 */
+.cal-cell.is-income {
+  background: #ecfdf5;
+  border-color: #86efac;
+}
+
+/* 只有支出 → 浅红底 */
+.cal-cell.is-expense {
+  background: #fef2f2;
+  border-color: #fca5a5;
+}
+
+/* 收支都有 → 左红右绿斜切 */
+.cal-cell.is-mixed {
+  background: linear-gradient(115deg, #fef2f2 0%, #fef2f2 50%, #ecfdf5 50%, #ecfdf5 100%);
+  border-color: #cbd5e1;
 }
 
 .cal-cell.is-empty {
   border-color: transparent;
   background: transparent;
+  cursor: default;
+  box-shadow: none;
 }
 
-.cal-cell.is-today {
+/* 点选中日 */
+.cal-cell.is-selected {
   border-color: var(--brand-blue);
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.25);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.55);
 }
 
 .cal-day {
+  align-self: flex-start;
   font-size: 13px;
   color: #475569;
 }
 
+.cal-cell.is-weekend .cal-day {
+  color: #94a3b8;
+}
+
+/* 今天：数字做成蓝底胶囊 */
 .cal-cell.is-today .cal-day {
-  color: var(--brand-blue);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--brand-blue);
+  color: #fff;
   font-weight: 600;
 }
 
+/* 格子里的当天结余：正绿负红 */
+.cal-net {
+  margin-top: auto;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: #475569;
+}
+
+.cal-net.is-plus {
+  color: #16a34a;
+}
+
+.cal-net.is-minus {
+  color: #dc2626;
+}
+
+.cal-tag {
+  font-size: 11px;
+  color: #64748b;
+}
+
+/* 旧版格子里的支出合计（v0.06 之前使用，保留以免旧脚本渲染异常） */
 .cal-sum {
   font-size: 12px;
   color: #dc2626;
   font-variant-numeric: tabular-nums;
+}
+
+/* ===================== 年视图（12 个月汇总） ===================== */
+.calendar-year {
+  padding: 16px 20px 20px;
+}
+
+.year-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.year-cell {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.year-cell:hover {
+  border-color: var(--brand-blue);
+  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.12);
+}
+
+.year-cell.is-current {
+  border-color: var(--brand-blue);
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+
+.year-head {
+  margin-bottom: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.year-line {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--text-muted);
+}
+
+.year-line strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.year-line .is-plus {
+  color: #16a34a;
+}
+
+.year-line .is-minus {
+  color: #dc2626;
 }
 
 /* ===================== 窄屏适配 ===================== */
