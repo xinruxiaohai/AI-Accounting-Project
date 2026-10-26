@@ -481,4 +481,174 @@ body {
   .stat-number {
     font-size: 24px;
   }
+
+  .account-groups {
+    padding: 16px;
+  }
+
+  .category-add {
+    flex-wrap: wrap;
+  }
+}
+
+/* ===================== v0.05 资产页：大类 + 账户卡片 ===================== */
+/* 资产页有两个 panel（账户卡片、账户流水），上下留点缝 */
+.panel + .panel {
+  margin-top: 16px;
+}
+
+.account-groups {
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.account-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.account-group-total {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 卡片自动换行：一行放不下就往下掉，不出现横向滚动 */
+.account-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+}
+
+.account-card {
+  position: relative;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.account-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.12);
+  transform: translateY(-1px);
+}
+
+/* 当前选中的账户：蓝边 + 淡淡的外发光，和侧边栏选中风格一致 */
+.account-card.active {
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.account-card-name {
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.account-card-balance {
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 删除账户的小叉：平时灰色，鼠标移上去变红 */
+.account-card-del {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  padding: 2px 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #cbd5e1;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.account-card-del:hover {
+  color: #dc2626;
+  background: #fef2f2;
+}
+
+.empty-hint {
+  margin: 0;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+/* ===================== v0.05 分类管理弹窗 ===================== */
+.category-add {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.category-add .form-control {
+  flex: 1 1 auto;
+}
+
+.category-add .form-select {
+  width: 150px;
+  flex: 0 0 150px;
+}
+
+/* 分类树：去掉列表默认圆点，二级靠左缩进 */
+.category-tree,
+.category-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.category-tree > li {
+  padding: 8px 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.category-tree > li:last-child {
+  border-bottom: 0;
+}
+
+.category-tree ul {
+  margin: 6px 0 0 18px;
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  color: #334155;
+}
+
+.category-tree ul .category-row {
+  color: #64748b;
+}
+
+.tag-count {
+  margin-left: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.cat-del {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.cat-del:hover {
+  color: #dc2626;
+  background: #fef2f2;
 }

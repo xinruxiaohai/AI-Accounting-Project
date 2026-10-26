@@ -48,7 +48,7 @@
       </a>
     </nav>
 
-    <div class="sidebar-footer">v0.04-DEV · 开发中</div>
+    <div class="sidebar-footer">v0.05-DEV · 开发中</div>
   </aside>
 
   <!-- ================= 右侧主内容区 ================= -->
@@ -57,8 +57,7 @@
     <!-- 顶部导航：左标题 + 右主按钮 -->
     <header class="topbar">
       <h1 class="topbar-title" id="page-title">首页</h1>
-      <!-- data-bs-toggle / data-bs-target 由 Bootstrap 自己处理，不需要写 JS -->
-      <button class="btn btn-primary btn-add" type="button" data-bs-toggle="modal" data-bs-target="#record-modal">
+      <button class="btn btn-primary btn-add" type="button" id="add-record-btn">
         + 记一笔
       </button>
     </header>
@@ -68,7 +67,7 @@
       <!-- ============ 首页 ============ -->
       <section class="page active" id="page-home">
 
-        <!-- 统计卡片：数字下一步由 JS 调 /api/statistics 填 -->
+        <!-- 统计卡片：数字由 script.js 调 /api/statistics 填 -->
         <div class="row g-3 mb-4">
           <div class="col-12 col-md-4">
             <div class="stat-card">
@@ -99,6 +98,7 @@
             <span class="panel-title">账单流水</span>
             <div class="panel-tools">
               <label class="form-label mb-0" for="filter-account">账户</label>
+              <!-- 选项由 script.js 按大类用 optgroup 重建 -->
               <select id="filter-account" class="form-select form-select-sm">
                 <option value="">全部账户</option>
                 {% for a in accounts %}
@@ -120,7 +120,6 @@
                   <th class="text-end col-action">操作</th>
                 </tr>
               </thead>
-              <!-- 数据由下一步的 script.js 塞进来 -->
               <tbody id="record-list">
                 <tr id="empty-row">
                   <td colspan="7" class="empty-cell">
@@ -146,7 +145,6 @@
               <span>一</span><span>二</span><span>三</span><span>四</span>
               <span>五</span><span>六</span><span>日</span>
             </div>
-            <!-- 由 script.js 按本月天数生成 -->
             <div class="calendar-grid" id="calendar-grid"></div>
           </div>
         </div>
@@ -154,29 +152,51 @@
 
       <!-- ============ 资产 ============ -->
       <section class="page" id="page-assets">
+
+        <!-- 上：按大类分组的账户卡片 -->
         <div class="panel">
           <div class="panel-head">
-            <span class="panel-title">账户余额</span>
-            <span class="panel-sub">可以手动改余额，保存后写回数据库</span>
+            <span class="panel-title">我的账户</span>
+            <div class="panel-tools">
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
+              <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
+            </div>
+          </div>
+          <!-- 卡片由 script.js 按 group 渲染，点卡片选中账户 -->
+          <div class="account-groups" id="account-groups">
+            <p class="empty-cell">正在加载账户…</p>
+          </div>
+        </div>
+
+        <!-- 下：选中账户的专属流水 -->
+        <div class="panel">
+          <div class="panel-head">
+            <span class="panel-title" id="detail-title">账户流水</span>
+            <div class="panel-tools">
+              <button class="btn btn-sm btn-primary" type="button" id="quick-add-btn" disabled>在此账户下记一笔</button>
+            </div>
           </div>
           <div class="table-responsive">
-            <table class="table align-middle mb-0">
+            <table class="table table-hover align-middle mb-0">
               <thead>
                 <tr>
-                  <th>账户</th>
-                  <th class="text-end col-amount">当前余额</th>
-                  <th class="text-end col-balance-edit">修改为</th>
+                  <th class="col-time">时间</th>
+                  <th class="col-type">类型</th>
+                  <th>分类</th>
+                  <th class="text-end col-amount">金额</th>
+                  <th>备注</th>
+                  <th class="text-end col-action">操作</th>
                 </tr>
               </thead>
-              <!-- 账户行由 script.js 渲染 -->
-              <tbody id="account-list">
+              <tbody id="account-records">
                 <tr>
-                  <td colspan="3" class="empty-cell">正在加载账户…</td>
+                  <td colspan="6" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td>
                 </tr>
               </tbody>
             </table>
           </div>
         </div>
+
       </section>
 
       <!-- ============ 我的 ============ -->
@@ -224,8 +244,9 @@
               </div>
             </div>
 
+            <!-- 一级分类：选项由 script.js 用分类表重建（value 是分类 id） -->
             <div class="col-6">
-              <label class="form-label" for="category">分类</label>
+              <label class="form-label" for="category">一级分类</label>
               <select id="category" class="form-select">
                 {% for c in categories %}
                 <option value="{{ c }}">{{ c }}</option>
@@ -233,8 +254,15 @@
               </select>
             </div>
 
+            <!-- 二级分类：只有当选中一级分类真的有子分类时才显示 -->
+            <div class="col-6 d-none" id="sub-category-wrap">
+              <label class="form-label" for="sub-category">二级分类</label>
+              <select id="sub-category" class="form-select"></select>
+            </div>
+
             <div class="col-6">
               <label class="form-label" for="account">账户</label>
+              <!-- 选项由 script.js 按大类用 <optgroup> 重建 -->
               <select id="account" class="form-select">
                 {% for a in accounts %}
                 <option value="{{ a }}">{{ a }}</option>
@@ -264,9 +292,70 @@
   </div>
 </div>
 
+<!-- ================= 新增账户弹窗 ================= -->
+<div class="modal fade" id="account-modal" tabindex="-1" aria-labelledby="account-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="account-modal-title">新增账户</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label" for="new-account-name">账户名称</label>
+          <input id="new-account-name" class="form-control" type="text" placeholder="例如：招行卡">
+        </div>
+        <div class="mb-3">
+          <label class="form-label" for="new-account-group">账户大类</label>
+          <select id="new-account-group" class="form-select">
+            <option value="资金账户">资金账户</option>
+            <option value="储蓄账户">储蓄账户</option>
+            <option value="投资账户">投资账户</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label" for="new-account-balance">初始余额</label>
+          <div class="input-group">
+            <span class="input-group-text">¥</span>
+            <input id="new-account-balance" class="form-control" type="number" step="0.01" value="0">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="save-account-btn">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 分类管理弹窗 ================= -->
+<div class="modal fade" id="category-modal" tabindex="-1" aria-labelledby="category-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="category-modal-title">分类管理</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <!-- 新增分类：名字 + 挂到哪个一级分类下（留空就是一级分类） -->
+        <div class="category-add">
+          <input id="new-category-name" class="form-control" type="text" placeholder="新分类名称">
+          <select id="new-category-parent" class="form-select">
+            <option value="">作为一级分类</option>
+          </select>
+          <button class="btn btn-primary" type="button" id="add-category-btn">添加</button>
+        </div>
+        <!-- 分类树由 script.js 渲染，每个节点带删除按钮 -->
+        <ul class="category-tree" id="category-tree"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Bootstrap 的 JS（弹窗靠它），必须在使用弹窗的标签之后加载 -->
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
-<!-- 业务逻辑：侧边栏切页、统计卡片、账单列表、记账弹窗、资产页、日历 -->
+<!-- 业务逻辑：切页、统计卡片、账单表格、记账弹窗、资产页、分类管理、日历 -->
 <script src="/static/script.js"></script>
 
 </body>
