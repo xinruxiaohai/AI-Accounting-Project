@@ -51,7 +51,7 @@
       </a>
     </nav>
 
-    <div class="sidebar-footer">v0.06-DEV · 开发中</div>
+    <div class="sidebar-footer">v0.06.1-DEV · 开发中</div>
   </aside>
 
   <!-- ================= 右侧主内容区 ================= -->
@@ -167,23 +167,26 @@
         <!-- 日历主体：月视图 / 年视图切换 -->
         <div class="panel">
           <div class="panel-head">
-            <!-- 左：年月切换 -->
+            <!-- 左：跨年 << >> + 年月切换 -->
             <div class="calendar-toolbar">
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev">‹ 上一月</button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev-year" title="上一年">&laquo;</button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev">&lsaquo; 上一月</button>
               <span class="calendar-title" id="calendar-title">2026 年 10 月</span>
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next">下一月 ›</button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next">下一月 &rsaquo;</button>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next-year" title="下一年">&raquo;</button>
             </div>
-            <!-- 右：说明 + 年视图开关 -->
+            <!-- 右：热力图图例 + 年视图开关 -->
             <div class="panel-tools">
               <span class="calendar-legend">
-                <span class="legend-dot is-income"></span>有收入
-                <span class="legend-dot is-expense"></span>有支出
+                <span class="legend-dot is-plus"></span>结余为正
+                <span class="legend-dot is-minus"></span>当日超支
+                <span class="legend-hint">颜色越深金额越大</span>
               </span>
               <button class="btn btn-sm btn-primary" type="button" id="cal-year-btn">按年查看</button>
             </div>
           </div>
 
-          <!-- 月视图：格子由 script.js 渲染（有收入绿底、有支出红底、两类都有红绿分割） -->
+          <!-- 月视图：格子由 script.js 渲染（底色=当天结余正负，深浅=金额相对本月峰值） -->
           <div class="calendar-wrap" id="calendar-month">
             <div class="calendar-week">
               <span>一</span><span>二</span><span>三</span><span>四</span>
@@ -291,7 +294,7 @@
 </div>
 
 <!-- ================= 记账弹窗 ================= -->
-<div class="modal fade" id="record-modal" tabindex="-1" aria-labelledby="record-modal-title" aria-hidden="true">
+<div class="modal fade" id="record-modal" tabindex="-1" aria-labelledby="record-modal-title" aria-hidden="true" data-bs-keyboard="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
@@ -317,7 +320,7 @@
 
           <div class="row g-3">
             <div class="col-6">
-              <label class="form-label" for="amount">金额</label>
+              <label class="form-label" for="amount">金额<span class="req">*</span></label>
               <div class="input-group">
                 <span class="input-group-text">¥</span>
                 <!-- type="text" 才能输入公式，比如 15.5+20*2 -->
@@ -330,7 +333,7 @@
 
             <!-- 一级分类：选项由 script.js 用分类表重建（value 是分类 id） -->
             <div class="col-6" id="category-col">
-              <label class="form-label" for="category">一级分类</label>
+              <label class="form-label" for="category">一级分类<span class="req">*</span></label>
               <select id="category" class="form-select">
                 {% for c in categories %}
                 <option value="{{ c }}">{{ c }}</option>
@@ -345,7 +348,7 @@
             </div>
 
             <div class="col-6">
-              <label class="form-label" for="account" id="account-label">账户</label>
+              <label class="form-label" for="account" id="account-label">账户<span class="req">*</span></label>
               <!-- 选项由 script.js 按大类用 <optgroup> 重建 -->
               <select id="account" class="form-select">
                 {% for a in accounts %}
@@ -356,7 +359,7 @@
 
             <!-- 转账专用：转入账户（平时隐藏） -->
             <div class="col-6 d-none" id="to-account-wrap">
-              <label class="form-label" for="to-account">转入账户</label>
+              <label class="form-label" for="to-account">转入账户<span class="req">*</span></label>
               <select id="to-account" class="form-select"></select>
             </div>
 
@@ -370,7 +373,7 @@
             </div>
 
             <div class="col-6">
-              <label class="form-label" for="record-time">时间</label>
+              <label class="form-label" for="record-time">时间<span class="req">*</span></label>
               <!-- datetime-local：浏览器给出「年-月-日 时:分」选择器，精确到分钟 -->
               <input id="record-time" class="form-control" type="datetime-local" value="{{ now }}">
             </div>
@@ -392,7 +395,7 @@
 </div>
 
 <!-- ================= 新增账户弹窗 ================= -->
-<div class="modal fade" id="account-modal" tabindex="-1" aria-labelledby="account-modal-title" aria-hidden="true">
+<div class="modal fade" id="account-modal" tabindex="-1" aria-labelledby="account-modal-title" aria-hidden="true" data-bs-keyboard="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
       <div class="modal-header">
@@ -401,11 +404,11 @@
       </div>
       <div class="modal-body">
         <div class="mb-3">
-          <label class="form-label" for="new-account-name">账户名称</label>
+          <label class="form-label" for="new-account-name">账户名称<span class="req">*</span></label>
           <input id="new-account-name" class="form-control" type="text" placeholder="例如：招行卡">
         </div>
         <div class="mb-3">
-          <label class="form-label" for="new-account-group">账户大类</label>
+          <label class="form-label" for="new-account-group">账户大类<span class="req">*</span></label>
           <select id="new-account-group" class="form-select">
             <option value="资金账户">资金账户</option>
             <option value="储蓄账户">储蓄账户</option>
@@ -429,7 +432,7 @@
 </div>
 
 <!-- ================= 分类管理弹窗 ================= -->
-<div class="modal fade" id="category-modal" tabindex="-1" aria-labelledby="category-modal-title" aria-hidden="true">
+<div class="modal fade" id="category-modal" tabindex="-1" aria-labelledby="category-modal-title" aria-hidden="true" data-bs-keyboard="true">
   <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
     <div class="modal-content">
       <div class="modal-header">
@@ -438,12 +441,15 @@
       </div>
       <div class="modal-body">
         <!-- 新增分类：名字 + 挂到哪个一级分类下（留空就是一级分类） -->
-        <div class="category-add">
-          <input id="new-category-name" class="form-control" type="text" placeholder="新分类名称">
-          <select id="new-category-parent" class="form-select">
-            <option value="">作为一级分类</option>
-          </select>
-          <button class="btn btn-primary" type="button" id="add-category-btn">添加</button>
+        <div class="category-add-wrap">
+          <label class="form-label" for="new-category-name">新分类名称<span class="req">*</span></label>
+          <div class="category-add">
+            <input id="new-category-name" class="form-control" type="text" placeholder="新分类名称" aria-required="true">
+            <select id="new-category-parent" class="form-select">
+              <option value="">作为一级分类</option>
+            </select>
+            <button class="btn btn-primary" type="button" id="add-category-btn">添加</button>
+          </div>
         </div>
         <!-- 分类树由 script.js 渲染，每个节点带删除按钮 -->
         <ul class="category-tree" id="category-tree"></ul>

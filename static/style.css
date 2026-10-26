@@ -411,13 +411,19 @@ body {
   font-size: 12px;
 }
 
-/* 图例：绿=有收入，红=有支出 */
+/* 图例：绿=结余为正，红=当日超支；深浅代表金额大小 */
 .calendar-legend {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+.legend-hint {
+  margin-left: 4px;
+  font-size: 11px;
+  color: #94a3b8;
 }
 
 .legend-dot {
@@ -427,14 +433,12 @@ body {
   display: inline-block;
 }
 
-.legend-dot.is-income {
-  background: #bbf7d0;
-  border: 1px solid #86efac;
+.legend-dot.is-plus {
+  background: #059669;
 }
 
-.legend-dot.is-expense {
-  background: #fecaca;
-  border: 1px solid #fca5a5;
+.legend-dot.is-minus {
+  background: #dc2626;
 }
 
 .calendar-wrap {
@@ -480,22 +484,32 @@ body {
   box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
-/* 只有收入 → 浅绿底 */
-.cal-cell.is-income {
-  background: #ecfdf5;
-  border-color: #86efac;
+/* 热力底色：颜色由 script.js 写成 style.backgroundColor（正结余绿 / 负结余红，
+   透明度 = 0.12 + 0.73 × |当天结余| / 本月峰值）。这里只负责深底时的文字与边框，
+   旧版的 is-income / is-expense / is-mixed 斜切已废弃。 */
+.cal-cell.has-heat {
+  border-color: rgba(15, 23, 42, 0.08);
 }
 
-/* 只有支出 → 浅红底 */
-.cal-cell.is-expense {
-  background: #fef2f2;
-  border-color: #fca5a5;
+.cal-cell.has-heat.is-deep {
+  border-color: rgba(255, 255, 255, 0.28);
 }
 
-/* 收支都有 → 左红右绿斜切 */
-.cal-cell.is-mixed {
-  background: linear-gradient(115deg, #fef2f2 0%, #fef2f2 50%, #ecfdf5 50%, #ecfdf5 100%);
-  border-color: #cbd5e1;
+.cal-cell.has-heat.is-deep .cal-day,
+.cal-cell.has-heat.is-deep .cal-fig,
+.cal-cell.has-heat.is-deep .cal-fig-label {
+  color: #fff;
+}
+
+/* 深底上的「今天」不铺蓝胶囊，否则和绿/红糊成一片 → 白底深字小胶囊 */
+.cal-cell.has-heat.is-deep.is-today .cal-day {
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+}
+
+/* 深底上选中的那一天：蓝色描边会被吃掉，改成白色内描边 */
+.cal-cell.has-heat.is-deep.is-selected {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.86);
 }
 
 .cal-cell.is-empty {
@@ -530,21 +544,49 @@ body {
   font-weight: 600;
 }
 
-/* 格子里的当天结余：正绿负红 */
-.cal-net {
+/* 格子里的 收 / 支 / 结 三行：等宽数字保证上下对齐 */
+.cal-figures {
   margin-top: auto;
-  font-size: 12px;
-  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 11.5px;
+  line-height: 1.5;
   font-variant-numeric: tabular-nums;
+}
+
+.cal-fig {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
   color: #475569;
+  white-space: nowrap;
 }
 
-.cal-net.is-plus {
-  color: #16a34a;
+.cal-fig-label {
+  font-size: 10px;
+  color: #94a3b8;
 }
 
-.cal-net.is-minus {
-  color: #dc2626;
+/* 收 → 绿，支 → 红；浅色热力底上也要能看清，所以取深一档的色值 */
+.cal-fig.is-plus {
+  color: #047857;
+}
+
+.cal-fig.is-minus {
+  color: #b91c1c;
+}
+
+.cal-fig.is-net {
+  font-weight: 600;
+}
+
+.cal-fig.is-net.is-plus {
+  color: #065f46;
+}
+
+.cal-fig.is-net.is-minus {
+  color: #991b1b;
 }
 
 .cal-tag {
@@ -587,6 +629,28 @@ body {
 .year-cell.is-current {
   border-color: var(--brand-blue);
   box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.35);
+}
+
+/* 年视图同样上热力色：底色 = 当月结余，深浅 = 相对全年单月峰值 */
+.year-cell.has-heat {
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+.year-cell.has-heat.is-deep {
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.year-cell.has-heat.is-deep .year-head,
+.year-cell.has-heat.is-deep .year-line,
+.year-cell.has-heat.is-deep .year-line span,
+.year-cell.has-heat.is-deep .year-line strong.is-plus,
+.year-cell.has-heat.is-deep .year-line strong.is-minus {
+  color: #fff;
+}
+
+.year-cell.has-heat.is-deep.is-current {
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75);
 }
 
 .year-head {
@@ -895,4 +959,184 @@ body {
 
 .account-card-balance.is-negative {
   color: #dc2626;
+}
+
+/* ==================== v0.06.1：必填标记与字段错误 ==================== */
+/* 必填项 Label 后面的红 * */
+.req {
+  margin-left: 2px;
+  color: #dc2626;
+  font-weight: 700;
+}
+
+/* 字段级错误：挂在该字段所在表单块的下面，不挤占其它列 */
+.field-error {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #dc2626;
+}
+
+/* 分类管理：给输入框补一行 label，红 * 才能和别的表单一致 */
+.category-add-wrap {
+  margin-bottom: 16px;
+}
+
+.category-add-wrap .category-add {
+  margin-bottom: 0;
+}
+
+/* ==================== v0.06.1：按钮内嵌 Spinner ==================== */
+/* 不禁用按钮，只换内容；按钮不会突然发灰 */
+.btn.is-busy {
+  cursor: default;
+}
+
+.btn-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-right: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  vertical-align: -2px;
+  animation: btn-spin 0.6s linear infinite;
+}
+
+@keyframes btn-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==================== v0.06.1：空数据占位 ==================== */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.empty-icon {
+  width: 38px;
+  height: 38px;
+  color: #cbd5e1;
+}
+
+.empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.empty-text {
+  max-width: 360px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b0bccb;
+}
+
+/* 非表格区域（账户卡片）的空数据块 */
+.empty-block {
+  padding: 36px 16px;
+  text-align: center;
+}
+
+.empty-block .empty-text {
+  margin: 0 auto;
+}
+
+/* ==================== v0.06.1：表格加载骨架屏 ==================== */
+.skeleton-row td {
+  padding: 14px 16px !important;
+  border-color: #f8fafc;
+}
+
+.sk-line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #eef2f7 25%, #e2e8f0 37%, #eef2f7 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.3s ease infinite;
+}
+
+@keyframes sk-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+/* 账户卡片骨架：虚线框 + 两条灰条 */
+.account-card.is-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-style: dashed;
+  pointer-events: none;
+}
+
+.account-card.is-skeleton .sk-line {
+  height: 10px;
+}
+
+.account-card.is-skeleton .sk-line-lg {
+  height: 18px;
+}
+
+/* ===================== v0.06.1 日历热力图：响应式 ===================== */
+/* 大屏：收 / 支 / 结 三行全显示，格子加高容纳三行数字 */
+@media (min-width: 1200px) {
+  .cal-cell {
+    min-height: 104px;
+  }
+}
+
+/* 中屏：只留「结」，收支让位给底色深浅 */
+@media (max-width: 1199.98px) {
+  .cal-figures .cal-fig:not(.is-net) {
+    display: none;
+  }
+
+  .cal-figures .cal-fig.is-net {
+    font-size: 12px;
+  }
+
+  .year-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* 极小屏：数字全撤，只剩日期 + 底色块，一眼扫过整月热力分布 */
+@media (max-width: 767.98px) {
+  .cal-cell {
+    min-height: 56px;
+    padding: 4px 5px;
+  }
+
+  .cal-figures {
+    display: none;
+  }
+
+  .calendar-wrap,
+  .calendar-year {
+    padding: 12px;
+  }
+
+  .calendar-grid,
+  .calendar-week {
+    gap: 4px;
+  }
+
+  .year-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .calendar-legend .legend-hint {
+    display: none;
+  }
 }

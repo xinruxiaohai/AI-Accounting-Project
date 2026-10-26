@@ -516,13 +516,23 @@ def get_all_categories():
 # ---------------- 账户 ----------------
 
 def list_accounts():
-    """返回所有账户及余额、大类。按插入顺序排，展示时不会一会儿现金一会儿银行卡。"""
+    """返回所有账户及余额、大类。按插入顺序排，展示时不会一会儿现金一会儿银行卡。
+
+    余额是 SQLite 里一条条 UPDATE 累加出来的浮点数，会留 78.19999999999999 这种尾巴。
+    这里是所有「读账户」的必经之路，出口统一收敛到两位小数，
+    保证前端 / 模板 / 统计永远只拿到 78.2。
+    """
     conn = get_conn()
     try:
         rows = conn.execute(
             "SELECT name, balance, group_name FROM accounts ORDER BY rowid"
         ).fetchall()
-        return [dict(row) for row in rows]
+        accounts = []
+        for row in rows:
+            account = dict(row)
+            account["balance"] = round(account["balance"], 2)
+            accounts.append(account)
+        return accounts
     finally:
         conn.close()
 
@@ -572,7 +582,8 @@ def update_account(name, balance=None, group_name=None):
             if group_name is not None and group_name not in ACCOUNT_GROUPS:
                 return None, "未知的账户大类：%s" % group_name
 
-            new_balance = row["balance"] if balance is None else round(balance, 2)
+            # 只改大类时余额原样返回，但也要收敛，否则前端拿到库里的浮点尾巴
+            new_balance = round(row["balance"], 2) if balance is None else round(balance, 2)
             new_group = row["group_name"] if group_name is None else group_name
             conn.execute(
                 "UPDATE accounts SET balance = ?, group_name = ? WHERE name = ?",
