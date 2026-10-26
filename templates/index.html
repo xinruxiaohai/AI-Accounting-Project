@@ -11,6 +11,9 @@
 </head>
 <body>
 
+<!-- Toast 轻提示容器：由 script.js 往里塞消息，不用 alert -->
+<div class="toast-stack" id="toast-stack"></div>
+
 <div class="app">
 
   <!-- ================= 左侧侧边栏 ================= -->
@@ -232,6 +235,8 @@
               <label class="btn btn-outline-danger" for="type-expense">支出</label>
               <input type="radio" class="btn-check" name="record-type" id="type-income" value="income">
               <label class="btn btn-outline-success" for="type-income">收入</label>
+              <input type="radio" class="btn-check" name="record-type" id="type-transfer" value="transfer">
+              <label class="btn btn-outline-primary" for="type-transfer">转账</label>
             </div>
           </div>
 
@@ -240,12 +245,16 @@
               <label class="form-label" for="amount">金额</label>
               <div class="input-group">
                 <span class="input-group-text">¥</span>
-                <input id="amount" class="form-control" type="number" step="0.01" min="0.01" placeholder="25.50">
+                <!-- type="text" 才能输入公式，比如 15.5+20*2 -->
+                <input id="amount" class="form-control" type="text" inputmode="decimal"
+                       placeholder="25.50 或 15.5+20*2" autocomplete="off">
               </div>
+              <!-- 公式实时计算结果显示在这里 -->
+              <div class="formula-hint" id="amount-hint"></div>
             </div>
 
             <!-- 一级分类：选项由 script.js 用分类表重建（value 是分类 id） -->
-            <div class="col-6">
+            <div class="col-6" id="category-col">
               <label class="form-label" for="category">一级分类</label>
               <select id="category" class="form-select">
                 {% for c in categories %}
@@ -261,13 +270,28 @@
             </div>
 
             <div class="col-6">
-              <label class="form-label" for="account">账户</label>
+              <label class="form-label" for="account" id="account-label">账户</label>
               <!-- 选项由 script.js 按大类用 <optgroup> 重建 -->
               <select id="account" class="form-select">
                 {% for a in accounts %}
                 <option value="{{ a }}">{{ a }}</option>
                 {% endfor %}
               </select>
+            </div>
+
+            <!-- 转账专用：转入账户（平时隐藏） -->
+            <div class="col-6 d-none" id="to-account-wrap">
+              <label class="form-label" for="to-account">转入账户</label>
+              <select id="to-account" class="form-select"></select>
+            </div>
+
+            <!-- 转账专用：手续费（平时隐藏，默认 0） -->
+            <div class="col-6 d-none" id="fee-wrap">
+              <label class="form-label" for="fee">手续费</label>
+              <div class="input-group">
+                <span class="input-group-text">¥</span>
+                <input id="fee" class="form-control" type="number" step="0.01" min="0" value="0">
+              </div>
             </div>
 
             <div class="col-6">
@@ -355,6 +379,8 @@
 
 <!-- Bootstrap 的 JS（弹窗靠它），必须在使用弹窗的标签之后加载 -->
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
+<!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
+<script src="/static/vendor/math.min.js"></script>
 <!-- 业务逻辑：切页、统计卡片、账单表格、记账弹窗、资产页、分类管理、日历 -->
 <script src="/static/script.js"></script>
 

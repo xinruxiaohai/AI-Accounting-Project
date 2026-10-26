@@ -1,11 +1,17 @@
-/* =====================================================================
-   AI记账管家 · 前端逻辑（v0.05）
-   页面结构见 templates/index.html，样式见 static/style.css
-   ===================================================================== */
+"use strict";
 
-/* ===================== 常量与小工具 ===================== */
+/*
+ * AI记账管家 · 前端逻辑（v0.06）
+ *
+ * 这一版在 v0.05 的基础上加了四件事：
+ *   1. 金额框支持算式（math.js 本地计算，保存时 amount 存结果、formula 存原式）
+ *   2. 记账弹窗支持「转账」：隐藏分类，显示转入账户与手续费
+ *   3. 所有 alert() 换成页面顶部的 Toast 轻提示
+ *   4. 资产页「在此账户下记一笔」只预选账户，不再把账户锁死
+ */
 
-// 四个页面的标题，切页时同步到顶部栏
+/* ==================== 常量 ==================== */
+
 const PAGE_TITLES = {
   home: "首页",
   calendar: "日历",
@@ -13,108 +19,122 @@ const PAGE_TITLES = {
   profile: "我的",
 };
 
-// 一个简写：$("#id") 比 document.getElementById 短
-const $ = (selector) => document.querySelector(selector);
-
-// 全局状态都放这里，避免到处散落变量
-const state = {
-  categories: [],      // 两级分类树：[{id, name, parent_id, children: []}]
-  accounts: [],        // 账户平铺列表：[{name, balance, group_name}]
-  groups: [],          // 账户按大类分组：[{name: "资金账户", accounts: []}]
-  allRecords: [],      // 首页当前的账目（受筛选影响）
-  editingId: null,     // 正在编辑的账目 id；null 表示新增
-  detailAccount: null, // 资产页选中的账户名
-  lockedAccount: null, // 快捷记账时锁定的账户名
+const TYPE_LABELS = {
+  expense: "支出",
+  income: "收入",
+  transfer: "转账",
 };
 
-// 编辑时按 id 找回原始记录，不用再去接口查一次
-const recordCache = new Map();
+const TYPE_BADGES = {
+  expense: '<span class="badge bg-danger">支出</span>',
+  income: '<span class="badge bg-success">收入</span>',
+  transfer: '<span class="badge bg-info text-dark">转账</span>',
+};
 
-// 金额显示：负数显示成 -¥12.30，而不是 ¥-12.30
+/* ==================== 小工具 ==================== */
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function cents(value) {
+  // 统一四舍五入到分，避免 78.19999999999999 这种浮点尾巴跑到界面上
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
 function money(value) {
-  const number = Number(value) || 0;
-  const text = Math.abs(number).toFixed(2);
-  return (number < 0 ? "-¥" : "¥") + text;
+  const number = cents(value);
+  const sign = number < 0 ? "-" : "";
+  return sign + "¥" + Math.abs(number).toFixed(2);
 }
 
-// 带正负号的金额：收入 +¥，支出 -¥
-function signedMoney(amount, type) {
-  const sign = type === "income" ? "+¥" : "-¥";
-  return sign + Number(amount).toFixed(2);
+function escapeHtml(text) {
+  return String(text === null || text === undefined ? "" : text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
-// 时间统一显示成「YYYY-MM-DD HH:MM」
 function displayDate(value) {
-  return value ? String(value) : "";
+  // 后端已经统一成「YYYY-MM-DD HH:MM」，这里只兜底
+  const text = String(value || "").trim();
+  if (text.length === 10) {
+    return text + " 00:00";
+  }
+  return text.slice(0, 16);
 }
 
-// datetime-local 需要「YYYY-MM-DDTHH:MM」，库里存的是空格分隔，转换一下
 function toInputValue(value) {
-  return String(value || "").replace(" ", "T").slice(0, 16);
+  // datetime-local 需要「YYYY-MM-DDTHH:MM」
+  return displayDate(value).replace(" ", "T");
 }
 
-// 取「现在」并转成 datetime-local 的格式（用本地时区，不用 toISOString，否则差 8 小时）
 function nowInputValue() {
   const now = new Date();
   const pad = (number) => String(number).padStart(2, "0");
   return (
     now.getFullYear() +
-    "-" + pad(now.getMonth() + 1) +
-    "-" + pad(now.getDate()) +
-    "T" + pad(now.getHours()) +
-    ":" + pad(now.getMinutes())
+    "-" +
+    pad(now.getMonth() + 1) +
+    "-" +
+    pad(now.getDate()) +
+    "T" +
+    pad(now.getHours()) +
+    ":" +
+    pad(now.getMinutes())
   );
 }
 
-// 备注、账户名可能有尖括号，塞进 innerHTML 前必须转义，否则会破坏结构
-function escapeHtml(text) {
-  return String(text == null ? "" : text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+function todayText() {
+  return nowInputValue().slice(0, 10);
 }
 
-// 分类显示：二级分类显示成「餐饮 / 早餐」
-function categoryLabel(record) {
-  if (record.category_parent && record.category_parent !== record.category) {
-    return record.category_parent + " / " + record.category;
+/* ==================== Toast 轻提示 ==================== */
+
+function toast(message, type) {
+  const stack = $("toast-stack");
+  if (!stack) {
+    return;
   }
-  return record.category || "";
+  const item = document.createElement("div");
+  item.className = "toast-item " + (type === "error" ? "toast-error" : "toast-success");
+  item.textContent = String(message || "");
+  stack.appendChild(item);
+
+  // 先插进 DOM 再加 show，才有从上面滑下来的动画
+  requestAnimationFrame(function () {
+    item.classList.add("show");
+  });
+
+  setTimeout(function () {
+    item.classList.remove("show");
+    setTimeout(function () {
+      if (item.parentNode) {
+        item.parentNode.removeChild(item);
+      }
+    }, 260);
+  }, 2400);
 }
 
-// 记账弹窗里当前选的是收入还是支出
-function currentType() {
-  const checked = document.querySelector('input[name="record-type"]:checked');
-  return checked ? checked.value : "expense";
-}
+/* ==================== 请求封装 ==================== */
 
-// 反向操作：编辑时把类型按钮切到记录本来的类型
-function setType(type) {
-  const target = $("#" + (type === "income" ? "type-income" : "type-expense"));
-  if (target) {
-    target.checked = true;
-  }
-}
-
-/* ===================== 请求封装 ===================== */
-
-// 所有接口调用走这里：出错时后端会给 {error: "..."}，直接抛出来给调用方 alert
 async function api(path, options) {
   const response = await fetch(path, options);
-  let data = {};
+  let data = null;
   try {
     data = await response.json();
   } catch (error) {
-    data = {};
+    data = null;
   }
   if (!response.ok) {
-    throw new Error(data.error || "请求失败（HTTP " + response.status + "）");
+    const message = (data && data.error) || "请求失败（HTTP " + response.status + "）";
+    throw new Error(message);
   }
   return data;
 }
 
-// POST / PUT 都发 JSON，这里统一带上请求头
 function jsonOptions(method, body) {
   return {
     method: method,
@@ -123,713 +143,1101 @@ function jsonOptions(method, body) {
   };
 }
 
-/* ===================== 弹窗对象 ===================== */
+/* ==================== 全局状态 ==================== */
 
-// Bootstrap 的 bundle 已经加载过了，这里直接用它包一层
-const recordModal = new bootstrap.Modal($("#record-modal"));
-const accountModal = new bootstrap.Modal($("#account-modal"));
-const categoryModal = new bootstrap.Modal($("#category-modal"));
+const state = {
+  categories: [],
+  accountGroups: [],
+  accounts: [],
+  allRecords: [],
+  detailAccount: "",
+  detailRecords: [],
+  editingId: null,
+  presetAccount: "",
+};
 
-/* ===================== 分类：级联下拉 + 分类树 ===================== */
+let recordModal = null;
+let accountModal = null;
+let categoryModal = null;
 
-// 把分类树填进「一级分类」下拉框，value 用分类 id
-function fillCategoryParent() {
-  const select = $("#category");
-  const previous = select.value;
-  select.innerHTML = state.categories
-    .map((top) => `<option value="${top.id}">${escapeHtml(top.name)}</option>`)
-    .join("");
-  if (state.categories.some((top) => String(top.id) === previous)) {
-    select.value = previous;
-  }
-  fillCategoryChild();
+/* ==================== 金额 / 公式 ==================== */
+
+function looksLikeFormula(text) {
+  return /[+\-*/()%^]/.test(text);
 }
 
-// 选了一级分类后，决定要不要显示二级下拉框
-function fillCategoryChild() {
-  const wrap = $("#sub-category-wrap");
-  const select = $("#sub-category");
-  const parent = state.categories.find(
-    (top) => String(top.id) === $("#category").value
-  );
-  const children = parent ? parent.children : [];
+/**
+ * 把金额框里的文字变成数字。
+ * - 纯数字：直接用 Number，不经过 math.js（省得把 0.1+0.2 的浮点尾巴带进来）
+ * - 算式：交给 math.js 算，算不出来就报错，绝不 eval
+ */
+function amountFromInput(raw) {
+  const text = String(raw === null || raw === undefined ? "" : raw).trim();
+  if (!text) {
+    return { ok: false, message: "请填写金额" };
+  }
 
-  if (!children.length) {
-    // 这个一级分类下面没有二级分类，把下拉框藏起来，提交时用一级分类 id
-    wrap.classList.add("d-none");
-    select.innerHTML = "";
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const value = Number(text);
+    if (!Number.isFinite(value)) {
+      return { ok: false, message: "金额不是合法数字" };
+    }
+    if (value <= 0) {
+      return { ok: false, message: "金额必须大于 0" };
+    }
+    return { ok: true, value: cents(value), formula: "" };
+  }
+
+  if (!window.math) {
+    return { ok: false, message: "计算库没加载成功，请刷新页面再试" };
+  }
+
+  let result = null;
+  try {
+    result = window.math.evaluate(text);
+  } catch (error) {
+    return { ok: false, message: "公式写错了：" + (error && error.message ? error.message : "无法计算") };
+  }
+
+  if (typeof result !== "number" || !Number.isFinite(result)) {
+    return { ok: false, message: "公式算不出有效数字" };
+  }
+  if (result <= 0) {
+    return { ok: false, message: "公式结果必须大于 0" };
+  }
+  return { ok: true, value: cents(result), formula: text };
+}
+
+function updateAmountHint() {
+  const hint = $("amount-hint");
+  if (!hint) {
+    return;
+  }
+  const text = String($("amount").value || "").trim();
+
+  // 纯数字不用打扰用户，只在有运算符时才显示「= 56.00」
+  if (!text || !looksLikeFormula(text)) {
+    hint.textContent = "";
+    hint.classList.remove("is-error");
     return;
   }
 
-  const previous = select.value;
-  wrap.classList.remove("d-none");
-  select.innerHTML =
-    '<option value="">不细分</option>' +
-    children
-      .map((child) => `<option value="${child.id}">${escapeHtml(child.name)}</option>`)
-      .join("");
-  if (children.some((child) => String(child.id) === previous)) {
-    select.value = previous;
-  }
-}
-
-// 当前选中的分类 id：优先二级，没有二级就用一级
-function selectedCategoryId() {
-  return Number($("#sub-category").value || $("#category").value);
-}
-
-// 分类管理弹窗：树形展示 + 每个节点一个删除按钮
-function renderCategoryTree() {
-  const tree = $("#category-tree");
-
-  if (!state.categories.length) {
-    tree.innerHTML = '<li class="empty-hint">还没有分类</li>';
+  const parsed = amountFromInput(text);
+  if (parsed.ok) {
+    hint.textContent = "= " + money(parsed.value);
+    hint.classList.remove("is-error");
   } else {
-    tree.innerHTML = state.categories
-      .map((top) => {
-        const children = top.children.length
-          ? `<ul>${top.children
-              .map(
-                (child) => `
-            <li>
-              <div class="category-row">
-                <span>${escapeHtml(child.name)}</span>
-                <button class="cat-del" type="button" data-del-category="${child.id}">删除</button>
-              </div>
-            </li>`
-              )
-              .join("")}</ul>`
-          : "";
-        const hint = top.children.length
-          ? '<span class="tag-count">' + top.children.length + " 个子分类</span>"
-          : '<span class="tag-count">一级分类</span>';
-        return `
-        <li>
-          <div class="category-row">
-            <span>${escapeHtml(top.name)}${hint}</span>
-            <button class="cat-del" type="button" data-del-category="${top.id}">删除</button>
-          </div>
-          ${children}
-        </li>`;
-      })
-      .join("");
+    hint.textContent = parsed.message;
+    hint.classList.add("is-error");
   }
-
-  // 新增表单里的「父级」下拉：留空 = 一级分类
-  const parentSelect = $("#new-category-parent");
-  parentSelect.innerHTML =
-    '<option value="">作为一级分类</option>' +
-    state.categories
-      .map((top) => `<option value="${top.id}">${escapeHtml(top.name)}</option>`)
-      .join("");
 }
 
-// 拉分类树，然后刷新级联下拉和分类管理弹窗
+/* ==================== 类型（支出 / 收入 / 转账） ==================== */
+
+function currentType() {
+  const checked = document.querySelector('input[name="record-type"]:checked');
+  return checked ? checked.value : "expense";
+}
+
+function setType(type) {
+  const target = $("type-" + (type || "expense"));
+  if (target) {
+    target.checked = true;
+  }
+  applyTypeUi();
+}
+
+function isTransferType() {
+  return currentType() === "transfer";
+}
+
+function applyTypeUi() {
+  const transfer = isTransferType();
+
+  // 转账没有分类概念：收支分类整块藏起来，换成转入账户和手续费
+  $("category-col").classList.toggle("d-none", transfer);
+  $("to-account-wrap").classList.toggle("d-none", !transfer);
+  $("fee-wrap").classList.toggle("d-none", !transfer);
+  $("account-label").textContent = transfer ? "转出账户" : "账户";
+
+  updateSubCategoryVisibility();
+}
+
+/* ==================== 分类 ==================== */
+
+function findCategory(categoryId) {
+  const id = Number(categoryId);
+  for (let i = 0; i < state.categories.length; i += 1) {
+    const top = state.categories[i];
+    if (Number(top.id) === id) {
+      return { node: top, parent: null };
+    }
+    for (let j = 0; j < top.children.length; j += 1) {
+      if (Number(top.children[j].id) === id) {
+        return { node: top.children[j], parent: top };
+      }
+    }
+  }
+  return null;
+}
+
+function childrenOf(parentId) {
+  const id = Number(parentId);
+  for (let i = 0; i < state.categories.length; i += 1) {
+    if (Number(state.categories[i].id) === id) {
+      return state.categories[i].children;
+    }
+  }
+  return [];
+}
+
+function fillCategoryParent(selectedId) {
+  const select = $("category");
+  select.innerHTML = "";
+
+  state.categories.forEach(function (top) {
+    const option = document.createElement("option");
+    option.value = String(top.id);
+    option.textContent = top.name;
+    select.appendChild(option);
+  });
+
+  if (selectedId !== undefined && selectedId !== null) {
+    select.value = String(selectedId);
+  }
+}
+
+function fillCategoryChild(parentId, selectedChildId) {
+  const select = $("sub-category");
+  const wrap = $("sub-category-wrap");
+  select.innerHTML = "";
+
+  const children = childrenOf(parentId);
+  if (!children.length) {
+    wrap.classList.add("d-none");
+    updateSubCategoryVisibility();
+    return;
+  }
+
+  // 空值表示「就记在一级分类上」，不一定非要选二级
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "不细分（记在 " + categoryNameOf(parentId) + "）";
+  select.appendChild(placeholder);
+
+  children.forEach(function (child) {
+    const option = document.createElement("option");
+    option.value = String(child.id);
+    option.textContent = child.name;
+    select.appendChild(option);
+  });
+
+  if (selectedChildId !== undefined && selectedChildId !== null && selectedChildId !== "") {
+    select.value = String(selectedChildId);
+  }
+
+  updateSubCategoryVisibility();
+}
+
+function categoryNameOf(categoryId) {
+  const found = findCategory(categoryId);
+  return found ? found.node.name : "";
+}
+
+function updateSubCategoryVisibility() {
+  const wrap = $("sub-category-wrap");
+  const select = $("sub-category");
+  const hasChildren = select.options.length > 0;
+  wrap.classList.toggle("d-none", isTransferType() || !hasChildren);
+}
+
+function selectedCategoryId() {
+  if (isTransferType()) {
+    return null;
+  }
+  const child = $("sub-category");
+  const wrap = $("sub-category-wrap");
+  if (child && !wrap.classList.contains("d-none") && child.value) {
+    return Number(child.value);
+  }
+  const parent = $("category");
+  return parent && parent.value ? Number(parent.value) : null;
+}
+
+function categoryLabel(record) {
+  if (record.type === "transfer") {
+    return escapeHtml(record.account) + " → " + escapeHtml(record.to_account);
+  }
+  const name = escapeHtml(record.category || "");
+  if (record.category_parent) {
+    return escapeHtml(record.category_parent) + " / " + name;
+  }
+  return name;
+}
+
+function countRecordsByCategory() {
+  const counts = {};
+  state.allRecords.forEach(function (record) {
+    if (record.category_id === null || record.category_id === undefined) {
+      return;
+    }
+    const key = String(record.category_id);
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  return counts;
+}
+
 async function loadCategories() {
   const data = await api("/api/categories");
   state.categories = data.categories || [];
-  fillCategoryParent();
+
+  fillCategoryParent($("category").value ? Number($("category").value) : null);
+  fillCategoryChild($("category").value, $("sub-category").value);
+
+  // 分类管理弹窗里的「父级」下拉
+  const parentSelect = $("new-category-parent");
+  const keep = parentSelect.value;
+  parentSelect.innerHTML = '<option value="">作为一级分类</option>';
+  state.categories.forEach(function (top) {
+    const option = document.createElement("option");
+    option.value = String(top.id);
+    option.textContent = top.name;
+    parentSelect.appendChild(option);
+  });
+  parentSelect.value = keep;
+
   renderCategoryTree();
 }
 
-/* ===================== 账户：optgroup 下拉 + 卡片 ===================== */
+function renderCategoryTree() {
+  const list = $("category-tree");
+  const counts = countRecordsByCategory();
+  list.innerHTML = "";
 
-// 生成 <optgroup> 分组的账户选项。withBalance=true 时在名字后面带上余额
-function accountOptionsHtml(selected, withBalance) {
-  const groups = state.groups.filter((group) => group.accounts.length);
-  return groups
-    .map((group) => {
-      const options = group.accounts
-        .map((account) => {
-          const label = withBalance
-            ? account.name + "（" + money(account.balance) + "）"
-            : account.name;
-          const isSelected = account.name === selected ? " selected" : "";
-          return `<option value="${escapeHtml(account.name)}"${isSelected}>${escapeHtml(label)}</option>`;
+  state.categories.forEach(function (top) {
+    const item = document.createElement("li");
+    item.innerHTML =
+      categoryRowHtml(top, counts, true) +
+      (top.children.length
+        ? '<ul class="category-sub">' +
+          top.children
+            .map(function (child) {
+              return "<li>" + categoryRowHtml(child, counts, false) + "</li>";
+            })
+            .join("") +
+          "</ul>"
+        : "");
+    list.appendChild(item);
+  });
+
+  if (!state.categories.length) {
+    list.innerHTML = '<li class="empty-cell">还没有分类</li>';
+  }
+}
+
+function categoryRowHtml(category, counts, isTop) {
+  const used = counts[String(category.id)] || 0;
+  const tag = used ? '<span class="tag-count">' + used + " 笔</span>" : "";
+  return (
+    '<div class="category-row">' +
+    '<span class="category-name">' +
+    escapeHtml(category.name) +
+    "</span>" +
+    (isTop ? "" : '<span class="category-tip">二级</span>') +
+    tag +
+    '<button class="cat-del" type="button" data-del-category="' +
+    category.id +
+    '">删除</button>' +
+    "</div>"
+  );
+}
+
+/* ==================== 账户 ==================== */
+
+function accountOptionsHtml(selectedName) {
+  // 按大类用 <optgroup> 分组，避免 8 个账户平铺在一起看花眼
+  return state.accountGroups
+    .map(function (group) {
+      const inner = group.accounts
+        .map(function (account) {
+          const selected = account.name === selectedName ? " selected" : "";
+          return (
+            '<option value="' +
+            escapeHtml(account.name) +
+            '"' +
+            selected +
+            ">" +
+            escapeHtml(account.name) +
+            "（" +
+            money(account.balance) +
+            "）</option>"
+          );
         })
         .join("");
-      return `<optgroup label="${escapeHtml(group.name)}">${options}</optgroup>`;
+      if (!inner) {
+        return "";
+      }
+      return '<optgroup label="' + escapeHtml(group.name) + '">' + inner + "</optgroup>";
     })
     .join("");
 }
 
-// 重建记账弹窗里的账户下拉 + 首页的账户筛选下拉
 function fillAccountSelects() {
-  const recordSelect = $("#account");
-  const keep = state.lockedAccount || recordSelect.value;
-  recordSelect.innerHTML = accountOptionsHtml(keep, true);
-  if (keep) {
-    recordSelect.value = keep;
-  }
-  // 快捷记账时账户锁定，用户不能改
-  recordSelect.disabled = Boolean(state.lockedAccount);
+  const accountSelect = $("account");
+  const keepAccount = accountSelect.value;
+  accountSelect.innerHTML = accountOptionsHtml(keepAccount);
 
-  const filter = $("#filter-account");
+  // 筛选框多一个「全部账户」，并且不显示余额，免得下拉太宽
+  const filter = $("filter-account");
   const keepFilter = filter.value;
-  filter.innerHTML =
-    '<option value="">全部账户</option>' + accountOptionsHtml(keepFilter, false);
-  if (keepFilter && state.accounts.some((account) => account.name === keepFilter)) {
-    filter.value = keepFilter;
+  const plainOptions = state.accountGroups
+    .map(function (group) {
+      const inner = group.accounts
+        .map(function (account) {
+          return '<option value="' + escapeHtml(account.name) + '">' + escapeHtml(account.name) + "</option>";
+        })
+        .join("");
+      if (!inner) {
+        return "";
+      }
+      return '<optgroup label="' + escapeHtml(group.name) + '">' + inner + "</optgroup>";
+    })
+    .join("");
+  filter.innerHTML = '<option value="">全部账户</option>' + plainOptions;
+  filter.value = keepFilter;
+
+  // 转入账户：全量账户，默认挑一个和转出账户不同的
+  const toAccount = $("to-account");
+  const keepTo = toAccount.value;
+  toAccount.innerHTML = accountOptionsHtml(keepTo);
+  if (!toAccount.value && state.accounts.length) {
+    const firstOther = state.accounts.find(function (account) {
+      return account.name !== accountSelect.value;
+    });
+    if (firstOther) {
+      toAccount.value = firstOther.name;
+    }
   }
 }
 
-// 资产页：按大类渲染账户卡片
 function renderAccountGroups() {
-  const box = $("#account-groups");
-
-  if (!state.groups.length) {
-    box.innerHTML = '<p class="empty-hint">还没有账户</p>';
+  const box = $("account-groups");
+  if (!state.accounts.length) {
+    box.innerHTML = '<p class="empty-cell">还没有账户，点右上角「+ 新增账户」建一个</p>';
     return;
   }
 
-  box.innerHTML = state.groups
-    .map((group) => {
-      const total = group.accounts.reduce(
-        (sum, account) => sum + Number(account.balance),
-        0
-      );
-      const cards = group.accounts.length
-        ? group.accounts
-            .map(
-              (account) => `
-          <div class="account-card${account.name === state.detailAccount ? " active" : ""}" data-account="${escapeHtml(account.name)}">
-            <button class="account-card-del" type="button" data-del-account="${escapeHtml(account.name)}" title="删除账户">×</button>
-            <div class="account-card-name">${escapeHtml(account.name)}</div>
-            <div class="account-card-balance${Number(account.balance) < 0 ? " text-danger" : ""}">${money(account.balance)}</div>
-          </div>`
-            )
-            .join("")
-        : '<p class="empty-hint">这一类还没有账户</p>';
+  box.innerHTML = state.accountGroups
+    .map(function (group) {
+      const total = group.accounts.reduce(function (sum, account) {
+        return sum + Number(account.balance || 0);
+      }, 0);
 
-      return `
-      <div class="account-group">
-        <div class="account-group-head">
-          <span>${escapeHtml(group.name)}</span>
-          <span class="account-group-total">${money(total)}</span>
-        </div>
-        <div class="account-cards">${cards}</div>
-      </div>`;
+      const cards = group.accounts
+        .map(function (account) {
+          const active = account.name === state.detailAccount ? " active" : "";
+          const tone = Number(account.balance) < 0 ? " is-negative" : "";
+          return (
+            '<div class="account-card' +
+            active +
+            '" data-account="' +
+            escapeHtml(account.name) +
+            '">' +
+            '<button class="account-card-del" type="button" data-del-account="' +
+            escapeHtml(account.name) +
+            '" title="删除账户">×</button>' +
+            '<div class="account-card-name">' +
+            escapeHtml(account.name) +
+            "</div>" +
+            '<div class="account-card-balance' +
+            tone +
+            '">' +
+            money(account.balance) +
+            "</div>" +
+            "</div>"
+          );
+        })
+        .join("");
+
+      return (
+        '<div class="account-group">' +
+        '<div class="account-group-head">' +
+        '<span class="account-group-name">' +
+        escapeHtml(group.name) +
+        "</span>" +
+        '<span class="account-group-total">合计 ' +
+        money(total) +
+        "</span>" +
+        "</div>" +
+        '<div class="account-cards">' +
+        cards +
+        "</div>" +
+        "</div>"
+      );
     })
     .join("");
 }
 
-// 拉账户列表，刷新下拉框和资产页卡片
 async function loadAccounts() {
   const data = await api("/api/accounts");
   state.accounts = data.accounts || [];
-  state.groups = data.groups || [];
-
-  // 选中的账户被删掉了，就把详情区复位
-  if (state.detailAccount && !state.accounts.some((account) => account.name === state.detailAccount)) {
-    state.detailAccount = null;
-    $("#detail-title").textContent = "账户流水";
-    $("#quick-add-btn").disabled = true;
-    $("#account-records").innerHTML =
-      '<tr><td colspan="6" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td></tr>';
-  }
+  state.accountGroups = data.groups || [];
 
   fillAccountSelects();
   renderAccountGroups();
+
+  // 选中的账户被删掉了，详情区要退回未选中状态
+  if (state.detailAccount) {
+    const stillThere = state.accounts.some(function (account) {
+      return account.name === state.detailAccount;
+    });
+    if (!stillThere) {
+      clearDetail();
+    }
+  }
 }
 
-/* ===================== 统计卡片 ===================== */
+function clearDetail() {
+  state.detailAccount = "";
+  state.detailRecords = [];
+  $("detail-title").textContent = "账户流水";
+  $("quick-add-btn").disabled = true;
+  $("account-records").innerHTML =
+    '<tr><td colspan="6" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td></tr>';
+}
+
+async function selectAccount(name) {
+  state.detailAccount = name;
+  $("detail-title").textContent = name + " · 流水";
+  $("quick-add-btn").disabled = false;
+  renderAccountGroups();
+
+  const data = await api("/api/records?account=" + encodeURIComponent(name));
+  state.detailRecords = data.records || [];
+  renderAccountRecords();
+}
+
+/* ==================== 统计卡片 ==================== */
 
 async function loadStatistics() {
   const data = await api("/api/statistics");
+  $("stat-income").textContent = money(data.income_total);
+  $("stat-expense").textContent = money(data.expense_total);
 
-  $("#stat-income").textContent = money(data.income_total);
-  $("#stat-expense").textContent = money(data.expense_total);
-
-  // 总余额为负时用红色，提醒"欠着钱"
-  const balance = Number(data.balance_total) || 0;
-  const balanceNode = $("#stat-balance");
-  balanceNode.textContent = money(balance);
-  balanceNode.className = "stat-number " + (balance < 0 ? "text-danger" : "text-primary");
+  const balance = $("stat-balance");
+  balance.textContent = money(data.balance_total);
+  // 余额是负的就说人话：红色提醒，别装作没事
+  balance.className = Number(data.balance_total) < 0 ? "stat-number text-danger" : "stat-number text-primary";
 }
 
-/* ===================== 账目：首页表格 + 资产页流水 ===================== */
+/* ==================== 账单列表 ==================== */
 
-// 首页表格的每一行
-function renderRecords(records) {
-  const tbody = $("#record-list");
-  records.forEach((record) => recordCache.set(record.id, record));
+function amountCellHtml(record) {
+  if (record.type === "income") {
+    return '<span class="text-success">+' + money(record.amount) + "</span>";
+  }
+  if (record.type === "transfer") {
+    const fee = Number(record.fee || 0);
+    const feeTip = fee > 0 ? '<div class="fee-note">含手续费 ' + money(fee) + "</div>" : "";
+    return '<span class="text-danger">-' + money(record.amount) + "</span>" + feeTip;
+  }
+  return '<span class="text-danger">-' + money(record.amount) + "</span>";
+}
 
-  if (!records.length) {
+function actionCellHtml(record) {
+  return (
+    '<button class="btn btn-sm btn-warning" type="button" data-action="edit" data-id="' +
+    record.id +
+    '">编辑</button>' +
+    '<button class="btn btn-sm btn-danger ms-1" type="button" data-action="delete" data-id="' +
+    record.id +
+    '">删除</button>'
+  );
+}
+
+function renderRecords() {
+  const tbody = $("record-list");
+  tbody.innerHTML = "";
+
+  if (!state.allRecords.length) {
     tbody.innerHTML =
-      '<tr><td colspan="7" class="empty-cell">还没有记录，点右上角「+ 记一笔」开始吧</td></tr>';
+      '<tr id="empty-row"><td colspan="7" class="empty-cell">还没有记录，点右上角「+ 记一笔」开始吧</td></tr>';
     return;
   }
 
-  tbody.innerHTML = records
-    .map((record) => {
-      const isIncome = record.type === "income";
-      return `
-      <tr data-id="${record.id}">
-        <td class="col-time">${escapeHtml(displayDate(record.date))}</td>
-        <td class="col-type"><span class="badge ${isIncome ? "bg-success" : "bg-danger"}">${isIncome ? "收入" : "支出"}</span></td>
-        <td>${escapeHtml(categoryLabel(record))}</td>
-        <td class="col-account">${escapeHtml(record.account)}</td>
-        <td class="text-end col-amount ${isIncome ? "text-success" : "text-danger"}">${signedMoney(record.amount, record.type)}</td>
-        <td class="note-cell">${escapeHtml(record.note || "")}</td>
-        <td class="text-end col-action">
-          <button class="btn btn-sm btn-link p-0 me-2" type="button" data-action="edit">编辑</button>
-          <button class="btn btn-sm btn-link p-0 text-danger" type="button" data-action="delete">删除</button>
-        </td>
-      </tr>`;
-    })
-    .join("");
+  state.allRecords.forEach(function (record) {
+    const row = document.createElement("tr");
+    row.setAttribute("data-id", String(record.id));
+    row.innerHTML =
+      '<td class="col-time">' +
+      escapeHtml(displayDate(record.date)) +
+      "</td>" +
+      '<td class="col-type">' +
+      (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
+      "</td>" +
+      "<td>" +
+      categoryLabel(record) +
+      "</td>" +
+      "<td>" +
+      escapeHtml(record.account) +
+      "</td>" +
+      '<td class="text-end col-amount">' +
+      amountCellHtml(record) +
+      "</td>" +
+      '<td class="note-cell">' +
+      (record.note ? escapeHtml(record.note) : "-") +
+      "</td>" +
+      '<td class="text-end col-action">' +
+      actionCellHtml(record) +
+      "</td>";
+    tbody.appendChild(row);
+  });
 }
 
-// 资产页下方的账户专属流水（没有"账户"列，因为整张表就是一个账户）
-function renderAccountRecords(records) {
-  const tbody = $("#account-records");
-  records.forEach((record) => recordCache.set(record.id, record));
+function renderAccountRecords() {
+  const tbody = $("account-records");
+  tbody.innerHTML = "";
 
-  if (!records.length) {
-    tbody.innerHTML =
-      '<tr><td colspan="6" class="empty-cell">这个账户还没有记录</td></tr>';
+  if (!state.detailRecords.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">这个账户还没有流水</td></tr>';
     return;
   }
 
-  tbody.innerHTML = records
-    .map((record) => {
-      const isIncome = record.type === "income";
-      return `
-      <tr data-id="${record.id}">
-        <td class="col-time">${escapeHtml(displayDate(record.date))}</td>
-        <td class="col-type"><span class="badge ${isIncome ? "bg-success" : "bg-danger"}">${isIncome ? "收入" : "支出"}</span></td>
-        <td>${escapeHtml(categoryLabel(record))}</td>
-        <td class="text-end col-amount ${isIncome ? "text-success" : "text-danger"}">${signedMoney(record.amount, record.type)}</td>
-        <td class="note-cell">${escapeHtml(record.note || "")}</td>
-        <td class="text-end col-action">
-          <button class="btn btn-sm btn-link p-0 me-2" type="button" data-action="edit">编辑</button>
-          <button class="btn btn-sm btn-link p-0 text-danger" type="button" data-action="delete">删除</button>
-        </td>
-      </tr>`;
-    })
-    .join("");
+  state.detailRecords.forEach(function (record) {
+    const row = document.createElement("tr");
+    row.setAttribute("data-id", String(record.id));
+    row.innerHTML =
+      '<td class="col-time">' +
+      escapeHtml(displayDate(record.date)) +
+      "</td>" +
+      '<td class="col-type">' +
+      (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
+      "</td>" +
+      "<td>" +
+      categoryLabel(record) +
+      "</td>" +
+      '<td class="text-end col-amount">' +
+      amountCellHtml(record) +
+      "</td>" +
+      '<td class="note-cell">' +
+      (record.note ? escapeHtml(record.note) : "-") +
+      "</td>" +
+      '<td class="text-end col-action">' +
+      actionCellHtml(record) +
+      "</td>";
+    tbody.appendChild(row);
+  });
 }
 
-// 拉首页账目（带账户筛选），同时刷新日历
 async function loadRecords() {
-  const account = $("#filter-account").value;
+  const account = $("filter-account").value;
   const query = account ? "?account=" + encodeURIComponent(account) : "";
   const data = await api("/api/records" + query);
-
   state.allRecords = data.records || [];
-  renderRecords(state.allRecords);
-  renderCalendar(state.allRecords);
+
+  renderRecords();
+  renderCalendar();
+  renderCategoryTree();
 }
 
-// 选中某个账户：卡片高亮 + 下方显示它的流水
-async function selectAccount(name) {
-  state.detailAccount = name;
-  renderAccountGroups();
-
-  $("#detail-title").textContent = name + " · 流水";
-  $("#quick-add-btn").disabled = false;
-
-  const data = await api("/api/records?account=" + encodeURIComponent(name));
-  renderAccountRecords(data.records || []);
-}
-
-/* ===================== 日历 ===================== */
-
-// 用当月每天的支出合计画网格，周一排第一
-function renderCalendar(records) {
-  const grid = $("#calendar-grid");
-  const title = $("#calendar-title");
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = today.getMonth() + 1;
-  const daysInMonth = new Date(year, month, 0).getDate();
-  // JS 的 getDay() 里周日是 0，这里换算成「周一 = 0」
-  const firstWeekday = (new Date(year, month - 1, 1).getDay() + 6) % 7;
-
-  const sums = {};
-  records.forEach((record) => {
-    if (record.type !== "expense") {
-      return; // 日历只统计支出
-    }
-    const text = String(record.date);
-    if (Number(text.slice(0, 4)) === year && Number(text.slice(5, 7)) === month) {
-      const day = Number(text.slice(8, 10));
-      sums[day] = (sums[day] || 0) + Number(record.amount);
-    }
-  });
-
-  title.textContent = year + " 年 " + month + " 月支出";
-
-  const cells = [];
-  for (let i = 0; i < firstWeekday; i += 1) {
-    cells.push('<div class="cal-cell is-empty"></div>');
-  }
-  for (let day = 1; day <= daysInMonth; day += 1) {
-    const isToday = day === today.getDate();
-    const sum = sums[day];
-    cells.push(`
-      <div class="cal-cell${isToday ? " is-today" : ""}">
-        <span class="cal-day">${day}</span>
-        ${sum ? '<span class="cal-sum">' + money(-sum) + "</span>" : ""}
-      </div>`);
-  }
-  // 补到 7 的倍数，最后一行不会缺角
-  while (cells.length % 7 !== 0) {
-    cells.push('<div class="cal-cell is-empty"></div>');
-  }
-  grid.innerHTML = cells.join("");
-}
-
-/* ===================== 记账弹窗 ===================== */
-
-// 打开弹窗。options 可以带 {record} 进入编辑，或 {account} 锁定账户
-function openRecordModal(options) {
-  const settings = options || {};
-  resetRecordForm();
-
-  if (settings.record) {
-    fillRecordForm(settings.record);
-  }
-  if (settings.account) {
-    lockAccount(settings.account);
-  }
-  recordModal.show();
-}
-
-// 表单复位：新增状态
-function resetRecordForm() {
-  state.editingId = null;
-  state.lockedAccount = null;
-
-  $("#record-modal-title").textContent = "记一笔";
-  $("#save-btn").textContent = "保存";
-  $("#amount").value = "";
-  $("#note").value = "";
-  $("#record-time").value = nowInputValue();
-  setType("expense");
-
-  const accountSelect = $("#account");
-  accountSelect.disabled = false;
-
-  // 分类回到第一项
-  if (state.categories.length) {
-    $("#category").value = String(state.categories[0].id);
-  }
-  fillCategoryChild();
-}
-
-// 编辑时把记录回填到表单
-function fillRecordForm(record) {
-  state.editingId = record.id;
-
-  $("#record-modal-title").textContent = "编辑记录 #" + record.id;
-  $("#save-btn").textContent = "保存修改";
-  $("#amount").value = record.amount;
-  $("#note").value = record.note || "";
-  $("#record-time").value = toInputValue(record.date);
-  setType(record.type);
-
-  // 二级分类：先选它的一级父级，再选它自己
-  if (record.category_parent) {
-    const parent = state.categories.find((top) => top.name === record.category_parent);
-    if (parent) {
-      $("#category").value = String(parent.id);
-      fillCategoryChild();
-      $("#sub-category").value = String(record.category_id);
-    }
-  } else if (record.category_id) {
-    $("#category").value = String(record.category_id);
-    fillCategoryChild();
-  }
-
-  const accountSelect = $("#account");
-  accountSelect.value = record.account;
-}
-
-// 快捷记账：账户锁定成当前卡片
-function lockAccount(name) {
-  state.lockedAccount = name;
-  const accountSelect = $("#account");
-  accountSelect.value = name;
-  accountSelect.disabled = true; // disabled 的 select 用户点不动，但 .value 还能正常读
-}
-
-// 保存：有 editingId 走 PUT，没有走 POST
-async function saveRecord() {
-  const amount = Number($("#amount").value);
-  if (!amount || amount <= 0) {
-    alert("请填写大于 0 的金额");
+async function refreshDetail() {
+  if (!state.detailAccount) {
     return;
   }
-  const account = $("#account").value;
+  const data = await api("/api/records?account=" + encodeURIComponent(state.detailAccount));
+  state.detailRecords = data.records || [];
+  renderAccountRecords();
+}
+
+/* ==================== 日历 ==================== */
+
+function renderCalendar() {
+  const grid = $("calendar-grid");
+  const title = $("calendar-title");
+  grid.innerHTML = "";
+
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = today.getMonth();
+  title.textContent = year + " 年 " + (month + 1) + " 月支出";
+
+  // 每天的支出合计（转账不算支出，跳过）
+  const daily = {};
+  state.allRecords.forEach(function (record) {
+    if (record.type !== "expense") {
+      return;
+    }
+    const key = displayDate(record.date).slice(0, 10);
+    daily[key] = (daily[key] || 0) + Number(record.amount || 0);
+  });
+
+  const firstDay = new Date(year, month, 1);
+  // JS 里周日是 0，日历从周一开始，所以要 (getDay() + 6) % 7
+  const lead = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const todayKey = todayText();
+
+  let cellIndex = 0;
+  for (let i = 0; i < lead; i += 1) {
+    const cell = document.createElement("div");
+    cell.className = "cal-cell is-empty";
+    grid.appendChild(cell);
+    cellIndex += 1;
+  }
+
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const pad = String(day).padStart(2, "0");
+    const key = year + "-" + String(month + 1).padStart(2, "0") + "-" + pad;
+    const cell = document.createElement("div");
+    cell.className = "cal-cell" + (key === todayKey ? " is-today" : "");
+
+    const total = daily[key] || 0;
+    cell.innerHTML =
+      '<div class="cal-day">' +
+      day +
+      "</div>" +
+      (total > 0 ? '<div class="cal-sum">' + money(total) + "</div>" : "");
+    grid.appendChild(cell);
+    cellIndex += 1;
+  }
+
+  // 补空格子，让最后一行也是整整齐齐的 7 列
+  while (cellIndex % 7 !== 0) {
+    const cell = document.createElement("div");
+    cell.className = "cal-cell is-empty";
+    grid.appendChild(cell);
+    cellIndex += 1;
+  }
+}
+
+/* ==================== 记账弹窗 ==================== */
+
+function resetRecordForm() {
+  state.editingId = null;
+  state.presetAccount = "";
+  $("record-modal-title").textContent = "记一笔";
+  $("save-btn").textContent = "保存";
+  $("amount").value = "";
+  $("note").value = "";
+  $("fee").value = "0";
+  $("record-time").value = nowInputValue();
+  $("amount-hint").textContent = "";
+  $("amount-hint").classList.remove("is-error");
+
+  fillCategoryParent(null);
+  fillCategoryChild($("category").value, "");
+  $("sub-category").value = "";
+
+  setType("expense");
+  if (state.accounts.length) {
+    $("account").value = state.accounts[0].name;
+  }
+  fillAccountSelects();
+}
+
+function fillRecordForm(record) {
+  // 金额：有公式就回显公式，让用户还能接着改算式
+  $("amount").value = record.formula ? record.formula : String(cents(record.amount));
+  updateAmountHint();
+
+  $("record-time").value = toInputValue(record.date);
+  $("note").value = record.note || "";
+  $("account").value = record.account || $("account").value;
+
+  if (record.type === "transfer") {
+    $("fee").value = String(cents(record.fee || 0));
+    if (record.to_account) {
+      $("to-account").value = record.to_account;
+    }
+    $("category").value = String($("category").value);
+    return;
+  }
+
+  // 分类：先定位到一级，再把二级选上
+  const found = findCategory(record.category_id);
+  if (found) {
+    if (found.parent) {
+      fillCategoryParent(found.parent.id);
+      fillCategoryChild(found.parent.id, found.node.id);
+    } else {
+      fillCategoryParent(found.node.id);
+      fillCategoryChild(found.node.id, "");
+    }
+  }
+}
+
+function openRecordModal(options) {
+  resetRecordForm();
+
+  const record = options && options.record ? options.record : null;
+  if (record) {
+    state.editingId = record.id;
+    $("record-modal-title").textContent = "编辑记录 #" + record.id;
+    $("save-btn").textContent = "保存修改";
+    setType(record.type);
+    fillRecordForm(record);
+    applyTypeUi();
+  } else {
+    const presetAccount = options && options.account ? options.account : "";
+    if (presetAccount) {
+      // 快捷记账：只预选账户，不锁死，用户想改随时能改
+      $("account").value = presetAccount;
+      const other = state.accounts.find(function (account) {
+        return account.name !== presetAccount;
+      });
+      if (other) {
+        $("to-account").value = other.name;
+      }
+    }
+  }
+
+  if (recordModal) {
+    recordModal.show();
+  }
+}
+
+function closeRecordModal() {
+  if (recordModal) {
+    recordModal.hide();
+  }
+}
+
+async function saveRecord() {
+  const parsed = amountFromInput($("amount").value);
+  if (!parsed.ok) {
+    toast(parsed.message, "error");
+    $("amount").focus();
+    return;
+  }
+
+  const account = $("account").value;
   if (!account) {
-    alert("请选择账户");
+    toast("请先选一个账户", "error");
     return;
   }
 
   const payload = {
-    amount: amount,
-    category_id: selectedCategoryId(),
+    amount: parsed.value,
+    formula: parsed.formula,
     account: account,
     type: currentType(),
-    date: $("#record-time").value || nowInputValue(),
-    note: $("#note").value.trim(),
+    note: $("note").value.trim(),
   };
 
-  const saveButton = $("#save-btn");
-  saveButton.disabled = true;
+  const dateValue = $("record-time").value;
+  if (dateValue) {
+    payload.date = dateValue;
+  }
+
+  if (payload.type === "transfer") {
+    const toAccount = $("to-account").value;
+    if (!toAccount) {
+      toast("请选择转入账户", "error");
+      return;
+    }
+    if (toAccount === account) {
+      toast("转出账户和转入账户不能是同一个", "error");
+      return;
+    }
+    const feeText = String($("fee").value || "").trim();
+    const fee = Number(feeText === "" ? 0 : feeText);
+    if (!Number.isFinite(fee) || fee < 0) {
+      toast("手续费必须是不小于 0 的数字", "error");
+      return;
+    }
+    payload.to_account = toAccount;
+    payload.fee = cents(fee);
+  } else {
+    const categoryId = selectedCategoryId();
+    if (!categoryId) {
+      toast("请选择分类", "error");
+      return;
+    }
+    payload.category_id = categoryId;
+  }
+
+  const button = $("save-btn");
+  button.disabled = true;
   try {
     if (state.editingId) {
       await api("/api/records/" + state.editingId, jsonOptions("PUT", payload));
+      toast("已保存修改", "success");
     } else {
       await api("/api/records", jsonOptions("POST", payload));
+      toast("记账成功", "success");
     }
-    recordModal.hide();
+    closeRecordModal();
     await refresh();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   } finally {
-    saveButton.disabled = false;
+    button.disabled = false;
   }
 }
 
-// 删除一条账目
 async function removeRecord(recordId) {
-  if (!confirm("确定删除这条记录吗？")) {
+  if (!window.confirm("确定删除这条记录吗？删除后余额会一起退回去。")) {
     return;
   }
   try {
     await api("/api/records/" + recordId, { method: "DELETE" });
+    toast("已删除", "success");
     await refresh();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   }
 }
 
-// 表格里的「编辑 / 删除」：事件委托，行是动态渲染的也能点到
 function onRecordListClick(event) {
-  const button = event.target.closest("button[data-action]");
+  const button = event.target.closest("[data-action]");
   if (!button) {
     return;
   }
-  const row = button.closest("tr[data-id]");
-  if (!row) {
-    return;
-  }
-  const recordId = Number(row.dataset.id);
-  if (button.dataset.action === "edit") {
-    const record = recordCache.get(recordId);
+  const recordId = Number(button.getAttribute("data-id"));
+  if (button.getAttribute("data-action") === "edit") {
+    const record =
+      state.allRecords.find(function (item) {
+        return item.id === recordId;
+      }) ||
+      state.detailRecords.find(function (item) {
+        return item.id === recordId;
+      });
     if (record) {
       openRecordModal({ record: record });
     }
-  } else if (button.dataset.action === "delete") {
-    removeRecord(recordId);
-  }
-}
-
-/* ===================== 分类管理弹窗 ===================== */
-
-// 新增分类：名字 + 可选父级
-async function addCategory() {
-  const nameInput = $("#new-category-name");
-  const name = nameInput.value.trim();
-  if (!name) {
-    alert("请填写分类名称");
     return;
   }
-  const parentValue = $("#new-category-parent").value;
-  const body = { name: name };
+  removeRecord(recordId);
+}
+
+/* ==================== 分类增删 ==================== */
+
+async function addCategory() {
+  const name = $("new-category-name").value.trim();
+  if (!name) {
+    toast("请填写分类名称", "error");
+    return;
+  }
+  const parentValue = $("new-category-parent").value;
+  const payload = { name: name };
   if (parentValue) {
-    body.parent_id = Number(parentValue);
+    payload.parent_id = Number(parentValue);
   }
 
   try {
-    await api("/api/categories", jsonOptions("POST", body));
-    nameInput.value = "";
+    await api("/api/categories", jsonOptions("POST", payload));
+    $("new-category-name").value = "";
+    toast("分类已添加", "success");
     await loadCategories();
-    // 新建的分类可能带着新的二级分类，记账弹窗的级联下拉也要更新
-    fillCategoryParent();
+    await loadRecords();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   }
 }
 
-// 删除分类：有子分类或还有账目在用时后端会拒绝，把原因弹出来
 async function removeCategory(categoryId) {
-  if (!confirm("确定删除这个分类吗？")) {
+  if (!window.confirm("删除这个分类？有子分类或已有账目时不允许删。")) {
     return;
   }
   try {
     await api("/api/categories/" + categoryId, { method: "DELETE" });
+    toast("分类已删除", "success");
     await loadCategories();
-    fillCategoryParent();
+    await loadRecords();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   }
 }
 
-/* ===================== 账户管理 ===================== */
+/* ==================== 账户增删 ==================== */
 
-// 新增账户：名称 + 大类 + 初始余额
 async function addAccount() {
-  const nameInput = $("#new-account-name");
-  const name = nameInput.value.trim();
+  const name = $("new-account-name").value.trim();
   if (!name) {
-    alert("请填写账户名称");
+    toast("请填写账户名称", "error");
     return;
   }
-  const balance = Number($("#new-account-balance").value) || 0;
+  const group = $("new-account-group").value;
+  const balanceText = String($("new-account-balance").value || "").trim();
+  const balance = Number(balanceText === "" ? 0 : balanceText);
+  if (!Number.isFinite(balance)) {
+    toast("初始余额必须是数字", "error");
+    return;
+  }
 
   try {
     await api(
       "/api/accounts",
-      jsonOptions("POST", {
-        name: name,
-        group_name: $("#new-account-group").value,
-        balance: balance,
-      })
+      jsonOptions("POST", { name: name, group_name: group, balance: cents(balance) })
     );
-    nameInput.value = "";
-    $("#new-account-balance").value = "0";
-    accountModal.hide();
-    await loadAccounts();
-    await loadStatistics();
+    $("new-account-name").value = "";
+    $("new-account-balance").value = "0";
+    toast("账户已添加", "success");
+    if (accountModal) {
+      accountModal.hide();
+    }
+    await refresh();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   }
 }
 
-// 删除账户：还有账目挂在这个账户下时后端会拒绝
 async function removeAccount(name) {
-  if (!confirm("确定删除账户「" + name + "」吗？")) {
+  if (!window.confirm("删除账户「" + name + "」？账户下还有账目时不允许删。")) {
     return;
   }
   try {
     await api("/api/accounts/" + encodeURIComponent(name), { method: "DELETE" });
-    await loadAccounts();
-    await loadStatistics();
+    toast("账户已删除", "success");
+    if (state.detailAccount === name) {
+      clearDetail();
+    }
+    await refresh();
   } catch (error) {
-    alert(error.message);
+    toast(error.message, "error");
   }
 }
 
-/* ===================== 切页 ===================== */
+/* ==================== 切页 ==================== */
 
-function switchPage(name) {
-  document.querySelectorAll(".nav-item").forEach((item) => {
-    item.classList.toggle("active", item.dataset.page === name);
-  });
-  document.querySelectorAll(".page").forEach((page) => {
-    page.classList.toggle("active", page.id === "page-" + name);
-  });
-  $("#page-title").textContent = PAGE_TITLES[name] || "首页";
+function switchPage(page) {
+  const target = PAGE_TITLES[page] ? page : "home";
+  $("page-title").textContent = PAGE_TITLES[target];
 
-  // 第一次进资产页时，账户卡片已经在 loadAccounts 里渲染好了
-  if (name === "assets") {
-    renderAccountGroups();
-  }
-  if (name === "calendar") {
-    renderCalendar(state.allRecords);
-  }
+  document.querySelectorAll(".nav-item").forEach(function (item) {
+    item.classList.toggle("active", item.getAttribute("data-page") === target);
+  });
+  document.querySelectorAll(".page").forEach(function (section) {
+    section.classList.toggle("active", section.id === "page-" + target);
+  });
 }
 
-/* ===================== 统一刷新 ===================== */
+/* ==================== 刷新 ==================== */
 
-// 三个请求并行发，比一个个等快；改完账目后调用它，卡片和表格一起更新
 async function refresh() {
   await Promise.all([loadStatistics(), loadAccounts(), loadRecords()]);
-
-  // 资产页正开着某个账户的流水，也要跟着刷新
-  if (state.detailAccount) {
-    await selectAccount(state.detailAccount);
-  }
+  await refreshDetail();
 }
 
-/* ===================== 事件绑定与启动 ===================== */
+/* ==================== 事件绑定 ==================== */
 
 function bindEvents() {
-  // 侧边栏切页
-  document.querySelectorAll(".nav-item").forEach((item) => {
-    item.addEventListener("click", (event) => {
+  // 顶部按钮
+  $("add-record-btn").addEventListener("click", function () {
+    openRecordModal({});
+  });
+
+  // 侧边栏
+  document.querySelectorAll(".nav-item").forEach(function (item) {
+    item.addEventListener("click", function (event) {
       event.preventDefault();
-      switchPage(item.dataset.page);
+      switchPage(item.getAttribute("data-page"));
     });
   });
 
-  // 顶部「+ 记一笔」：打开空白表单
-  $("#add-record-btn").addEventListener("click", () => openRecordModal(null));
-
-  // 记账弹窗：切换一级分类时联动二级
-  $("#category").addEventListener("change", fillCategoryChild);
-  $("#save-btn").addEventListener("click", saveRecord);
-
-  // 弹窗关掉后复位，下次打开不会残留上一次填的内容
-  $("#record-modal").addEventListener("hidden.bs.modal", resetRecordForm);
-
-  // 首页账户筛选
-  $("#filter-account").addEventListener("change", () => {
-    loadRecords().catch((error) => alert(error.message));
+  // 类型切换
+  document.querySelectorAll('input[name="record-type"]').forEach(function (radio) {
+    radio.addEventListener("change", applyTypeUi);
   });
 
-  // 表格的编辑 / 删除（事件委托，两个表格共用一套逻辑）
-  $("#record-list").addEventListener("click", onRecordListClick);
-  $("#account-records").addEventListener("click", onRecordListClick);
+  // 金额公式实时计算
+  $("amount").addEventListener("input", updateAmountHint);
 
-  // 资产页：点卡片选账户、点小叉删账户
-  $("#account-groups").addEventListener("click", (event) => {
-    const deleteButton = event.target.closest("button[data-del-account]");
-    if (deleteButton) {
-      // 点的是删除：不要再触发下面的选中逻辑
+  // 一级分类变了，二级跟着变
+  $("category").addEventListener("change", function () {
+    fillCategoryChild($("category").value, "");
+  });
+
+  // 账户筛选
+  $("filter-account").addEventListener("change", function () {
+    loadRecords().catch(function (error) {
+      toast(error.message, "error");
+    });
+  });
+
+  // 保存
+  $("save-btn").addEventListener("click", saveRecord);
+
+  // 记账弹窗关掉时复位，免得下次打开还带着上次的编辑态
+  const modalElement = $("record-modal");
+  if (modalElement) {
+    modalElement.addEventListener("hidden.bs.modal", resetRecordForm);
+  }
+
+  // 列表里的编辑 / 删除（事件委托，动态行也能响应）
+  $("record-list").addEventListener("click", onRecordListClick);
+  $("account-records").addEventListener("click", onRecordListClick);
+
+  // 资产页：点卡片看流水、点 × 删账户
+  $("account-groups").addEventListener("click", function (event) {
+    const del = event.target.closest("[data-del-account]");
+    if (del) {
       event.stopPropagation();
-      removeAccount(deleteButton.dataset.delAccount);
+      removeAccount(del.getAttribute("data-del-account"));
       return;
     }
     const card = event.target.closest(".account-card");
     if (card) {
-      selectAccount(card.dataset.account).catch((error) => alert(error.message));
+      selectAccount(card.getAttribute("data-account")).catch(function (error) {
+        toast(error.message, "error");
+      });
     }
   });
 
-  // 资产页的快捷记账：账户锁定为当前选中账户
-  $("#quick-add-btn").addEventListener("click", () => {
+  // 快捷记账
+  $("quick-add-btn").addEventListener("click", function () {
     if (!state.detailAccount) {
+      toast("先点一个账户", "error");
       return;
     }
     openRecordModal({ account: state.detailAccount });
   });
 
-  // 账户弹窗
-  $("#open-account-btn").addEventListener("click", () => {
-    $("#new-account-name").value = "";
-    $("#new-account-balance").value = "0";
-    accountModal.show();
+  // 新增账户
+  $("open-account-btn").addEventListener("click", function () {
+    if (accountModal) {
+      accountModal.show();
+    }
   });
-  $("#save-account-btn").addEventListener("click", addAccount);
+  $("save-account-btn").addEventListener("click", addAccount);
 
-  // 分类管理弹窗
-  $("#open-category-btn").addEventListener("click", () => {
-    renderCategoryTree();
-    categoryModal.show();
+  // 分类管理
+  $("open-category-btn").addEventListener("click", function () {
+    if (categoryModal) {
+      categoryModal.show();
+    }
   });
-  $("#add-category-btn").addEventListener("click", addCategory);
-  $("#category-tree").addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-del-category]");
+  $("add-category-btn").addEventListener("click", addCategory);
+  $("category-tree").addEventListener("click", function (event) {
+    const button = event.target.closest("[data-del-category]");
     if (button) {
-      removeCategory(Number(button.dataset.delCategory));
+      removeCategory(Number(button.getAttribute("data-del-category")));
     }
   });
 }
 
+/* ==================== 启动 ==================== */
+
 async function init() {
+  const modalElement = $("record-modal");
+  const accountElement = $("account-modal");
+  const categoryElement = $("category-modal");
+  if (window.bootstrap) {
+    recordModal = new window.bootstrap.Modal(modalElement);
+    accountModal = new window.bootstrap.Modal(accountElement);
+    categoryModal = new window.bootstrap.Modal(categoryElement);
+  }
+
   bindEvents();
+
   try {
-    // 分类要先拿到，记账弹窗的级联下拉才知道有哪些二级分类
     await loadCategories();
     await refresh();
   } catch (error) {
-    alert("加载数据失败：" + error.message);
+    toast(error.message, "error");
   }
+
+  switchPage("home");
 }
 
-// 脚本放在 body 末尾，DOM 已经就绪；用 DOMContentLoaded 兜底，顺序更稳
 document.addEventListener("DOMContentLoaded", init);
