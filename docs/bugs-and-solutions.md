@@ -143,3 +143,116 @@ $env:PATH = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Env
 - 判断「Python 到底装没装」，看 `Get-Command python` 的 Source，不要只看 `python` 有没有报错。
 - 装完软件必须新开终端，旧终端的 `$env:PATH` 不会刷新 —— 这一条对 Node、Java 同样成立。
 - 项目里固定用 `venv\Scripts\python.exe`，可以彻底摆脱系统 PATH 的干扰。
+
+---
+
+## 坑 4：`<input type="number">` 存不下算式，输入像是「被吞了」
+
+**问题表现**
+
+想把金额框升级成「能敲 `15.5+20*2`、自动算出 55.5」，但只把 `<input type="number">` 拿来用，用户敲进去的 `+`、`*` 完全显示不出来，光标本该在框里闪，框里却是空的；`input.value` 读出来是 `""`。
+
+**排查过程**
+
+1. 不是 JS 清了值，也不是事件被拦：给框赋 `"55.5"` 能显示，赋 `"15.5+20*2"` 立刻变空。
+2. 这是 HTML 规范的 **value sanitization algorithm**：`type="number"`（以及 `type="date"`）的 `value` 只保留「合法数字字符串」，赋一个不合法的字符串会被直接置为 `""`，不会报错、不会警告。
+3. 同理，`min`/`max`/`step` 只在有合法数字时才生效，对算式毫无意义。
+
+**解决方案**
+
+1. 换成文本框，但用 `inputmode` 保住手机上的数字键盘：
+
+```html
+<input id="amount" type="text" inputmode="decimal" placeholder="25.50 或 15.5+20*2">
+```
+
+2. 计算交给 math.js，结果自己判类型与有限性（见坑 5）：
+
+```javascript
+const result = window.math.evaluate(expression);
+if (typeof result !== "number" || !Number.isFinite(result) || result <= 0) {
+  // 提示「算式算不出正数」
+}
+```
+
+3. 纯数字时不进 math.js，直接用 `Number()`，避免 `0.1 + 0.2` 被算成 `0.30000000000000004` 这类浮点尾。
+
+**教训**
+
+- `type="number"` 不是「能输入数字的框」，而是「值必须是一个数的框」；要承载表达式、金额千分位、带单位的文本，一律用 `type="text"`。
+- 只想要数字键盘时，`inputmode="decimal"` 是比 `type="number"` 更合适的手段。
+
+---
+
+## 坑 5：math.js 的 `evaluate("1/0")` 不抛错，返回 `Infinity`
+
+**问题表现**
+
+做了「算不出来就红字提示」的保护，`try/catch` 也写了，但 `1/0`、`0/0` 这类输入不会触发 catch，`= ¥Infinity` 直接显示出来；如果原样提交，`amount` 会变成 `Infinity`。
+
+**排查过程**
+
+在 Node 里直接试 math.js（13.2.3）：
+
+```
+evaluate("15.5+20*2")  → 55.5
+evaluate("0.1+0.2")    → 0.30000000000000004
+evaluate("alert(1)")   → throw: Undefined function alert
+evaluate("1/0")        → Infinity        ← 不抛错
+evaluate("0/0")        → NaN             ← 也不抛错
+```
+
+结论：math.js 的 `evaluate` 只保证「表达式能被解析成某个值」，**不保证这个值是合法金额**。除以零按 IEEE 754 得 `Infinity`，`0/0` 得 `NaN`。
+
+**解决方案**
+
+```javascript
+let result;
+try {
+  result = window.math.evaluate(expression);
+} catch (err) {
+  return { ok: false, message: "算式写法有问题" };
+}
+if (typeof result !== "number" || !Number.isFinite(result) || result <= 0) {
+  return { ok: false, message: "算式必须能算出一个大于 0 的金额" };
+}
+```
+
+`Number.isFinite` 同时挡掉 `Infinity`、`-Infinity`、`NaN`（`isFinite(NaN)` 是 `false`），比 `!isNaN()` 更严。
+
+**教训**
+
+- 「没抛异常」不等于「结果可用」。计算类库的返回值必须再校验一次类型与取值范围。
+- 用户输入进入后端之前，前端要把 `Infinity` / `NaN` 拦在本地 —— 它们能被 Python 的 `json.dumps` 输出成非标准 JSON（`Infinity` / `NaN`），前端 `JSON.parse` 会直接报 `Unexpected token`。
+
+---
+
+## 坑 6：自检脚本用 `records[0]` 定位「我刚创建的那条」，删掉了用户的真实账目
+
+**问题表现**
+
+前端自检脚本跑完，用户自己刚记的一条「早餐测试」（9.9 元、微信）消失了。删除接口本身没 bug，是脚本删错了对象。
+
+**排查过程**
+
+1. 脚本的写法是「POST 一条 → 拿 `GET /api/records` 的第一条当刚建的那条 → 断言字段 → DELETE 掉」。
+2. 那一轮 POST 其实失败了（桩子里的单选按钮没有 `value`，类型传成空串，后端回 400），`records[0]` 于是指向**列表最上面那条真实账目**（id=31「早餐测试」）。
+3. 断言碰巧通过（字段看着都正常），`DELETE` 就把用户的数据删了。
+
+**解决方案**
+
+1. 自检造的数据必须带唯一标记，并用标记找回自己那一条，永远不靠下标：
+
+```javascript
+const note = `__selftest_${Date.now()}`;
+await api("/api/records", jsonOptions("POST", { ...payload, note }));
+const mine = state.allRecords.find((r) => r.note === note);
+```
+
+2. POST 之后先断言状态码是 201、再断言 `mine` 存在，两者都成立才继续后面的删除步骤。
+3. 已经删错了就立刻按原内容重建（这次是用原 `amount/category_id/account/date/note` 重新 POST 了一条，id 31 → 32），并在文档里写清楚。
+
+**教训**
+
+- 「列表第一条」在真实数据库上永远是别人的数据，不是你的测试数据。
+- 会写数据库的自检脚本，等价于生产代码：定位、断言、清理三步都要按「数据可能不是我的」来设计。
