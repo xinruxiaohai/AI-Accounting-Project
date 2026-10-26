@@ -69,8 +69,25 @@ def _resolve_category(data):
     return category["name"], category["id"], None
 
 
+def _parse_formula(value):
+    """公式只做留存（结果由前端用 math.js 算好后一起提交），这里只校验类型和长度。"""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return "", None
+    if not isinstance(value, str):
+        return None, "formula 必须是字符串"
+    text = value.strip()
+    if len(text) > database.MAX_FORMULA_LENGTH:
+        return None, "formula 最多 %d 个字符" % database.MAX_FORMULA_LENGTH
+    return text, None
+
+
 def _parse_record(data):
-    """把请求体校验成一份干净的记录字段。POST 和 PUT 共用这一份规则。"""
+    """把请求体校验成一份干净的记录字段。POST 和 PUT 共用这一份规则。
+
+    三种类型走不同分支：
+    - expense / income：必须有分类（category_id 或 category 文本二选一）
+    - transfer：不要分类，必须有 to_account 和 fee，金额从转出账户扣「金额 + 手续费」
+    """
     # 客户端必须带 Content-Type: application/json，否则这里拿到的是 None
     if not isinstance(data, dict):
         return None, (jsonify(error="请求体必须是 JSON 对象"), 400)
@@ -80,14 +97,42 @@ def _parse_record(data):
     if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
         return None, (jsonify(error="amount 必须是大于 0 的数字"), 400)
 
-    category, category_id, error = _resolve_category(data)
-    if error is not None:
-        return None, error
-
-    # 类型只认 expense / income，其他一律拒绝，不猜
+    # 类型只认这三种，其他一律拒绝，不猜
     record_type = data.get("type", database.DEFAULT_TYPE)
     if record_type not in database.RECORD_TYPES:
-        return None, (jsonify(error="type 只能是 expense 或 income"), 400)
+        return None, (
+            jsonify(error="type 只能是 expense / income / transfer"),
+            400,
+        )
+
+    # 账户允许自定义，前端不传时给默认值"现金"；转账时它就是转出账户
+    account = (data.get("account") or database.DEFAULT_ACCOUNT).strip()
+
+    formula, formula_error = _parse_formula(data.get("formula"))
+    if formula_error is not None:
+        return None, (jsonify(error=formula_error), 400)
+
+    fee = 0
+    to_account = ""
+    if record_type == "transfer":
+        to_account = (data.get("to_account") or "").strip()
+        if not to_account:
+            return None, (jsonify(error="转账必须指定 to_account（转入账户）"), 400)
+        if to_account == account:
+            return None, (jsonify(error="转出账户和转入账户不能相同"), 400)
+
+        raw_fee = data.get("fee", 0)
+        # 手续费可以不传（默认 0），传了就必须是不小于 0 的数字，负数等于反向偷钱
+        if isinstance(raw_fee, bool) or not isinstance(raw_fee, (int, float)) or raw_fee < 0:
+            return None, (jsonify(error="fee 必须是不小于 0 的数字"), 400)
+        fee = round(float(raw_fee), 2)
+
+        # 转账没有分类概念，固定存「转账」且不挂任何分类 id
+        category, category_id = database.TRANSFER_CATEGORY, None
+    else:
+        category, category_id, error = _resolve_category(data)
+        if error is not None:
+            return None, error
 
     # 时间精确到分钟：老前端只给日期也能收，统一成 2026-10-26 14:30 这种形态
     date, date_error = _parse_datetime(data.get("date"))
@@ -100,9 +145,11 @@ def _parse_record(data):
         "category_id": category_id,
         "note": (data.get("note") or "").strip(),
         "date": date,
-        # 账户允许自定义，前端不传时给默认值"现金"
-        "account": (data.get("account") or database.DEFAULT_ACCOUNT).strip(),
+        "account": account,
         "type": record_type,
+        "formula": formula,
+        "to_account": to_account,
+        "fee": fee,
     }
     return payload, None
 
@@ -134,7 +181,7 @@ def create_record():
     if error is not None:
         return error
 
-    new_id = database.add_record(
+    new_id, error_message = database.add_record(
         payload["amount"],
         payload["category"],
         payload["note"],
@@ -142,7 +189,13 @@ def create_record():
         payload["account"],
         payload["type"],
         payload["category_id"],
+        payload["formula"],
+        payload["to_account"],
+        payload["fee"],
     )
+    if error_message is not None:
+        # 余额不足、账户不存在这类业务校验失败是「参数/状态不对」，400
+        return jsonify(error=error_message), 400
 
     # 201 表示"已创建"
     return jsonify(id=new_id, **payload), 201
@@ -193,7 +246,7 @@ def update_record(record_id):
     if error is not None:
         return error
 
-    updated = database.update_record(
+    updated, error_message = database.update_record(
         record_id,
         payload["amount"],
         payload["category"],
@@ -202,7 +255,12 @@ def update_record(record_id):
         payload["account"],
         payload["type"],
         payload["category_id"],
+        payload["formula"],
+        payload["to_account"],
+        payload["fee"],
     )
+    if error_message is not None:
+        return jsonify(error=error_message), 400
     if not updated:
         return jsonify(error="记录不存在"), 404
 

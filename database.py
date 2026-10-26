@@ -38,9 +38,24 @@ DEFAULT_CATEGORY = "其他"
 # 分类最多两级：一级 + 二级，二级下面不能再挂
 MAX_CATEGORY_LEVEL = 2
 
-# 账目类型：expense = 支出（余额减），income = 收入（余额加）
-RECORD_TYPES = ("expense", "income")
+# 账目类型：expense = 支出（余额减），income = 收入（余额加），
+# transfer = 转账（转出账户减「金额 + 手续费」，转入账户加金额）
+RECORD_TYPES = ("expense", "income", "transfer")
 DEFAULT_TYPE = "expense"
+
+# 转账记录没有分类概念，category 固定存这个名字，列表里就显示成「转账」
+TRANSFER_CATEGORY = "转账"
+
+# 公式（比如 "15.5+20*2"）只做留存展示，不参与任何计算，长度限制防止存进一整段垃圾文本
+MAX_FORMULA_LENGTH = 200
+
+
+class RecordError(Exception):
+    """写账目时的业务校验失败（转账余额不足、转出转入账户相同等）。
+
+    add_record / update_record 内部抛它，`with conn:` 会自动回滚整个事务，
+    外层捕获后转成 400，保证「要么全成功、要么什么都没发生」。
+    """
 
 
 def get_conn():
@@ -51,9 +66,61 @@ def get_conn():
     return conn
 
 
-def _signed(amount, record_type):
-    """把金额换算成「对余额的影响」：收入为正，支出为负。"""
-    return amount if record_type == "income" else -amount
+def _balance_effects(record_type, account, to_account, amount, fee):
+    """把一笔账换算成「哪些账户的余额要加减多少」。
+
+    返回 [(账户名, 变化量), ...]：
+    - expense  支出：本账户 -金额
+    - income   收入：本账户 +金额
+    - transfer 转账：转出账户 -(金额 + 手续费)，转入账户 +金额
+
+    新增、编辑、删除都复用这一个函数，回滚时把它整体取反即可，
+    不会出现「某处算支出、某处算转账」两套规则对不上的情况。
+    """
+    if record_type == "income":
+        return [(account, amount)]
+    if record_type == "transfer":
+        return [(account, -(amount + fee)), (to_account, amount)]
+    return [(account, -amount)]
+
+
+def _reverse_effects(effects):
+    """把余额影响整体取反，用于删除或编辑时撤销旧账。"""
+    return [(name, -delta) for name, delta in effects]
+
+
+def _apply_effects(conn, effects):
+    """按 (账户, 变化量) 列表逐个改余额，全部在调用方的事务里完成。"""
+    for name, delta in effects:
+        # 转账里 to_account 可能是空串（异常数据保护），空账户名直接跳过
+        if not name:
+            continue
+        _apply_balance(conn, name, delta)
+
+
+def _transfer_problem(conn, account, to_account, amount, fee):
+    """转账的业务校验，没问题返回 None，有问题返回给用户看的中文原因。"""
+    if not to_account:
+        return "转账必须指定转入账户"
+    if to_account == account:
+        return "转出账户和转入账户不能相同"
+
+    # 转账不像支出可以透支：两个账户必须真实存在，否则钱会转移到一个凭空冒出来的账户里
+    for name in (account, to_account):
+        row = conn.execute(
+            "SELECT name FROM accounts WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            return "账户不存在：%s" % name
+
+    balance = conn.execute(
+        "SELECT balance FROM accounts WHERE name = ?", (account,)
+    ).fetchone()["balance"]
+    cost = amount + fee
+    # 留 1e-9 的余量：0.1 + 0.2 这种浮点误差不该被判成「余额不足」
+    if balance + 1e-9 < cost:
+        return "转出账户余额不足：当前 %.2f，本次需要 %.2f" % (balance, cost)
+    return None
 
 
 def normalize_date(value):
@@ -188,7 +255,10 @@ def init_db():
                     note     TEXT    NOT NULL DEFAULT '',
                     date     TEXT    NOT NULL,
                     account  TEXT    NOT NULL DEFAULT '现金',
-                    type     TEXT    NOT NULL DEFAULT 'expense'
+                    type     TEXT    NOT NULL DEFAULT 'expense',
+                    formula  TEXT    NOT NULL DEFAULT '',
+                    to_account TEXT  NOT NULL DEFAULT '',
+                    fee      REAL    NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -207,6 +277,17 @@ def init_db():
             # v0.05 新增：账目指向分类表的外键。可空，老数据由下方回填
             if "category_id" not in columns:
                 conn.execute("ALTER TABLE records ADD COLUMN category_id INTEGER")
+            # v0.06 新增：公式留存、转账的转入账户与手续费
+            if "formula" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN formula TEXT NOT NULL DEFAULT ''"
+                )
+            if "to_account" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN to_account TEXT NOT NULL DEFAULT ''"
+                )
+            if "fee" not in columns:
+                conn.execute("ALTER TABLE records ADD COLUMN fee REAL NOT NULL DEFAULT 0")
 
             # 账户表：name 主键，balance 当前余额，group_name 大类（资金/储蓄/投资）
             conn.execute(
@@ -514,10 +595,12 @@ def delete_account(name):
                 return False, "账户不存在"
 
             used = conn.execute(
-                "SELECT COUNT(*) AS c FROM records WHERE account = ?", (name,)
+                "SELECT COUNT(*) AS c FROM records "
+                "WHERE account = ? OR (type = 'transfer' AND to_account = ?)",
+                (name, name),
             ).fetchone()["c"]
             if used:
-                return False, "还有 %d 条账目在这个账户下，先处理掉再删" % used
+                return False, "还有 %d 条账目和这个账户有关，先处理掉再删" % used
 
             conn.execute("DELETE FROM accounts WHERE name = ?", (name,))
             return True, None
@@ -540,18 +623,29 @@ def add_record(
     account=DEFAULT_ACCOUNT,
     record_type=DEFAULT_TYPE,
     category_id=None,
+    formula="",
+    to_account="",
+    fee=0,
 ):
-    """插入一笔账并联动余额，返回数据库自动分配的 id。
+    """插入一笔账并联动余额，返回 (新 id, 错误信息)。
 
     写账目和改余额在同一个 conn、同一个事务里，要么都成功要么都回滚。
+    转账会先校验两个账户和转出余额，校验不过抛 RecordError，整个事务回滚。
     """
     conn = get_conn()
     try:
         with conn:
+            if record_type == "transfer":
+                problem = _transfer_problem(conn, account, to_account, amount, fee)
+                if problem is not None:
+                    raise RecordError(problem)
+
             cur = conn.execute(
                 """
-                INSERT INTO records (amount, category, category_id, note, date, account, type)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO records
+                       (amount, category, category_id, note, date, account, type,
+                        formula, to_account, fee)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     amount,
@@ -561,10 +655,19 @@ def add_record(
                     normalize_date(date),
                     account,
                     record_type,
+                    formula,
+                    to_account,
+                    fee,
                 ),
             )
-            _apply_balance(conn, account, _signed(amount, record_type))
-            return cur.lastrowid
+            _apply_effects(
+                conn,
+                _balance_effects(record_type, account, to_account, amount, fee),
+            )
+            return cur.lastrowid, None
+    except RecordError as exc:
+        # 事务已经回滚，账目和余额都没动
+        return None, str(exc)
     finally:
         conn.close()
 
@@ -578,25 +681,47 @@ def update_record(
     account=DEFAULT_ACCOUNT,
     record_type=DEFAULT_TYPE,
     category_id=None,
+    formula="",
+    to_account="",
+    fee=0,
 ):
-    """按 id 整条覆盖更新，并修正两个账户的余额。更新到了返回 True。
+    """按 id 整条覆盖更新，并修正余额，返回 (是否更新到, 错误信息)。
 
-    余额修正分两步，顺序不能反：先撤销旧账，再加新账。
+    余额修正分三步，顺序不能反：
+    1. 先撤销旧账（把旧的影响整体取反）
+    2. 再校验新账（转账要看撤销后的余额，否则「把转出账户从 A 改成 B」会误判余额不足）
+    3. 最后加新账
+    第 2 步失败时抛 RecordError，连同第 1 步的撤销一起回滚。
     """
     conn = get_conn()
     try:
         with conn:
             old = conn.execute(
-                "SELECT account, amount, type FROM records WHERE id = ?", (record_id,)
+                "SELECT account, amount, type, to_account, fee FROM records WHERE id = ?",
+                (record_id,),
             ).fetchone()
             if old is None:
-                return False
+                return False, None
+
+            _apply_effects(
+                conn,
+                _reverse_effects(
+                    _balance_effects(
+                        old["type"], old["account"], old["to_account"], old["amount"], old["fee"]
+                    )
+                ),
+            )
+
+            if record_type == "transfer":
+                problem = _transfer_problem(conn, account, to_account, amount, fee)
+                if problem is not None:
+                    raise RecordError(problem)
 
             conn.execute(
                 """
                 UPDATE records
                    SET amount = ?, category = ?, category_id = ?, note = ?, date = ?,
-                       account = ?, type = ?
+                       account = ?, type = ?, formula = ?, to_account = ?, fee = ?
                  WHERE id = ?
                 """,
                 (
@@ -607,12 +732,19 @@ def update_record(
                     normalize_date(date),
                     account,
                     record_type,
+                    formula,
+                    to_account,
+                    fee,
                     record_id,
                 ),
             )
-            _apply_balance(conn, old["account"], -_signed(old["amount"], old["type"]))
-            _apply_balance(conn, account, _signed(amount, record_type))
-            return True
+            _apply_effects(
+                conn,
+                _balance_effects(record_type, account, to_account, amount, fee),
+            )
+            return True, None
+    except RecordError as exc:
+        return False, str(exc)
     finally:
         conn.close()
 
@@ -623,13 +755,21 @@ def delete_record(record_id):
     try:
         with conn:
             old = conn.execute(
-                "SELECT account, amount, type FROM records WHERE id = ?", (record_id,)
+                "SELECT account, amount, type, to_account, fee FROM records WHERE id = ?",
+                (record_id,),
             ).fetchone()
             if old is None:
                 return False
 
             conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
-            _apply_balance(conn, old["account"], -_signed(old["amount"], old["type"]))
+            _apply_effects(
+                conn,
+                _reverse_effects(
+                    _balance_effects(
+                        old["type"], old["account"], old["to_account"], old["amount"], old["fee"]
+                    )
+                ),
+            )
             return True
     finally:
         conn.close()
@@ -643,7 +783,8 @@ def list_records(account=None, category_id=None, parent_id=None):
     """
     sql = (
         "SELECT r.id, r.amount, r.category, r.category_id, r.note, r.date, "
-        "       r.account, r.type, p.name AS category_parent "
+        "       r.account, r.type, r.formula, r.to_account, r.fee, "
+        "       p.name AS category_parent "
         "  FROM records r "
         "  LEFT JOIN categories c ON c.id = r.category_id "
         "  LEFT JOIN categories p ON p.id = c.parent_id"
@@ -651,8 +792,9 @@ def list_records(account=None, category_id=None, parent_id=None):
     conditions = []
     params = []
     if account:
-        conditions.append("r.account = ?")
-        params.append(account)
+        # 转账会同时牵动转出和转入两个账户，查任何一个账户都该看到这笔转账
+        conditions.append("(r.account = ? OR (r.type = 'transfer' AND r.to_account = ?))")
+        params.extend([account, account])
     if category_id is not None:
         conditions.append("r.category_id = ?")
         params.append(category_id)
