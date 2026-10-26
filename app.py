@@ -14,13 +14,7 @@ database.init_db()
 
 
 def _parse_datetime(value):
-    """把请求里的日期时间统一成「YYYY-MM-DD HH:MM」，返回 (字符串, 错误信息)。
-
-    - 不传 / 空串：取当前时间，精确到分钟
-    - 只给日期 2026-10-26：补成 2026-10-26 00:00（兼容老前端和手写 curl）
-    - <input type="datetime-local"> 给的是 2026-10-26T14:30，也接受
-    - 带秒的 2026-10-26 14:30:59 会截断到分钟
-    """
+    """把请求里的日期时间统一成「YYYY-MM-DD HH:MM」，返回 (字符串, 错误信息)。"""
     if value is None or (isinstance(value, str) and not value.strip()):
         return datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), None
 
@@ -48,12 +42,35 @@ def _parse_datetime(value):
     return None, "date 格式必须是 YYYY-MM-DD HH:MM（或只给 YYYY-MM-DD）"
 
 
-def _parse_record(data):
-    """把请求体校验成一份干净的记录字段。
+def _resolve_category(data):
+    """把请求里的分类解析成 (分类名, category_id, 错误响应)。
 
-    返回 (payload, error)：payload 是字典，error 是要直接 return 的响应（对，或 None）。
-    POST 和 PUT 都走这一个函数 —— 校验规则只有一份，不会出现「新增严格、修改宽松」的漏洞。
+    两种写法都收：
+    - 传 category_id：以分类表为准，名字由后端填（推荐，前端选二级分类时用这个）
+    - 只传 category 文本：兼容老前端；分类表里没有这个名字就自动建成一级分类
     """
+    category_id = data.get("category_id")
+    if category_id is not None:
+        # bool 是 int 的子类，先排掉 True/False
+        if isinstance(category_id, bool) or not isinstance(category_id, int):
+            return None, None, (jsonify(error="category_id 必须是整数"), 400)
+        category = database.get_category(category_id)
+        if category is None:
+            return None, None, (jsonify(error="category_id 对应的分类不存在"), 400)
+        return category["name"], category["id"], None
+
+    category = data.get("category")
+    if not isinstance(category, str) or not category.strip():
+        return None, None, (
+            jsonify(error="category 必须是非空字符串，或者改传 category_id"),
+            400,
+        )
+    category = database.ensure_category(category.strip())
+    return category["name"], category["id"], None
+
+
+def _parse_record(data):
+    """把请求体校验成一份干净的记录字段。POST 和 PUT 共用这一份规则。"""
     # 客户端必须带 Content-Type: application/json，否则这里拿到的是 None
     if not isinstance(data, dict):
         return None, (jsonify(error="请求体必须是 JSON 对象"), 400)
@@ -63,9 +80,9 @@ def _parse_record(data):
     if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
         return None, (jsonify(error="amount 必须是大于 0 的数字"), 400)
 
-    category = data.get("category")
-    if not isinstance(category, str) or not category.strip():
-        return None, (jsonify(error="category 必须是非空字符串"), 400)
+    category, category_id, error = _resolve_category(data)
+    if error is not None:
+        return None, error
 
     # 类型只认 expense / income，其他一律拒绝，不猜
     record_type = data.get("type", database.DEFAULT_TYPE)
@@ -77,10 +94,10 @@ def _parse_record(data):
     if date_error is not None:
         return None, (jsonify(error=date_error), 400)
 
-    # 先清洗成干净的值，再统一入库和返回，避免两边不一致
     payload = {
         "amount": amount,
-        "category": category.strip(),
+        "category": category,
+        "category_id": category_id,
         "note": (data.get("note") or "").strip(),
         "date": date,
         # 账户允许自定义，前端不传时给默认值"现金"
@@ -95,6 +112,7 @@ def index():
     """首页路由：返回记账页面，顺便把分类和账户选项注入模板，下拉框不用再发一次请求。"""
     return render_template(
         "index.html",
+        # 旧模板只吃「名字列表」，这里仍然给一级分类名，保证 v0.04 的页面还能正常打开
         categories=database.get_all_categories(),
         accounts=database.get_all_accounts(),
         today=datetime.date.today().isoformat(),
@@ -123,6 +141,7 @@ def create_record():
         payload["date"],
         payload["account"],
         payload["type"],
+        payload["category_id"],
     )
 
     # 201 表示"已创建"
@@ -131,14 +150,40 @@ def create_record():
 
 @app.route("/api/records", methods=["GET"])
 def list_records():
-    """读出账目，支持 ?account=微信 只筛选某个账户的流水。
+    """读出账目，支持三个筛选条件（可叠加）：
 
-    倒序规则由 database.list_records() 的 SQL 决定，这里不重新排序。
+    - ?account=微信        只看这个账户的流水
+    - ?category_id=7       只看这个具体分类（一级或二级都行）
+    - ?parent_id=1         只看这个一级分类，连同它下面的所有二级分类
     """
-    # 没传或者是空串就当"不筛选"，避免 ?account= 这种写法变成「找账户名为空的记录」
     account = (request.args.get("account") or "").strip() or None
-    rows = database.list_records(account)
-    return jsonify(count=len(rows), account=account, records=rows)
+
+    category_id = request.args.get("category_id")
+    if category_id is not None and not str(category_id).strip():
+        category_id = None
+    elif category_id is not None:
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
+            return jsonify(error="category_id 必须是整数"), 400
+
+    parent_id = request.args.get("parent_id")
+    if parent_id is not None and not str(parent_id).strip():
+        parent_id = None
+    elif parent_id is not None:
+        try:
+            parent_id = int(parent_id)
+        except (TypeError, ValueError):
+            return jsonify(error="parent_id 必须是整数"), 400
+
+    rows = database.list_records(account, category_id, parent_id)
+    return jsonify(
+        count=len(rows),
+        account=account,
+        category_id=category_id,
+        parent_id=parent_id,
+        records=rows,
+    )
 
 
 @app.route("/api/records/<int:record_id>", methods=["PUT"])
@@ -156,6 +201,7 @@ def update_record(record_id):
         payload["date"],
         payload["account"],
         payload["type"],
+        payload["category_id"],
     )
     if not updated:
         return jsonify(error="记录不存在"), 404
@@ -172,35 +218,157 @@ def remove_record(record_id):
     return jsonify(deleted=record_id)
 
 
+# ---------------- 分类接口 ----------------
+
+@app.route("/api/categories", methods=["GET"])
+def list_categories():
+    """两级分类树。一级分类带 children，前端拿它做级联下拉框。"""
+    tree = database.list_categories_tree()
+    total = sum(1 + len(node["children"]) for node in tree)
+    return jsonify(count=len(tree), total=total, categories=tree)
+
+
+@app.route("/api/categories", methods=["POST"])
+def create_category():
+    """新建分类。body: {"name": "咖啡", "parent_id": 1}（parent_id 省略 = 一级分类）"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="name 必须是非空字符串"), 400
+
+    parent_id = data.get("parent_id")
+    if parent_id is not None and (
+        isinstance(parent_id, bool) or not isinstance(parent_id, int)
+    ):
+        return jsonify(error="parent_id 必须是整数或 null"), 400
+
+    category, error = database.create_category(name.strip(), parent_id)
+    if error is not None:
+        # 同名冲突是「资源冲突」409，父级不存在之类是「参数不对」400
+        status = 409 if "已存在" in error else 400
+        return jsonify(error=error), status
+    return jsonify(category), 201
+
+
+@app.route("/api/categories/<int:category_id>", methods=["PUT"])
+def rename_category(category_id):
+    """给分类改名。body: {"name": "咖啡奶茶"}（只能改名，不能改父级）"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="name 必须是非空字符串"), 400
+
+    category, error = database.rename_category(category_id, name.strip())
+    if error is not None:
+        if "不存在" in error:
+            return jsonify(error=error), 404
+        status = 409 if "已存在" in error else 400
+        return jsonify(error=error), status
+    return jsonify(category)
+
+
+@app.route("/api/categories/<int:category_id>", methods=["DELETE"])
+def remove_category(category_id):
+    """删分类。还有子分类或还有账目在用它就拒绝（409），避免出现悬空引用。"""
+    deleted, error = database.delete_category(category_id)
+    if not deleted:
+        if "不存在" in error:
+            return jsonify(error=error), 404
+        return jsonify(error=error), 409
+    return jsonify(deleted=category_id)
+
+
+# ---------------- 账户接口 ----------------
+
 @app.route("/api/accounts", methods=["GET"])
 def list_accounts():
-    """所有账户及当前余额。"""
+    """所有账户及当前余额、大类；groups 是按大类分好组的版本，前端下接用。"""
     rows = database.list_accounts()
-    return jsonify(count=len(rows), accounts=rows)
+    return jsonify(
+        count=len(rows),
+        accounts=rows,
+        groups=database.list_accounts_grouped(),
+        group_names=list(database.ACCOUNT_GROUPS),
+    )
+
+
+@app.route("/api/accounts", methods=["POST"])
+def create_account():
+    """新建账户。body: {"name": "招行卡", "group_name": "储蓄账户", "balance": 0}"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="name 必须是非空字符串"), 400
+
+    group_name = data.get("group_name", database.DEFAULT_GROUP)
+    if not isinstance(group_name, str) or group_name not in database.ACCOUNT_GROUPS:
+        return jsonify(
+            error="group_name 只能是 " + " / ".join(database.ACCOUNT_GROUPS)
+        ), 400
+
+    balance = data.get("balance", 0)
+    if isinstance(balance, bool) or not isinstance(balance, (int, float)):
+        return jsonify(error="balance 必须是数字"), 400
+
+    account, error = database.create_account(name.strip(), group_name, balance)
+    if error is not None:
+        status = 409 if "已存在" in error else 400
+        return jsonify(error=error), status
+    return jsonify(account), 201
 
 
 @app.route("/api/accounts/<name>", methods=["PUT"])
 def update_account(name):
-    """手动把某个账户的余额改成指定值（用于「我其实知道还剩多少钱」的场景）。
+    """改账户：余额和/或大类，至少给一个。
 
+    body: {"balance": 1234.5} 或 {"group_name": "储蓄账户"} 或两个都给
     允许负数：信用卡、花呗这类账户余额本来就可能是负的。
     """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
 
-    balance = data.get("balance")
-    if isinstance(balance, bool) or not isinstance(balance, (int, float)):
-        return jsonify(error="balance 必须是数字"), 400
+    if "balance" not in data and "group_name" not in data:
+        return jsonify(error="至少要传 balance 或 group_name 之一"), 400
 
-    # 金额只保留到分，避免 12.345000000001 这种浮点尾巴进库
-    balance = round(balance, 2)
+    balance = None
+    if "balance" in data:
+        balance = data["balance"]
+        if isinstance(balance, bool) or not isinstance(balance, (int, float)):
+            return jsonify(error="balance 必须是数字"), 400
+        # 金额只保留到分，避免 12.345000000001 这种浮点尾巴进库
+        balance = round(balance, 2)
 
-    updated = database.update_account_balance(name, balance)
-    if not updated:
-        return jsonify(error="账户不存在"), 404
+    group_name = None
+    if "group_name" in data:
+        group_name = data["group_name"]
+        if not isinstance(group_name, str) or group_name not in database.ACCOUNT_GROUPS:
+            return jsonify(
+                error="group_name 只能是 " + " / ".join(database.ACCOUNT_GROUPS)
+            ), 400
 
-    return jsonify(name=name, balance=balance)
+    account, error = database.update_account(name, balance, group_name)
+    if error is not None:
+        return jsonify(error=error), 404 if "不存在" in error else 400
+    return jsonify(account)
+
+
+@app.route("/api/accounts/<name>", methods=["DELETE"])
+def remove_account(name):
+    """删账户。还有账目挂在这个账户下就拒绝（409）。"""
+    deleted, error = database.delete_account(name)
+    if not deleted:
+        return jsonify(error=error), 404 if "不存在" in error else 409
+    return jsonify(deleted=name)
 
 
 @app.route("/api/statistics", methods=["GET"])
