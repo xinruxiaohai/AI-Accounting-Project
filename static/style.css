@@ -2167,9 +2167,13 @@ body {
   position: fixed;
   inset: 0;
   z-index: 1070;
-  background: rgba(15, 23, 42, 0.44);
+  background: rgba(15, 23, 42, 0.18);
   opacity: 0;
   transition: opacity 0.22s ease;
+}
+
+[data-theme="dark"] .notification-backdrop {
+  background: rgba(0, 0, 0, 0.45);
 }
 
 .notification-backdrop.is-open {
@@ -2186,17 +2190,39 @@ body {
   width: 384px;
   max-width: 92vw;
   height: 100vh;
-  background: var(--surface);
-  border-left: 1px solid rgba(148, 163, 184, 0.24);
+  background: #ffffff;
+  border-left: 1px solid var(--line);
   border-radius: 16px 0 0 16px;
-  box-shadow: -18px 0 40px rgba(15, 23, 42, 0.12);
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.06);
   transform: translateX(102%);
   transition: transform 0.26s ease;
 }
 
 [data-theme="dark"] .notification-panel {
-  border-left-color: rgba(148, 163, 184, 0.16);
-  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.38);
+  background: #1e293b;
+  border-left-color: #334155;
+  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.38);
+}
+
+/* 通知正文可能从别处粘贴进来，自带深色底和浅色字，
+   统一抹掉背景、改用主题文字色，避免浅色模式下出现黑块。 */
+.notice-content {
+  color: var(--text-main);
+}
+
+.notice-content * {
+  background-color: transparent !important;
+  color: inherit !important;
+}
+
+.notice-content b,
+.notice-content strong {
+  color: var(--text-strong) !important;
+}
+
+.notice-content a {
+  color: var(--brand-blue) !important;
+  text-decoration: underline;
 }
 
 .notification-panel.is-open {
