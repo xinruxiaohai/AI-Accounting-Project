@@ -213,12 +213,29 @@ def create_record():
     return jsonify(id=new_id, **payload), 201
 
 
+def _find_or_create_contact(name):
+    """借贷按姓名找联系人：已有就直接用，没有就建一个空资料的联系人。
+
+    返回 (联系人, 是否新建, 错误信息)；新建后借贷写库失败要回滚，避免留孤儿。
+    """
+    name = (name or "").strip()
+    if not name:
+        return None, False, "借贷对象姓名不能为空"
+    for contact in database.list_contacts():
+        if contact["name"] == name:
+            return contact, False, None
+    contact, error = database.create_contact(name)
+    if error is not None:
+        return None, False, error
+    return contact, True, None
+
+
 @app.route("/api/records/ai", methods=["POST"])
 def create_record_by_ai():
-    """把一句自然语言交给智谱解析，再复用普通记账的入库逻辑。
+    """一句话先交给 AI 判断意图（记账 / 借贷 / 加联系人），再按 action 分流写库。
 
-    模型只负责抽字段，金额/类型/日期到本地还会再校验一遍；写库仍走
-    database.add_record，余额联动、转账校验与手工记账完全一致。
+    模型只负责理解与抽字段，金额/类型/日期到本地还会再校验一遍；写库分别复用
+    database.add_record / create_debt / create_contact，余额联动与手工操作一致。
     """
     data = request.get_json(silent=True) or {}
     text = data.get("text")
@@ -226,41 +243,90 @@ def create_record_by_ai():
         return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
 
     try:
-        parsed = ai_service.parse_record(text)
+        parsed = ai_service.parse_intent(text)
     except ai_service.AIServiceError as exc:
         # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
         return jsonify(error=str(exc)), 502
 
-    category = parsed.get("category") or "其他"
-    record_type = parsed["type"]
+    action = parsed["action"]
+    if action == "unknown":
+        return jsonify(error="AI 无法理解您的指令"), 400
 
-    category_id = None
-    if record_type in ("expense", "income"):
-        try:
-            category_id = database.ensure_category(category)["id"]
-        except database.RecordError:
-            category_id = None
+    if action == "record":
+        category = parsed.get("category") or "其他"
+        record_type = parsed["type"]
 
-    new_id, error_message = database.add_record(
-        parsed["amount"],
-        category,
-        parsed.get("note", ""),
-        parsed["date"],
-        parsed.get("account") or database.DEFAULT_ACCOUNT,
-        record_type,
-        category_id,
-        "",
-        parsed.get("to_account", ""),
-        parsed.get("fee", 0),
+        category_id = None
+        if record_type in ("expense", "income"):
+            try:
+                category_id = database.ensure_category(category)["id"]
+            except database.RecordError:
+                category_id = None
+
+        new_id, error_message = database.add_record(
+            parsed["amount"],
+            category,
+            parsed.get("note", ""),
+            parsed["date"],
+            parsed.get("account") or database.DEFAULT_ACCOUNT,
+            record_type,
+            category_id,
+            "",
+            parsed.get("to_account", ""),
+            parsed.get("fee", 0),
+        )
+        if error_message is not None:
+            return jsonify(error=error_message), 400
+
+        return jsonify(
+            id=new_id,
+            source="ai",
+            action="record",
+            text=text.strip(),
+            record={key: value for key, value in parsed.items() if key != "action"},
+        ), 201
+
+    if action == "debt":
+        contact, created, error_message = _find_or_create_contact(parsed["contact_name"])
+        if error_message is not None:
+            return jsonify(error=error_message), 400
+
+        debt, error_message = database.create_debt(
+            contact["id"],
+            parsed["amount"],
+            debt_type=parsed["type"],
+            account=parsed.get("account") or database.DEFAULT_ACCOUNT,
+            date=parsed["date"],
+            status="unpaid",
+        )
+        if error_message is not None:
+            # 联系人是为了这笔借贷临时建的，借贷没写成就不该留下空联系人
+            if created:
+                database.delete_contact(contact["id"])
+            return jsonify(error=error_message), 400
+
+        return jsonify(
+            id=debt["id"],
+            source="ai",
+            action="debt",
+            text=text.strip(),
+            contact=contact,
+            debt=debt,
+        ), 201
+
+    # action == "add_contact"
+    contact, error_message = database.create_contact(
+        parsed["name"], parsed["identity"], parsed["phone"], parsed["wechat"]
     )
     if error_message is not None:
-        return jsonify(error=error_message), 400
-
+        status = 409 if "已存在" in error_message else 400
+        return jsonify(error=error_message), status
     return jsonify(
-        id=new_id,
+        id=contact["id"],
         source="ai",
+        action="add_contact",
         text=text.strip(),
-        record=parsed,
+        contact=contact,
     ), 201
 
 

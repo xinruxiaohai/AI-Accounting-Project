@@ -1,14 +1,22 @@
-"""AI 记账管家 · 智谱 GLM 接入层（v0.07 Step 1）
+"""AI 记账管家 · 智谱 GLM 接入层（v0.08.1 意图路由）
 
-对外只暴露一个入口：
+对外入口：
 
-    parse_record("昨天打车花了30")
-    -> {"amount": 30.0, "type": "expense", "category": "交通", ...}
+    parse_intent("昨天打车花了30")
+    -> {"action": "record", "amount": 30.0, "type": "expense", ...}
+
+    parse_intent("借给小王20元")
+    -> {"action": "debt", "amount": 20.0, "contact_name": "小王", "type": "lend", ...}
+
+    parse_intent("添加小王，他是亲戚")
+    -> {"action": "add_contact", "name": "小王", "identity": "亲戚", ...}
+
+    parse_intent("今天天气不错")
+    -> {"action": "unknown"}
 
 设计原则：
-1. 模型只负责「把一句话拆成字段」，不碰数据库、不算余额；
-2. 返回值必须先过本地校验（金额 > 0、类型白名单、日期格式），
-   任何一项不合格都抛 AIServiceError，绝不把脏数据写进账本；
+1. 模型只负责「理解一句话 + 拆字段」，不碰数据库、不算余额；
+2. action 与各分支字段必须先过本地校验，不合格一律抛 AIServiceError；
 3. 密钥只从环境变量 / .env 读取，不落日志、不进代码。
 """
 
@@ -33,7 +41,20 @@ BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 API_KEY_ENV = "ZHIPU_API_KEY"
 REQUEST_TIMEOUT = 20.0
 
+ACTIONS = ("record", "debt", "add_contact", "unknown")
 RECORD_TYPES = ("expense", "income", "transfer")
+
+# 模型可能写中文，统一映射到数据库的 lend / borrow
+DEBT_TYPE_ALIASES = {
+    "lend": "lend",
+    "借出": "lend",
+    "借给": "lend",
+    "借给别人": "lend",
+    "borrow": "borrow",
+    "借入": "borrow",
+    "向别人借": "borrow",
+    "找我借": "borrow",
+}
 
 DATE_FORMATS = (
     "%Y-%m-%d %H:%M",
@@ -43,49 +64,67 @@ DATE_FORMATS = (
     "%Y/%m/%d",
 )
 
-SYSTEM_PROMPT = """你是一个中文记账助手，只做一件事：把用户的一句自然语言账单，抽取成固定字段的 JSON。
+SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图，再按意图抽取字段，只输出一个 JSON 对象。
 
 【输出要求】
-- 只输出一个 JSON 对象，不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段必须且只能是下面这 8 个，键名不得改动、不得增删：
+- 不要 Markdown 代码块、不要解释、不要多余文字。
+- 字段键名固定为下面 13 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 "" 或 0：
+  action       字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"unknown"（听不懂）
   amount       数字，金额，必须大于 0，不带货币符号
-  type         字符串，只能是 "expense"（支出）、"income"（收入）、"transfer"（账户间转账）
-  category     字符串，支出/收入的分类，如 餐饮、交通、购物、工资、奖金；转账时填空字符串 ""
-  account      字符串，付款账户或收款账户；用户没提就填空字符串 ""
-  to_account   字符串，仅转账时填写转入账户，其余情况填空字符串 ""
-  fee          数字，仅转账时的手续费，其余情况填 0
-  date         字符串，格式固定为 "YYYY-MM-DD HH:MM"，24 小时制
-  note         字符串，一句话摘要，保留原文关键信息，不超过 30 个字
+  type         记账时只能是 "expense"/"income"/"transfer"；借贷时只能是 "lend"（我借出）/ "borrow"（我借入）
+  category     字符串，记账分类，如 餐饮、交通、购物、工资；不适用时填 ""
+  account      字符串，账户名；用户没提就填空字符串 ""
+  to_account   字符串，仅转账时填转入账户，其余填 ""
+  fee          数字，仅转账手续费，其余填 0
+  date         字符串，格式固定 "YYYY-MM-DD HH:MM"，24 小时制
+  note         字符串，一句话摘要，不超过 30 字
+  contact_name 字符串，借贷对象的姓名
+  identity     字符串，联系人身份/关系，如 亲戚、同学、同事
+  phone        字符串，联系人电话
+  wechat       字符串，联系人微信
+  name         字符串，添加联系人时的姓名
 
-【分类规则】
-- 打车、地铁、公交、高铁、机票 → 交通
-- 吃饭、外卖、奶茶、咖啡、聚餐 → 餐饮
-- 买菜、日用品、超市 → 购物
-- 房租、水电、物业、话费 → 居住
-- 工资、奖金、报销、红包收入 → 对应收入类分类
-- 判断不了分类时填 "其他"
+【意图判断】
+- action = "record"：用户在记一笔自己的收支或账户转账，例如「昨天打车30」「工资到账8000」。
+- action = "debt"：用户在和某个人发生借入/借出，例如「借给小王20元」「向小李借了100」。
+- action = "add_contact"：用户只想存一个联系人信息，例如「添加小王，他是亲戚，电话13800000000」。
+- action = "unknown"：闲聊、提问、没有金额也看不出记账/借贷/联系人意图，例如「今天天气不错」「你好」。
+- 一句话同时像记账又像借贷时，以「钱是否给了某个人」为准，选 debt。
 
-【时间规则】
-- 今天是 {today}（{weekday}），当前时间 {now}。
-- “昨天”“前天”“上周五”等相对时间，必须换算成具体日期。
-- 用户没提时间，date 用当前时间 {now}。
-- 只说了日期没说时刻，时刻填 00:00。
+【record 规则】
+- 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
+- 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
+- 时间：今天是 {today}（{weekday}），当前时间 {now}；「昨天/前天/上周五」换算成具体日期；没提时间用 {now}；只提日期时刻填 00:00。
 
-【类型规则】
-- “花了/买了/付了/支出” → expense
-- “收到/发了/工资/奖金/退款” → income
-- “从 A 转到 B / 转到 / 充值到” → transfer，account 是转出方，to_account 是转入方
-- 一句话里出现多个金额时，取最主要的那笔；手续费单独填 fee，不并入 amount
+【debt 规则】
+- type：我借给别人 → "lend"；我向别人借 → "borrow"。
+- contact_name 必填，从原句提取人名；姓名必须原样保留、不得删字（如「借给小王20元」→ "小王"）。
+- identity/phone/wechat/name 留空。
+- account 是资金账户，没提填 ""（后端用默认账户）；date 规则同记账。
+
+【add_contact 规则】
+- name 必填；姓名必须原样保留、不得删字，也不要把「测试」这类前缀当废话删掉（如「添加测试阿星，他是同事」→ name 是 "测试阿星"）。
+- identity、phone、wechat 有就填，没有留空。
+- amount 填 0，type 留空字符串，category/account/date/note 等其余字段留空或按格式补 0。
 
 【示例】
 用户：昨天打车花了30
-输出：{{"amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车"}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
 用户：工资到账 8000
-输出：{{"amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账"}}
+输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
-用户：从微信转 500 到支付宝，手续费 1 块
-输出：{{"amount": 500, "type": "transfer", "category": "", "account": "微信", "to_account": "支付宝", "fee": 1, "date": "{now}", "note": "微信转支付宝"}}
+用户：借给小王20元
+输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": ""}}
+
+用户：向小李借了100
+输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": ""}}
+
+用户：添加小王，他是亲戚，电话13800000000
+输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王"}}
+
+用户：今天天气不错
+输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 """
 
 
@@ -167,10 +206,7 @@ def _normalize_date(value: Any, now: datetime) -> str:
     return now.strftime("%Y-%m-%d %H:%M")
 
 
-def _normalize(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
-    if not isinstance(payload, dict):
-        raise AIServiceError("模型返回的不是 JSON 对象")
-
+def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
     record_type = _as_text(payload.get("type")).lower()
     if record_type not in RECORD_TYPES:
         record_type = "expense"
@@ -197,25 +233,73 @@ def _normalize(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
     }
 
 
-def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
-    """把一句自然语言账单解析成可直接写库的字段。
+def _normalize_debt(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
+    amount = _as_amount(payload.get("amount"), "amount")
+    if amount <= 0:
+        raise AIServiceError("借贷金额必须大于 0，模型给的是 %r" % payload.get("amount"))
 
-    失败一律抛 AIServiceError（带中文原因），调用方转成 400/502 即可。
-    """
+    contact_name = _as_text(payload.get("contact_name"))
+    if not contact_name:
+        raise AIServiceError("识别成借贷，但没有提取到对方姓名")
+
+    debt_type = DEBT_TYPE_ALIASES.get(_as_text(payload.get("type")).lower())
+    if debt_type is None:
+        raise AIServiceError("借贷类型只认借出 / 借入，模型给的是 %r" % payload.get("type"))
+
+    return {
+        "amount": amount,
+        "contact_name": contact_name[:50],
+        "type": debt_type,
+        "account": _as_text(payload.get("account")),
+        "date": _normalize_date(payload.get("date"), now),
+        "note": _as_text(payload.get("note"))[:50],
+    }
+
+
+def _normalize_contact(payload: dict[str, Any]) -> dict[str, Any]:
+    name = _as_text(payload.get("name")) or _as_text(payload.get("contact_name"))
+    if not name:
+        raise AIServiceError("识别成添加联系人，但没有提取到姓名")
+    return {
+        "name": name[:50],
+        "identity": _as_text(payload.get("identity"))[:50],
+        "phone": _as_text(payload.get("phone"))[:30],
+        "wechat": _as_text(payload.get("wechat"))[:50],
+    }
+
+
+def _normalize_intent(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise AIServiceError("模型返回的不是 JSON 对象")
+
+    action = _as_text(payload.get("action")).lower()
+    if action not in ACTIONS:
+        # 模型漏了 action 或写了别的词，一律当听不懂，不猜意图
+        return {"action": "unknown"}
+    if action == "unknown":
+        return {"action": "unknown"}
+
+    result = _normalize_record(payload, now) if action == "record" else None
+    if action == "debt":
+        result = _normalize_debt(payload, now)
+    elif action == "add_contact":
+        result = _normalize_contact(payload)
+    return {"action": action, **result}
+
+
+def _chat(text: str, now: datetime) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if not cleaned:
         raise AIServiceError("说一句话再解析，比如「昨天打车花了 30」")
     if len(cleaned) > 200:
         raise AIServiceError("这句话太长了，记一笔控制在 200 字以内")
 
-    moment = now or datetime.now()
     client = _client()
-
     kwargs: dict[str, Any] = {
         "model": MODEL,
-        "messages": _build_messages(cleaned, moment),
+        "messages": _build_messages(cleaned, now),
         "temperature": 0.1,
-        "max_tokens": 300,
+        "max_tokens": 400,
     }
 
     try:
@@ -241,4 +325,17 @@ def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
     except json.JSONDecodeError as error:
         raise AIServiceError("模型返回的不是合法 JSON：%s" % error)
 
-    return _normalize(payload, moment)
+    return _normalize_intent(payload, now)
+
+
+def parse_intent(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """理解一句话的意图，返回带 action 的字段；失败抛 AIServiceError。"""
+    return _chat(text, now or datetime.now())
+
+
+def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """兼容 v0.08 的记账专用入口：只接受 record 意图，返回原来的 8 字段 + formula。"""
+    result = parse_intent(text, now)
+    if result["action"] != "record":
+        raise AIServiceError("这句话不是记账指令，当前接口只支持记账")
+    return {key: value for key, value in result.items() if key != "action"}

@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.08-DEV（已封版）
-当前进度：AI 快记全链路已真实联调通过（智谱 GLM-4-Flash 解析 → 本地校验 → 复用 add_record 写库并联动余额），顶栏「AI 快记」可正常使用；v0.07 Step 3 的报销与回收站界面尚未开始。
+当前版本：v0.08.1-DEV（后端意图路由已联调通过，前端未重构）
+当前进度：AI 能识别记账 / 借贷 / 添加联系人 / 听不懂四种意图，/api/records/ai 按 action 分流写库并联动余额；顶栏仍是 v0.08 的单行 AI 输入框，Step 3 的 AI 弹窗重构、Step 4 的报销开关与资产页统计尚未开始。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -50,11 +50,12 @@ categories: id, name, parent_id (二级分类)。
 /api/statistics (GET)
 /api/notifications (GET/POST/PUT/DELETE)
 /api/upload (POST)
+/api/records/ai (POST) AI 意图分流：record / debt / add_contact / unknown。
 
 六、下一步行动计划
-当前目标：启动 v0.09-DEV，补齐 v0.07 Step 3 的回收站与报销界面。
+当前目标：完成 v0.08.1-DEV 的前端部分（后端意图路由已联调通过，可直接接）。
 执行步骤：
-1. 回收站：删除改为写 deleted_at 软删除，新增回收站列表与恢复接口，恢复时按余额效果回补账户；账单列表与统计默认排除已删记录。
-2. 报销：先定下状态字段（待报销 / 已报销）与入口，再补申请、状态切换与列表筛选，余额口径保持不变。
-3. 每步完成跑 py_compile / node --check 与端到端自测，通过后更新 dev-log，全部完成封 v0.09-DEV 并打 tag 推送。
+1. Step 3 AI 交互重构：删掉顶栏旧 AI 输入框，在「+ 记一笔」旁加蓝紫渐变星星【AI 快记】按钮，点开 Bootstrap Modal（多行输入 + 发送 Loading + Esc 关闭 + Ctrl+Enter 发送），按后端 action 弹对应 Toast（记账成功 / 借贷已记录 / 联系人已添加 / 无法理解）并刷新看板。
+2. Step 4 报销闭环：账单详情弹窗加报销开关（空心变实心黄），开启后选报销人与金额（默认全额）；资产页增加待报销 / 已报销统计。
+3. 每步完成跑 py_compile / node --check 与端到端自测，通过后更新 dev-log；全部完成封 v0.08.1-DEV 并打 tag 推送。
 备注：.env 换 Key 后必须彻底结束旧 Flask 进程再启动，否则旧进程仍持有旧密钥返回 401。
