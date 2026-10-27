@@ -992,20 +992,26 @@ def delete_record(record_id):
         conn.close()
 
 
+_RECORD_SELECT = (
+    "SELECT r.id, r.amount, r.category, r.category_id, r.note, r.date, "
+    "       r.account, r.type, r.formula, r.to_account, r.fee, "
+    "       r.is_reimbursable, r.reimbursement_contact_id, r.reimbursed_amount, "
+    "       r.total_reimbursement, "
+    "       p.name AS category_parent, ct.name AS reimbursement_contact_name "
+    "  FROM records r "
+    "  LEFT JOIN categories c ON c.id = r.category_id "
+    "  LEFT JOIN categories p ON p.id = c.parent_id "
+    "  LEFT JOIN contacts ct ON ct.id = r.reimbursement_contact_id"
+)
+
+
 def list_records(account=None, category_id=None, parent_id=None):
     """取出账目，最新记的排最前。
 
     三个筛选条件可以叠加：账户名、具体分类、一级分类（含它的所有二级）。
-    顺带 LEFT JOIN 出二级分类的父级名，前端能显示「餐饮 / 早餐」。
+    顺带 LEFT JOIN 出二级分类的父级名和报销人姓名，前端一次拿全。
     """
-    sql = (
-        "SELECT r.id, r.amount, r.category, r.category_id, r.note, r.date, "
-        "       r.account, r.type, r.formula, r.to_account, r.fee, "
-        "       p.name AS category_parent "
-        "  FROM records r "
-        "  LEFT JOIN categories c ON c.id = r.category_id "
-        "  LEFT JOIN categories p ON p.id = c.parent_id"
-    )
+    sql = _RECORD_SELECT
     conditions = ["r.deleted_at IS NULL"]
     params = []
     if account:
@@ -1034,6 +1040,90 @@ def list_records(account=None, category_id=None, parent_id=None):
         conn.close()
 
 
+def get_record(record_id):
+    """按 id 取一条账目（带报销字段与报销人姓名），不存在返回 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(_RECORD_SELECT + " WHERE r.id = ?", (record_id,)).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["date"] = normalize_date(record["date"])
+        return record
+    finally:
+        conn.close()
+
+
+def set_record_reimbursement(
+    record_id,
+    is_reimbursable,
+    contact_id=None,
+    total_reimbursement=0,
+    reimbursed_amount=0,
+):
+    """更新一条账目的报销设置，返回 (是否更新到, 错误信息)。
+
+    - 关闭报销：四个字段一起清零，历史数据不会留半截
+    - 开启报销：只允许支出账目，报销人必须真实存在，报销金额 0 < 金额 ≤ 账目金额，
+      已报销金额落在 0 和报销金额之间
+    - 报销不影响账户余额，这是「公司/别人会还我」的标记，不是收付款
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT type, amount FROM records WHERE id = ? AND deleted_at IS NULL",
+                (record_id,),
+            ).fetchone()
+            if row is None:
+                return False, None
+
+            if not is_reimbursable:
+                conn.execute(
+                    """
+                    UPDATE records
+                       SET is_reimbursable = 0, reimbursement_contact_id = NULL,
+                           reimbursed_amount = 0, total_reimbursement = 0
+                     WHERE id = ?
+                    """,
+                    (record_id,),
+                )
+                return True, None
+
+            if row["type"] != "expense":
+                return False, "只有支出账目可以报销"
+
+            if contact_id is None:
+                return False, "开启报销前请选择报销人"
+            exists = conn.execute(
+                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+            ).fetchone()
+            if exists is None:
+                return False, "报销人不存在"
+
+            total = round(float(total_reimbursement), 2)
+            amount = round(float(row["amount"]), 2)
+            if total <= 0 or total > amount + 0.005:
+                return False, "报销金额必须大于 0 且不超过账目金额"
+
+            paid = round(float(reimbursed_amount), 2)
+            if paid < 0 or paid > total + 0.005:
+                return False, "已报销金额必须落在 0 和报销金额之间"
+
+            conn.execute(
+                """
+                UPDATE records
+                   SET is_reimbursable = 1, reimbursement_contact_id = ?,
+                       reimbursed_amount = ?, total_reimbursement = ?
+                 WHERE id = ?
+                """,
+                (contact_id, paid, total, record_id),
+            )
+            return True, None
+    finally:
+        conn.close()
+
+
 def get_statistics():
     """总览：总收入、总支出、总余额。
 
@@ -1053,6 +1143,13 @@ def get_statistics():
         balance_total = conn.execute(
             "SELECT COALESCE(SUM(balance), 0) AS total FROM accounts"
         ).fetchone()["total"]
+        reimb = conn.execute(
+            "SELECT "
+            "  COALESCE(SUM(MAX(total_reimbursement - reimbursed_amount, 0)), 0) AS pending, "
+            "  COALESCE(SUM(reimbursed_amount), 0) AS done "
+            "FROM records "
+            "WHERE type = 'expense' AND is_reimbursable = 1 AND deleted_at IS NULL"
+        ).fetchone()
     finally:
         conn.close()
 
@@ -1061,6 +1158,8 @@ def get_statistics():
         "income_total": round(income_total, 2),
         "expense_total": round(expense_total, 2),
         "balance_total": round(balance_total, 2),
+        "reimbursement_pending": round(reimb["pending"], 2),
+        "reimbursement_done": round(reimb["done"], 2),
     }
 
 

@@ -396,6 +396,44 @@ def update_record(record_id):
     return jsonify(id=record_id, **payload)
 
 
+@app.route("/api/records/<int:record_id>/reimbursement", methods=["PUT"])
+def update_record_reimbursement(record_id):
+    """只改一条账目的报销设置（开关 / 报销人 / 报销金额 / 已报销），不动金额与余额。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    is_reimbursable = data.get("is_reimbursable", False)
+    if not isinstance(is_reimbursable, bool):
+        return jsonify(error="is_reimbursable 必须是布尔值"), 400
+
+    contact_id = data.get("contact_id")
+    if contact_id is not None and (
+        isinstance(contact_id, bool) or not isinstance(contact_id, int)
+    ):
+        return jsonify(error="contact_id 必须是整数"), 400
+
+    try:
+        total_reimbursement = round(float(data.get("total_reimbursement") or 0), 2)
+        reimbursed_amount = round(float(data.get("reimbursed_amount") or 0), 2)
+    except (TypeError, ValueError):
+        return jsonify(error="金额必须是数字"), 400
+
+    updated, error_message = database.set_record_reimbursement(
+        record_id,
+        is_reimbursable,
+        contact_id,
+        total_reimbursement,
+        reimbursed_amount,
+    )
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+    if not updated:
+        return jsonify(error="记录不存在"), 404
+
+    return jsonify(record=database.get_record(record_id))
+
+
 @app.route("/api/records/<int:record_id>", methods=["DELETE"])
 def remove_record(record_id):
     """删除一条账目并回滚余额。id 不存在时返回 404，而不是假装成功。"""

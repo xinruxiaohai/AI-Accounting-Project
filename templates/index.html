@@ -135,16 +135,14 @@
           </svg>
         </button>
 
-        <!-- AI 快记：一句自然语言，后端交给智谱解析后直接入库 -->
-        <form class="ai-quick" id="ai-quick-form" autocomplete="off">
-          <svg class="ai-quick-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <!-- AI 快记：点开弹窗，一句话交给后端意图路由（记账 / 借贷 / 加联系人） -->
+        <button class="btn btn-ai ai-entry-btn" type="button" id="ai-open-btn" title="AI 快记：用一句话记账、记借贷或加联系人">
+          <svg class="ai-entry-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 3.5 13.6 8l4.4 1.6L13.6 11 12 15.5 10.4 11 6 9.6 10.4 8z"></path>
             <path d="M18.5 15.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"></path>
           </svg>
-          <input class="form-control ai-quick-input" id="ai-quick-input" type="text" maxlength="200"
-                 placeholder="AI 快记：昨天打车 30" aria-label="用一句话记账">
-          <button class="btn btn-ai" type="submit" id="ai-quick-btn">记</button>
-        </form>
+          <span>AI 快记</span>
+        </button>
 
         <button class="btn btn-primary btn-add" type="button" id="add-record-btn">+ 记一笔</button>
       </div>
@@ -388,6 +386,20 @@
       <!-- ============ 资产 ============ -->
       <section class="page" id="page-assets">
 
+        <!-- v0.09 报销：待报销 / 已报销 汇总 -->
+        <div class="reimb-cards">
+          <div class="reimb-card">
+            <span class="reimb-card-label">待报销</span>
+            <strong class="reimb-card-value" id="reimb-pending">¥0.00</strong>
+            <span class="reimb-card-hint">别人还没还我的</span>
+          </div>
+          <div class="reimb-card is-done">
+            <span class="reimb-card-label">已报销</span>
+            <strong class="reimb-card-value" id="reimb-done">¥0.00</strong>
+            <span class="reimb-card-hint">已经收回的</span>
+          </div>
+        </div>
+
         <!-- 上：按大类分组的账户卡片 -->
         <div class="panel">
           <div class="panel-head">
@@ -629,12 +641,66 @@
       <div class="modal-body">
         <!-- 内容由 script.js 按记录逐行填充 -->
         <div class="detail-grid" id="detail-body"></div>
+        <!-- v0.09 报销：只有支出账目显示，开关开启后展开报销人 / 金额 -->
+        <div class="reimb-block" id="reimb-block" hidden>
+          <label class="reimb-switch" for="reimb-toggle">
+            <input type="checkbox" id="reimb-toggle">
+            <span class="reimb-switch-track"><span class="reimb-switch-dot"></span></span>
+            <span class="reimb-switch-text">支持报销</span>
+          </label>
+          <div class="reimb-fields" id="reimb-fields" hidden>
+            <div class="reimb-field">
+              <label for="reimb-contact">报销人<span class="req">*</span></label>
+              <select class="form-select form-select-sm" id="reimb-contact"></select>
+            </div>
+            <div class="reimb-field">
+              <label for="reimb-total">报销金额</label>
+              <input class="form-control form-control-sm" type="number" id="reimb-total" min="0" step="0.01">
+            </div>
+            <label class="reimb-paid" for="reimb-paid">
+              <input type="checkbox" id="reimb-paid">
+              <span>已报销</span>
+            </label>
+            <p class="reimb-hint" id="reimb-hint">默认全额报销，可改金额；勾选「已报销」后计入已报销统计。</p>
+          </div>
+          <button class="btn btn-sm btn-warning reimb-save" type="button" id="reimb-save-btn" hidden>保存报销设置</button>
+        </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
         <!-- 幽灵按钮：不刺眼，也不误触；Enter 等价于点「编辑」 -->
         <button type="button" class="btn btn-outline-danger" id="detail-delete-btn">删除</button>
         <button type="button" class="btn btn-outline-warning" id="detail-edit-btn">编辑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= AI 快记弹窗（v0.08.1） ================= -->
+<div class="modal fade" id="ai-modal" tabindex="-1" aria-labelledby="ai-modal-title" aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="ai-modal-title">
+          <svg class="ai-modal-star" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3.5 13.6 8l4.4 1.6L13.6 11 12 15.5 10.4 11 6 9.6 10.4 8z"></path>
+            <path d="M18.5 15.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"></path>
+          </svg>
+          AI 快记
+        </h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <textarea class="form-control ai-textarea" id="ai-input" rows="4" maxlength="200"
+                  placeholder="您可以输入：昨天买咖啡25 / 借给小王50 / 添加联系人老李..."></textarea>
+        <p class="ai-modal-hint">记账、借贷、添加联系人三合一；Ctrl + Enter 发送，Esc 关闭。</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-ai ai-send-btn" type="button" id="ai-send-btn">
+          <span class="spinner-border spinner-border-sm d-none" id="ai-send-spinner" aria-hidden="true"></span>
+          <span id="ai-send-label">发送</span>
+        </button>
       </div>
     </div>
   </div>

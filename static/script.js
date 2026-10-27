@@ -506,6 +506,7 @@ const state = {
   allRecords: [],
   detailAccount: "",
   detailRecords: [],
+  reimbSummary: null,
   editingId: null,
   presetAccount: "",
   // 日历：模式、当前年月、选中的某一天、日历专用的全量账单（不受账户筛选影响）
@@ -3333,6 +3334,21 @@ function buildDetailBody(record) {
   }
   html += detailRowHtml("时间", escapeHtml(displayDate(record.date)));
   html += detailRowHtml("备注", record.note ? escapeHtml(record.note) : "—");
+  if (record.is_reimbursable) {
+    const total = money(record.total_reimbursement || record.amount);
+    const paidText =
+      Number(record.reimbursed_amount || 0) > 0
+        ? '<span class="reimb-flag">已报销 ' + money(record.reimbursed_amount) + "</span>"
+        : '<span class="reimb-flag">待报销</span>';
+    html += detailRowHtml(
+      "报销",
+      escapeHtml(record.reimbursement_contact_name || "未指定") +
+        " · " +
+        total +
+        " · " +
+        paidText
+    );
+  }
   html += detailRowHtml("编号", "#" + record.id);
   html += '<span class="detail-tip">按 Esc 关闭，按 Enter 直接编辑这条账单</span>';
   return html;
@@ -3348,6 +3364,7 @@ function openRecordDetail(recordId) {
   if ($("detail-body")) {
     $("detail-body").innerHTML = buildDetailBody(record);
   }
+  renderReimbBlock(record);
   if ($("record-detail-title")) {
     $("record-detail-title").textContent = "账单详情 #" + record.id;
   }
@@ -3357,8 +3374,22 @@ function openRecordDetail(recordId) {
 }
 
 function closeRecordDetail() {
-  if (recordDetailModal) {
-    recordDetailModal.hide();
+  hideRecordDetail();
+}
+
+/** Bootstrap 在弹窗开/关动画进行中会忽略 hide()；保存后立刻关闭时补一次重试 */
+function hideRecordDetail() {
+  if (!recordDetailModal) {
+    return;
+  }
+  recordDetailModal.hide();
+  const element = $("record-detail-modal");
+  if (element) {
+    window.setTimeout(function () {
+      if (element.classList.contains("show")) {
+        recordDetailModal.hide();
+      }
+    }, 400);
   }
 }
 
@@ -3986,9 +4017,16 @@ function hideTooltipOf(element) {
 
 async function refresh() {
   // 首页三栏都靠这几份数据，拉完一起重绘，避免主卡先渲染出 0 再跳数字
-  await Promise.all([loadAccounts(), loadRecords(), loadCalendarRecords(), loadContacts()]);
+  await Promise.all([
+    loadAccounts(),
+    loadRecords(),
+    loadCalendarRecords(),
+    loadContacts(),
+    loadReimbSummary(),
+  ]);
   await refreshDetail();
   renderDashboard();
+  renderReimbCards();
 }
 
 /* ==================== 事件绑定 ==================== */
@@ -4156,10 +4194,28 @@ function bindEvents() {
     }
   });
 
-  // AI 快记：回车即提交一句话，后端解析成功会直接刷新看板与列表
-  const aiForm = $("ai-quick-form");
-  if (aiForm) {
-    aiForm.addEventListener("submit", onAiQuickSubmit);
+  // AI 快记：点按钮开弹窗，Ctrl + Enter 发送（Esc 由 bindEscClose 处理）
+  if ($("ai-open-btn")) {
+    $("ai-open-btn").addEventListener("click", openAiModal);
+  }
+  if ($("ai-send-btn")) {
+    $("ai-send-btn").addEventListener("click", sendAiQuick);
+  }
+  if ($("ai-input")) {
+    $("ai-input").addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        sendAiQuick();
+      }
+    });
+  }
+
+  // 报销：开关展开字段，保存只改报销设置
+  if ($("reimb-toggle")) {
+    $("reimb-toggle").addEventListener("change", onReimbToggle);
+  }
+  if ($("reimb-save-btn")) {
+    $("reimb-save-btn").addEventListener("click", saveReimb);
   }
 
   // 近 7 天卡片列表同样点一条弹详情
@@ -4445,45 +4501,277 @@ async function loadVersion() {
   }
 }
 
-/** AI 快记：一句话交给后端解析入库，成功后刷新看板与账单列表 */
-async function onAiQuickSubmit(event) {
-  event.preventDefault();
-  const input = $("ai-quick-input");
-  const button = $("ai-quick-btn");
-  if (!input || !button) {
+/* ==================== AI 快记弹窗（v0.08.1） ==================== */
+
+let aiModal = null;
+
+/** 打开 AI 快记弹窗：不主动清空，用户上次没发出去的文字还在 */
+function openAiModal() {
+  if (aiModal) {
+    aiModal.show();
+  }
+  window.setTimeout(function () {
+    if ($("ai-input")) {
+      $("ai-input").focus();
+    }
+  }, 200);
+}
+
+function setAiSending(sending) {
+  const button = $("ai-send-btn");
+  const spinner = $("ai-send-spinner");
+  const label = $("ai-send-label");
+  if (button) {
+    button.disabled = sending;
+  }
+  if (spinner) {
+    spinner.classList.toggle("d-none", !sending);
+  }
+  if (label) {
+    label.textContent = sending ? "识别中" : "发送";
+  }
+}
+
+/** 发送一句话：后端按 action 分流，这里按 action 弹精准 Toast 并刷新看板 */
+async function sendAiQuick() {
+  const input = $("ai-input");
+  if (!input) {
     return;
   }
-
   const text = input.value.trim();
   if (!text) {
-    toast("先输入一句话，比如「昨天打车花了 30」", "error");
+    toast("先输入一句话，比如「昨天买咖啡 25」", "error");
     input.focus();
     return;
   }
-  if (button.disabled) {
+  if ($("ai-send-btn") && $("ai-send-btn").disabled) {
     return;
   }
 
-  const originalLabel = button.textContent;
-  button.disabled = true;
-  button.textContent = "识别中";
+  setAiSending(true);
   try {
     const data = await api("/api/records/ai", jsonOptions("POST", { text: text }));
-    const record = (data && data.record) || {};
-    const amount = Number(record.amount || 0);
+    const action = (data && data.action) || "record";
+    if (action === "debt") {
+      toast("借贷已记录", "success");
+    } else if (action === "add_contact") {
+      toast("联系人已添加", "success");
+    } else {
+      toast("记账成功", "success");
+    }
+    input.value = "";
+    if (aiModal) {
+      aiModal.hide();
+    }
+    await refresh();
+  } catch (error) {
+    // unknown：保留用户原文，方便直接改一改再发
+    if (error.message === "AI 无法理解您的指令") {
+      toast("AI 无法理解您的指令，换个说法试试", "error");
+      input.focus();
+    } else {
+      toast(error.message, "error");
+    }
+  } finally {
+    setAiSending(false);
+  }
+}
+
+/* ==================== 报销（v0.09） ==================== */
+
+/** 资产页顶部汇总：待报销 = 应报未报，已报销 = 已经收回的；优先用统计接口，不受账户筛选影响 */
+function renderReimbCards() {
+  let pending = 0;
+  let done = 0;
+  if (state.reimbSummary) {
+    pending = state.reimbSummary.pending;
+    done = state.reimbSummary.done;
+  } else {
+    state.allRecords.forEach(function (record) {
+      if (!record.is_reimbursable) {
+        return;
+      }
+      const total = Number(record.total_reimbursement || 0);
+      const paid = Number(record.reimbursed_amount || 0);
+      done += paid;
+      if (total > paid) {
+        pending += total - paid;
+      }
+    });
+  }
+  if ($("reimb-pending")) {
+    $("reimb-pending").textContent = money(pending);
+  }
+  if ($("reimb-done")) {
+    $("reimb-done").textContent = money(done);
+  }
+}
+
+async function loadReimbSummary() {
+  try {
+    const data = await api("/api/statistics");
+    state.reimbSummary = {
+      pending: Number(data.reimbursement_pending || 0),
+      done: Number(data.reimbursement_done || 0),
+    };
+  } catch (error) {
+    state.reimbSummary = null;
+  }
+}
+
+/** 详情弹窗里的报销区：只有支出账目出现，开关开启后才展开字段 */
+function renderReimbBlock(record) {
+  const block = $("reimb-block");
+  if (!block) {
+    return;
+  }
+  const isExpense = record.type === "expense";
+  block.hidden = !isExpense;
+  if (!isExpense) {
+    return;
+  }
+
+  const reimbursable = Boolean(record.is_reimbursable);
+  const toggle = $("reimb-toggle");
+  const fields = $("reimb-fields");
+  const saveBtn = $("reimb-save-btn");
+  const contact = $("reimb-contact");
+  const total = $("reimb-total");
+  const paid = $("reimb-paid");
+
+  if (toggle) {
+    toggle.checked = reimbursable;
+  }
+  if (fields) {
+    fields.hidden = !reimbursable;
+  }
+  if (saveBtn) {
+    saveBtn.hidden = !reimbursable;
+  }
+
+  if (contact) {
+    const options = ['<option value="">请选择报销人</option>'];
+    state.contacts.forEach(function (item) {
+      const selected =
+        Number(item.id) === Number(record.reimbursement_contact_id) ? " selected" : "";
+      options.push(
+        '<option value="' + item.id + '"' + selected + ">" + escapeHtml(item.name) + "</option>"
+      );
+    });
+    contact.innerHTML = options.join("");
+    if (!reimbursable && state.contacts.length === 1) {
+      contact.value = String(state.contacts[0].id);
+    }
+  }
+  if (total) {
+    total.value = String(cents(reimbursable ? record.total_reimbursement || record.amount : record.amount));
+  }
+  if (paid) {
+    paid.checked =
+      reimbursable &&
+      Number(record.total_reimbursement || 0) > 0 &&
+      Number(record.reimbursed_amount || 0) >= Number(record.total_reimbursement || 0);
+  }
+}
+
+/** 开关：关 → 收起字段；开 → 默认全额报销、报销人预选第一个联系人 */
+function onReimbToggle() {
+  const toggle = $("reimb-toggle");
+  if (!toggle) {
+    return;
+  }
+  const fields = $("reimb-fields");
+  const saveBtn = $("reimb-save-btn");
+  if (fields) {
+    fields.hidden = !toggle.checked;
+  }
+  if (saveBtn) {
+    saveBtn.hidden = !toggle.checked;
+  }
+  if (!toggle.checked) {
+    return;
+  }
+
+  const record = state.detailRecordId ? findRecordById(state.detailRecordId) : null;
+  const contact = $("reimb-contact");
+  if (contact && !contact.value && state.contacts.length) {
+    contact.value = String(state.contacts[0].id);
+  }
+  if ($("reimb-total") && record) {
+    $("reimb-total").value = String(cents(record.total_reimbursement || record.amount));
+  }
+  if ($("reimb-paid")) {
+    $("reimb-paid").checked = false;
+  }
+}
+
+/** 保存报销设置：只改报销字段，不动金额与余额 */
+async function saveReimb() {
+  const recordId = state.detailRecordId;
+  const record = recordId ? findRecordById(recordId) : null;
+  if (!record) {
+    return;
+  }
+
+  const toggle = $("reimb-toggle");
+  const enabled = Boolean(toggle && toggle.checked);
+  let contactId = null;
+  let total = 0;
+  let paid = 0;
+
+  if (enabled) {
+    const contactSelect = $("reimb-contact");
+    contactId = contactSelect && contactSelect.value ? Number(contactSelect.value) : null;
+    if (!contactId) {
+      toast("请选择报销人", "error");
+      return;
+    }
+    total = cents(Number($("reimb-total") ? $("reimb-total").value : 0));
+    if (!(total > 0)) {
+      toast("报销金额要大于 0", "error");
+      return;
+    }
+    if (total > cents(record.amount) + 0.005) {
+      toast("报销金额不能超过账目金额", "error");
+      return;
+    }
+    paid = $("reimb-paid") && $("reimb-paid").checked ? total : 0;
+  }
+
+  const button = $("reimb-save-btn");
+  if (button && button.disabled) {
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+  }
+  try {
+    await api(
+      "/api/records/" + record.id + "/reimbursement",
+      jsonOptions("PUT", {
+        is_reimbursable: enabled,
+        contact_id: contactId,
+        total_reimbursement: total,
+        reimbursed_amount: paid,
+      })
+    );
     toast(
-      "AI 已记账：" + (record.category || "未分类") + " ¥" + amount.toFixed(2),
+      enabled ? (paid > 0 ? "已标记为已报销" : "已开启报销") : "已关闭报销",
       "success"
     );
-    input.value = "";
+    if (recordDetailModal) {
+      hideRecordDetail();
+    }
     await refresh();
   } catch (error) {
     toast(error.message, "error");
   } finally {
-    button.disabled = false;
-    button.textContent = originalLabel;
+    if (button) {
+      button.disabled = false;
+    }
   }
 }
+
 
 /** 导出走 fetch + blob：接口报错时弹 Toast，而不是把整页导航到一段 JSON */
 async function exportCsv(button) {
@@ -4697,6 +4985,7 @@ async function init() {
   const accountElement = $("account-modal");
   const categoryElement = $("category-modal");
   const detailElement = $("record-detail-modal");
+  const aiElement = $("ai-modal");
   if (window.bootstrap) {
     recordModal = new window.bootstrap.Modal(modalElement);
     accountModal = new window.bootstrap.Modal(accountElement);
@@ -4704,11 +4993,17 @@ async function init() {
     if (detailElement) {
       recordDetailModal = new window.bootstrap.Modal(detailElement);
     }
+    if (aiElement) {
+      aiModal = new window.bootstrap.Modal(aiElement);
+    }
     bindEscClose(modalElement, recordModal);
     bindEscClose(accountElement, accountModal);
     bindEscClose(categoryElement, categoryModal);
     if (detailElement && recordDetailModal) {
       bindEscClose(detailElement, recordDetailModal);
+    }
+    if (aiElement && aiModal) {
+      bindEscClose(aiElement, aiModal);
     }
   }
 

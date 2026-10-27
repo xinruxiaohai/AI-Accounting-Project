@@ -3464,3 +3464,215 @@ body {
     font-size: 12px;
   }
 }
+
+/* ---------- v0.08.1 AI 快记入口与弹窗 ---------- */
+.ai-entry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 38px;
+  padding: 0 14px;
+  font-size: 13px;
+}
+
+.ai-entry-star {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+}
+
+.ai-modal-star {
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  vertical-align: -3px;
+  color: var(--brand-blue);
+}
+
+.ai-textarea {
+  min-height: 118px;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.65;
+  resize: vertical;
+}
+
+.ai-modal-hint {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.ai-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  min-width: 96px;
+  padding: 0 18px;
+  font-size: 13px;
+}
+
+/* ---------- v0.09 报销 ---------- */
+.reimb-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 16px;
+}
+
+.reimb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, rgba(217, 119, 6, 0.08), var(--surface));
+  box-shadow: var(--shadow-sm);
+}
+
+.reimb-card.is-done {
+  border-left-color: var(--pos);
+  background: linear-gradient(135deg, rgba(5, 150, 105, 0.08), var(--surface));
+}
+
+.reimb-card-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.reimb-card-value {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--warn);
+}
+
+.reimb-card.is-done .reimb-card-value {
+  color: var(--pos);
+}
+
+.reimb-card-hint {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.reimb-block {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line-strong);
+}
+
+.reimb-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reimb-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.reimb-switch-track {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.reimb-switch-dot {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  margin-top: -7.5px;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 50%;
+  background: transparent;
+  transition: left 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.reimb-switch input:checked + .reimb-switch-track {
+  border-color: var(--warn);
+  background: rgba(217, 119, 6, 0.14);
+}
+
+.reimb-switch input:checked + .reimb-switch-track .reimb-switch-dot {
+  left: 20px;
+  border-color: var(--warn);
+  background: var(--warn);
+}
+
+.reimb-switch-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.reimb-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  margin-top: 12px;
+}
+
+.reimb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.reimb-field label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.reimb-paid {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-main);
+}
+
+.reimb-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.reimb-save {
+  margin-top: 10px;
+}
+
+.reimb-flag {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+@media (max-width: 575.98px) {
+  .reimb-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .reimb-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-entry-btn span {
+    display: none;
+  }
+}
