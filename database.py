@@ -199,6 +199,24 @@ def _seed_accounts(conn):
         )
 
 
+def _seed_notifications(conn):
+    """通知表为空时插一条上线通知，免得前台第一次点信封是空白页。"""
+    count = conn.execute("SELECT COUNT(*) AS n FROM notifications").fetchone()["n"]
+    if count:
+        return
+    conn.execute(
+        "INSERT INTO notifications (title, content, image_url, publish_date) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            "v0.06.2-DEV 上线，全新三栏看板与暗黑模式！",
+            "三栏 Dashboard、纯色日历热力图、账单详情弹窗、通知中心已经就位；"
+            "点击右上角信封图标查看通知，月亮图标一键切换深色模式。",
+            "",
+            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        ),
+    )
+
+
 def _backfill_category_ids(conn):
     """给老账目补 category_id。
 
@@ -323,10 +341,25 @@ def init_db():
                 "ON categories (COALESCE(parent_id, 0), name)"
             )
 
+            # 通知表（v0.06.2）：开发者发布，前台右上角信封图标里按发布倒序展示。
+            # image_url 存 /static/uploads/xxx 这种站内相对路径，没有图就空串
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title        TEXT    NOT NULL,
+                    content      TEXT    NOT NULL DEFAULT '',
+                    image_url    TEXT    NOT NULL DEFAULT '',
+                    publish_date TEXT    NOT NULL
+                )
+                """
+            )
+
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
         with conn:
             _seed_categories(conn)
             _seed_accounts(conn)
+            _seed_notifications(conn)
             _backfill_category_ids(conn)
             # 老账目里出现过的自定义账户也补进账户表，否则列表里查不到它
             conn.execute(
@@ -854,3 +887,68 @@ def get_statistics():
         "expense_total": round(expense_total, 2),
         "balance_total": round(balance_total, 2),
     }
+
+
+# ---------------- 通知（v0.06.2） ----------------
+
+
+def _row_to_notification(row):
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "content": row["content"],
+        "image_url": row["image_url"],
+        "publish_date": row["publish_date"],
+    }
+
+
+def list_notifications():
+    """全部通知，按发布时间倒序（新发的排最上面）。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, title, content, image_url, publish_date "
+            "FROM notifications ORDER BY publish_date DESC, id DESC"
+        ).fetchall()
+        return [_row_to_notification(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def create_notification(title, content="", image_url="", publish_date=None):
+    """发布一条通知，返回入库后的完整字典。"""
+    title = (title or "").strip()
+    if not title:
+        raise RecordError("通知标题不能为空")
+
+    publish_date = (publish_date or "").strip() or datetime.datetime.now().strftime(
+        "%Y-%m-%d %H:%M"
+    )
+
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO notifications (title, content, image_url, publish_date) "
+                "VALUES (?, ?, ?, ?)",
+                (title, content or "", image_url or "", publish_date),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, title, content, image_url, publish_date FROM notifications WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_notification(row)
+    finally:
+        conn.close()
+
+
+def delete_notification(notify_id):
+    """删一条通知，返回 True / False。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute("DELETE FROM notifications WHERE id = ?", (notify_id,))
+        return cursor.rowcount > 0
+    finally:
+        conn.close()

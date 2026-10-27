@@ -251,3 +251,25 @@ D:\Project\AI-Accounting-Project\
 
 > 这是 AI 记账管家项目的接续会话。附件是 `docs/HANDOFF.md` 与「终极蓝图」。
 > 请先读 HANDOFF 确认项目现状与规范，回复一句现状确认，然后等我下达 Step 指令。
+
+## 十三、v0.06.2-DEV 现状补记（2026-10-27）
+
+上一节描述的是 v0.06.1；此后已完成 v0.06.2-DEV 的四个阶段，实际落地：
+
+| 文件 | 变化 |
+|---|---|
+| `templates/index.html` | 三栏 Dashboard、顶栏搜索/信封/主题、侧栏折叠、详情弹窗、通知面板（**不再有 `page-calendar` 页，日历进右栏**） |
+| `templates/admin.html` | **新增**：开发者通知发布台（富文本 + 图片上传） |
+| `static/style.css` | 主题变量两套（含 `[data-theme="dark"]`）、`.dash-grid`、表格 `min-width` + 隐藏次要列、通知面板、详情弹窗；删除 `.is-deep` 白字规则 |
+| `static/script.js` | 行点击 → 详情弹窗；主题/侧栏/搜索/预算/通知/Tooltip 全部接线；修复 `refresh()` 调用不存在的 `loadStatistics()` 的崩溃 |
+| `app.py` | 通知 CRUD、`/api/upload`、`/admin` |
+| `database.py` | `notifications` 表 + 种子通知 |
+
+前端约定更新（覆盖第六节）：
+
+- 表格行不再有编辑/删除按钮，**点整行**弹 `#record-detail-modal`，按钮为 outline 幽灵样式
+- 弹窗快捷键：详情 Esc 关闭 / Enter 编辑；记账弹窗 Enter 提交 / Esc 关闭
+- 全站图标按钮统一 `data-bs-toggle="tooltip"`，悬停 0.5s 出现
+- 深色模式：`document.documentElement[data-theme]`，存 `localStorage["ai-accounting-theme"]`
+
+自测：19 条 headless 点击断言全通过，7 条路由全 200，0 页面报错。

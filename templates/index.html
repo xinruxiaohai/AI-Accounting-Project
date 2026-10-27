@@ -14,36 +14,41 @@
 <!-- Toast 轻提示容器：由 script.js 往里塞消息，不用 alert -->
 <div class="toast-stack" id="toast-stack"></div>
 
-<div class="app">
+<div class="app" id="app">
 
   <!-- ================= 左侧侧边栏 ================= -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <span class="brand-mark">AI</span>
       <span class="brand-text">AI记账管家</span>
     </div>
 
+    <!-- 三行杠单独一行：放在 Logo 正下方、导航菜单上方 -->
+    <div class="sidebar-tools">
+      <button class="icon-btn sidebar-toggle" type="button" id="sidebar-toggle"
+              data-bs-toggle="tooltip" data-bs-placement="right" title="折叠 / 展开侧栏"
+              aria-label="折叠或展开侧栏">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+          <path d="M4 6h16M4 12h16M4 18h16"></path>
+        </svg>
+      </button>
+    </div>
+
     <nav class="sidebar-nav">
-      <!-- data-page 对应下面 page-xxx 的 id，点一下切换显示 -->
-      <a class="nav-item active" href="#" data-page="home">
+      <!-- data-page 对应下面 page-xxx 的 id，点一下切换显示。日历已并入首页右栏，不再单列 -->
+      <a class="nav-item active" href="#" data-page="home" data-bs-toggle="tooltip" data-bs-placement="right" title="首页看板">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path><path d="M9.5 21v-6h5v6"></path>
         </svg>
         <span>首页</span>
       </a>
-      <a class="nav-item" href="#" data-page="calendar">
-        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3.5" y="5" width="17" height="15.5" rx="2"></rect><path d="M8 3v4M16 3v4M3.5 10h17"></path>
-        </svg>
-        <span>日历</span>
-      </a>
-      <a class="nav-item" href="#" data-page="assets">
+      <a class="nav-item" href="#" data-page="assets" data-bs-toggle="tooltip" data-bs-placement="right" title="账户与资产">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3" y="6.5" width="18" height="12" rx="2.5"></rect><path d="M3 10.5h18"></path><circle cx="16.5" cy="14.5" r="1.2"></circle>
         </svg>
         <span>资产</span>
       </a>
-      <a class="nav-item" href="#" data-page="profile">
+      <a class="nav-item" href="#" data-page="profile" data-bs-toggle="tooltip" data-bs-placement="right" title="我的">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="8.5" r="3.8"></circle><path d="M4.5 20.5c1.6-3.4 4.3-5 7.5-5s5.9 1.6 7.5 5"></path>
         </svg>
@@ -51,184 +56,269 @@
       </a>
     </nav>
 
-    <div class="sidebar-footer">v0.06.1-DEV · 开发中</div>
+    <div class="sidebar-footer">
+      <!-- 底部占位图标：后续版本接云同步与设置页 -->
+      <div class="sidebar-footer-icons">
+        <button class="icon-btn icon-btn-ghost" type="button" id="sync-btn"
+                data-bs-toggle="tooltip" data-bs-placement="right" title="云同步（后续版本）" aria-label="云同步">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path>
+          </svg>
+        </button>
+        <button class="icon-btn icon-btn-ghost" type="button" id="settings-btn"
+                data-bs-toggle="tooltip" data-bs-placement="right" title="设置（后续版本）" aria-label="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21h-4v-.08A1.7 1.7 0 0 0 9 19.36a1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.64 15a1.7 1.7 0 0 0-1.56-1.03H3v-4h.08A1.7 1.7 0 0 0 4.64 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.64 1.7 1.7 0 0 0 10.03 3.08V3h4v.08A1.7 1.7 0 0 0 15 4.64a1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.36 9c.16.63.72 1.03 1.56 1.03H21v4h-.08A1.7 1.7 0 0 0 19.4 15z"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="sidebar-version" id="sidebar-version">v0.06.2-DEV · 开发中</div>
+    </div>
   </aside>
 
   <!-- ================= 右侧主内容区 ================= -->
   <div class="main">
 
-    <!-- 顶部导航：左标题 + 右主按钮 -->
+    <!-- 顶部导航：左标题 + 中搜索 + 右图标区 -->
     <header class="topbar">
       <h1 class="topbar-title" id="page-title">首页</h1>
-      <button class="btn btn-primary btn-add" type="button" id="add-record-btn">
-        + 记一笔
-      </button>
+
+      <div class="topbar-search">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+          <circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4.5 4.5"></path>
+        </svg>
+        <input class="form-control" type="search" id="global-search" autocomplete="off"
+               placeholder="搜索分类、备注、金额…" aria-label="搜索账单">
+      </div>
+
+      <div class="topbar-actions">
+        <!-- 通知：信封 -->
+        <button class="icon-btn" type="button" id="notification-btn"
+                data-bs-toggle="tooltip" title="通知中心" aria-label="通知中心">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5.5" width="18" height="13" rx="2.2"></rect><path d="m3.6 6.8 8.4 6.2 8.4-6.2"></path>
+          </svg>
+          <span class="notify-dot d-none" id="notify-dot"></span>
+        </button>
+
+        <!-- 深色模式：月亮 / 太阳 -->
+        <button class="icon-btn" type="button" id="theme-toggle"
+                data-bs-toggle="tooltip" title="切换深色 / 浅色模式" aria-label="切换深色 / 浅色模式">
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M20 14.5A8.2 8.2 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"></path>
+          </svg>
+          <svg class="icon-sun d-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <circle cx="12" cy="12" r="4.2"></circle>
+            <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4 17 7M7 17l-1.6 1.6"></path>
+          </svg>
+        </button>
+
+        <button class="btn btn-primary btn-add" type="button" id="add-record-btn">+ 记一笔</button>
+      </div>
     </header>
 
     <div class="content">
 
-      <!-- ============ 首页 ============ -->
+      <!-- ============ 首页：三栏 Dashboard ============ -->
       <section class="page active" id="page-home">
+        <div class="dash-grid">
 
-        <!-- 统计卡片：数字由 script.js 调 /api/statistics 填 -->
-        <div class="row g-3 mb-4">
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">总收入</div>
-              <div class="stat-number text-success" id="stat-income">¥0.00</div>
-              <div class="stat-hint">已记录的收入合计</div>
+          <!-- ---------- 中栏：主卡 + 预算 + 近 7 天 ---------- -->
+          <div class="dash-center">
+
+            <!-- 巨型主卡：本月支出最大，收入 / 结余做陪衬 -->
+            <div class="panel hero-card">
+              <div class="hero-head">
+                <span class="hero-caption">本月支出</span>
+                <span class="hero-month" id="hero-month-label">2026 年 10 月</span>
+              </div>
+              <div class="hero-main">
+                <span class="hero-currency">¥</span>
+                <span class="hero-number" id="hero-expense">0.00</span>
+              </div>
+              <div class="hero-meta">
+                <span>收入 <strong class="text-success" id="hero-income">¥0.00</strong></span>
+                <span class="hero-divider"></span>
+                <span>结余 <strong id="hero-net">¥0.00</strong></span>
+              </div>
             </div>
-          </div>
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">总支出</div>
-              <div class="stat-number text-danger" id="stat-expense">¥0.00</div>
-              <div class="stat-hint">已记录的支出合计</div>
+
+            <!-- 预算卡：环形进度 + 日均 + 剩余日均额度 -->
+            <div class="panel budget-card">
+              <div class="budget-left">
+                <div class="budget-ring-wrap">
+                  <svg class="budget-ring" viewBox="0 0 120 120" aria-hidden="true">
+                    <circle class="ring-track" cx="60" cy="60" r="52"></circle>
+                    <!-- 圆周长 2πr ≈ 326.73，script.js 用 stroke-dashoffset 画进度 -->
+                    <circle class="ring-arc" id="budget-ring-arc" cx="60" cy="60" r="52"
+                            stroke-dasharray="326.73" stroke-dashoffset="326.73"></circle>
+                  </svg>
+                  <div class="budget-ring-text">
+                    <strong id="budget-percent">0%</strong>
+                    <span>已用</span>
+                  </div>
+                </div>
+              </div>
+              <div class="budget-right">
+                <div class="budget-head">
+                  <span class="panel-title">本月预算</span>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="budget-edit-btn">改预算</button>
+                </div>
+                <div class="budget-line">
+                  <span class="budget-label">已花</span>
+                  <strong id="budget-spent">¥0.00</strong>
+                  <span class="budget-label">/ 预算</span>
+                  <strong id="budget-limit">¥0.00</strong>
+                </div>
+                <div class="budget-line budget-line-sub">
+                  <span class="budget-label">日均</span>
+                  <span id="budget-daily">¥0.00</span>
+                  <span class="budget-divider"></span>
+                  <span class="budget-label">剩余日均额度</span>
+                  <span id="budget-left">¥0.00</span>
+                </div>
+                <div class="budget-bar">
+                  <div class="budget-bar-fill" id="budget-bar-fill"></div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">总余额</div>
-              <div class="stat-number text-primary" id="stat-balance">¥0.00</div>
-              <div class="stat-hint">各账户余额之和</div>
+
+            <!-- 近 7 天账单：按天分组的卡片列表，取代旧的大表格 -->
+            <div class="panel recent-panel">
+              <div class="panel-head">
+                <span class="panel-title">近 7 天账单</span>
+                <span class="panel-sub" id="recent-summary">按天分组，点任意一条看详情</span>
+              </div>
+              <div class="recent-groups" id="recent-groups">
+                <p class="empty-cell">正在加载账单…</p>
+              </div>
             </div>
+
+            <!-- 全部账单：保留表格视图，支持账户筛选与搜索；行点击弹详情 -->
+            <div class="panel">
+              <div class="panel-head">
+                <span class="panel-title">全部账单</span>
+                <div class="panel-tools">
+                  <label class="form-label mb-0" for="filter-account">账户</label>
+                  <!-- 选项由 script.js 按大类用 optgroup 重建 -->
+                  <select id="filter-account" class="form-select form-select-sm">
+                    <option value="">全部账户</option>
+                    {% for a in accounts %}
+                    <option value="{{ a }}">{{ a }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0 records-table">
+                  <thead>
+                    <tr>
+                      <th class="col-time">时间</th>
+                      <th class="col-type">类型</th>
+                      <th>分类</th>
+                      <th class="col-account">账户</th>
+                      <th class="text-end col-amount">金额</th>
+                      <th class="col-note">备注</th>
+                    </tr>
+                  </thead>
+                  <tbody id="record-list">
+                    <tr id="empty-row">
+                      <td colspan="6" class="empty-cell">
+                        还没有记录，点右上角「+ 记一笔」开始吧
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
+
+          <!-- ---------- 右栏：日历 + 月结余 / 日均 + 当日明细 ---------- -->
+          <div class="dash-rail">
+
+            <div class="panel calendar-panel">
+              <div class="panel-head calendar-head">
+                <div class="calendar-toolbar">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev-year"
+                          data-bs-toggle="tooltip" title="上一年">&laquo;</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev"
+                          data-bs-toggle="tooltip" title="上一月">&lsaquo;</button>
+                  <span class="calendar-title" id="calendar-title">2026 年 10 月</span>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next"
+                          data-bs-toggle="tooltip" title="下一月">&rsaquo;</button>
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next-year"
+                          data-bs-toggle="tooltip" title="下一年">&raquo;</button>
+                </div>
+              </div>
+              <div class="panel-tools calendar-tools">
+                <span class="calendar-legend">
+                  <span class="legend-dot is-plus"></span>结余为正
+                  <span class="legend-dot is-minus"></span>当日超支
+                </span>
+                <button class="btn btn-sm btn-outline-primary" type="button" id="cal-year-btn">按年</button>
+              </div>
+
+              <!-- 月视图：底色=当天结余正负，深浅=金额相对本月峰值 -->
+              <div class="calendar-wrap" id="calendar-month">
+                <div class="calendar-week">
+                  <span>一</span><span>二</span><span>三</span><span>四</span>
+                  <span>五</span><span>六</span><span>日</span>
+                </div>
+                <div class="calendar-grid" id="calendar-grid"></div>
+              </div>
+
+              <!-- 年视图：12 个月的汇总格子，点某个月回到该月月视图 -->
+              <div class="calendar-year d-none" id="calendar-year">
+                <div class="year-grid" id="calendar-year-grid"></div>
+              </div>
+
+              <!-- 日历底部：所选范围的结余 / 日均支出 / 收支小计 -->
+              <div class="cal-footer">
+                <div class="cal-footer-main">
+                  <span class="cal-footer-label">结余</span>
+                  <strong class="cal-footer-net" id="cal-stat-net">¥0.00</strong>
+                </div>
+                <div class="cal-footer-sub">
+                  <span id="cal-range-label">2026 年 10 月</span>
+                  <span class="cal-footer-dot">·</span>
+                  <span>日均支出 <strong id="cal-stat-daily">¥0.00</strong></span>
+                  <span class="cal-footer-dot">·</span>
+                  <span class="text-success" id="cal-stat-income">¥0.00</span>
+                  <span class="text-danger" id="cal-stat-expense">¥0.00</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 当日 / 当月账单明细：小列表，点行看详情 -->
+            <div class="panel day-panel">
+              <div class="panel-head">
+                <span class="panel-title" id="day-title">账单明细</span>
+                <span class="panel-sub" id="day-sub">点日历上的某一天</span>
+              </div>
+              <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0 day-table">
+                  <thead>
+                    <tr>
+                      <th class="col-time">时间</th>
+                      <th>分类</th>
+                      <th class="text-end col-amount">金额</th>
+                      <th class="col-note">备注</th>
+                    </tr>
+                  </thead>
+                  <tbody id="day-records">
+                    <tr>
+                      <td colspan="4" class="empty-cell">还没有选择日期</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+
         </div>
-
-        <!-- 账单列表 -->
-        <div class="panel">
-          <div class="panel-head">
-            <span class="panel-title">账单流水</span>
-            <div class="panel-tools">
-              <label class="form-label mb-0" for="filter-account">账户</label>
-              <!-- 选项由 script.js 按大类用 optgroup 重建 -->
-              <select id="filter-account" class="form-select form-select-sm">
-                <option value="">全部账户</option>
-                {% for a in accounts %}
-                <option value="{{ a }}">{{ a }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-              <thead>
-                <tr>
-                  <th class="col-time">时间</th>
-                  <th class="col-type">类型</th>
-                  <th>分类</th>
-                  <th class="col-account">账户</th>
-                  <th class="text-end col-amount">金额</th>
-                  <th>备注</th>
-                  <th class="text-end col-action">操作</th>
-                </tr>
-              </thead>
-              <tbody id="record-list">
-                <tr id="empty-row">
-                  <td colspan="7" class="empty-cell">
-                    还没有记录，点右上角「+ 记一笔」开始吧
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-      </section>
-
-      <!-- ============ 日历 ============ -->
-      <section class="page" id="page-calendar">
-
-        <!-- 上：当前所选范围（月 / 年 / 某天）的收入、支出、结余 -->
-        <div class="row g-3 mb-4">
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">总收入</div>
-              <div class="stat-number text-success" id="cal-stat-income">¥0.00</div>
-              <div class="stat-hint" id="cal-range-label">2026 年 10 月</div>
-            </div>
-          </div>
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">总支出</div>
-              <div class="stat-number text-danger" id="cal-stat-expense">¥0.00</div>
-              <div class="stat-hint">所选范围内的支出合计</div>
-            </div>
-          </div>
-          <div class="col-12 col-md-4">
-            <div class="stat-card">
-              <div class="stat-label">结余</div>
-              <div class="stat-number text-primary" id="cal-stat-net">¥0.00</div>
-              <div class="stat-hint">收入 − 支出</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 日历主体：月视图 / 年视图切换 -->
-        <div class="panel">
-          <div class="panel-head">
-            <!-- 左：跨年 << >> + 年月切换 -->
-            <div class="calendar-toolbar">
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev-year" title="上一年">&laquo;</button>
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev">&lsaquo; 上一月</button>
-              <span class="calendar-title" id="calendar-title">2026 年 10 月</span>
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next">下一月 &rsaquo;</button>
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-next-year" title="下一年">&raquo;</button>
-            </div>
-            <!-- 右：热力图图例 + 年视图开关 -->
-            <div class="panel-tools">
-              <span class="calendar-legend">
-                <span class="legend-dot is-plus"></span>结余为正
-                <span class="legend-dot is-minus"></span>当日超支
-                <span class="legend-hint">颜色越深金额越大</span>
-              </span>
-              <button class="btn btn-sm btn-primary" type="button" id="cal-year-btn">按年查看</button>
-            </div>
-          </div>
-
-          <!-- 月视图：格子由 script.js 渲染（底色=当天结余正负，深浅=金额相对本月峰值） -->
-          <div class="calendar-wrap" id="calendar-month">
-            <div class="calendar-week">
-              <span>一</span><span>二</span><span>三</span><span>四</span>
-              <span>五</span><span>六</span><span>日</span>
-            </div>
-            <div class="calendar-grid" id="calendar-grid"></div>
-          </div>
-
-          <!-- 年视图：12 个月的汇总格子，点某个月回到该月月视图 -->
-          <div class="calendar-year d-none" id="calendar-year">
-            <div class="year-grid" id="calendar-year-grid"></div>
-          </div>
-        </div>
-
-        <!-- 下：选中日期（或选中月份）的详细账单 -->
-        <div class="panel">
-          <div class="panel-head">
-            <span class="panel-title" id="day-title">账单明细</span>
-            <span class="panel-sub" id="day-sub">点日历上的某一天，这里显示当天的账单</span>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
-              <thead>
-                <tr>
-                  <th class="col-time">时间</th>
-                  <th class="col-type">类型</th>
-                  <th>分类</th>
-                  <th class="col-account">账户</th>
-                  <th class="text-end col-amount">金额</th>
-                  <th>备注</th>
-                  <th class="text-end col-action">操作</th>
-                </tr>
-              </thead>
-              <tbody id="day-records">
-                <tr>
-                  <td colspan="7" class="empty-cell">还没有选择日期</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
       </section>
 
       <!-- ============ 资产 ============ -->
@@ -258,20 +348,19 @@
             </div>
           </div>
           <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0">
+            <table class="table table-hover align-middle mb-0 account-table">
               <thead>
                 <tr>
                   <th class="col-time">时间</th>
                   <th class="col-type">类型</th>
                   <th>分类</th>
                   <th class="text-end col-amount">金额</th>
-                  <th>备注</th>
-                  <th class="text-end col-action">操作</th>
+                  <th class="col-note">备注</th>
                 </tr>
               </thead>
               <tbody id="account-records">
                 <tr>
-                  <td colspan="6" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td>
+                  <td colspan="5" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td>
                 </tr>
               </tbody>
             </table>
@@ -394,6 +483,29 @@
   </div>
 </div>
 
+<!-- ================= 账单详情弹窗（点击表格行打开） ================= -->
+<div class="modal fade" id="record-detail-modal" tabindex="-1" aria-labelledby="record-detail-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="record-detail-title">账单详情</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <!-- 内容由 script.js 按记录逐行填充 -->
+        <div class="detail-grid" id="detail-body"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
+        <!-- 幽灵按钮：不刺眼，也不误触；Enter 等价于点「编辑」 -->
+        <button type="button" class="btn btn-outline-danger" id="detail-delete-btn">删除</button>
+        <button type="button" class="btn btn-outline-warning" id="detail-edit-btn">编辑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ================= 新增账户弹窗 ================= -->
 <div class="modal fade" id="account-modal" tabindex="-1" aria-labelledby="account-modal-title" aria-hidden="true" data-bs-keyboard="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -458,11 +570,27 @@
   </div>
 </div>
 
-<!-- Bootstrap 的 JS（弹窗靠它），必须在使用弹窗的标签之后加载 -->
+<!-- ================= 通知侧滑面板 ================= -->
+<div class="notification-backdrop d-none" id="notification-backdrop"></div>
+<aside class="notification-panel" id="notification-panel" aria-label="通知中心" aria-hidden="true">
+  <div class="notification-head">
+    <span class="panel-title">通知中心</span>
+    <button class="icon-btn" type="button" id="notification-close" aria-label="关闭通知">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="m6 6 12 12M18 6 6 18"></path>
+      </svg>
+    </button>
+  </div>
+  <div class="notification-list" id="notification-list">
+    <p class="empty-cell">正在加载通知…</p>
+  </div>
+</aside>
+
+<!-- Bootstrap 的 JS（弹窗 / Tooltip 靠它），必须在使用弹窗的标签之后加载 -->
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
 <!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
 <script src="/static/vendor/math.min.js"></script>
-<!-- 业务逻辑：切页、统计卡片、账单表格、记账弹窗、资产页、分类管理、日历 -->
+<!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
 <script src="/static/script.js"></script>
 
 </body>

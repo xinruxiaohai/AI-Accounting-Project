@@ -187,3 +187,53 @@
 
 
 
+
+## v0.06.2-DEV · 三栏看板 / 详情弹窗 / 通知中心 / 视觉修复（2026-10-27）
+
+**为什么要改**：旧版单列布局浪费 PC 宽屏；表格在小窗口里把「金额」「操作」挤出屏幕；
+满屏实心黄/红按钮扎眼；热力图底色一深就把文字刷白，红绿白混在一起没法看。
+
+**布局（index.html + style.css）**
+
+- 首页改 `.dash-grid`：中栏（巨型主卡 + 预算环 + 近 7 天分组 + 全部账单），右栏（日历 + 当日明细）。
+- 顶栏改为 `grid minmax(0,1fr) minmax(220px,460px) minmax(0,1fr)`：搜索框真正居中；右侧信封 / 月亮太阳 / + 记一笔。
+- 侧栏加汉堡折叠，`.app.is-collapsed` + `--sidebar-collapsed-width:76px`；<1200px 自动收起，用户手动选过就以 localStorage 为准。
+- 主题变量拆成 `:root` 与 `[data-theme="dark"]` 两套，`body` 加 transition，切主题不闪。
+- 全站 12 个图标按钮挂 `data-bs-toggle="tooltip"`，`delay: {show:500, hide:80}`，满足「悬停 0.5 秒才出现」。
+
+**表格响应式与详情弹窗（真正的痛点修复）**
+
+- 删掉最后一列「编辑 / 删除」按钮列，`records` 6 列 / `account` 5 列 / `day` 4 列，最后一列就是备注。
+- 行变 `<tr data-id tabindex="0">`，整行点击（含键盘 Enter / 空格）打开 `#record-detail-modal`；按钮用 `btn-outline-danger` / `btn-outline-warning` 幽灵样式。
+- 详情里 Esc 关闭、Enter 直接进编辑（按钮和输入框自己的 Enter 不被抢）。
+- `.records-table min-width:660px` + `.table-responsive`，1439px 隐藏「账户」列、1199px 隐藏「备注」列 —— 金额永远看得见。
+
+**日期热力图**
+
+- `HEAT_MAX_ALPHA = 0.35` 封顶，最深也只是淡色；删掉 `.cal-cell.is-deep` / `.year-cell.is-deep` 的 `color:#fff` 规则，结余固定深灰、收入绿、支出红。
+
+**通知中心全栈**
+
+- `database.py`：`notifications(id, title, content, image_url, publish_date)` + `list/create/delete` + `_seed_notifications()`（空表时插一条上线通知）。
+- `app.py`：`GET/POST /api/notifications`、`DELETE /api/notifications/<id>`、`POST /api/upload`（png/jpg/jpeg/gif/webp，≤5MB，uuid 重命名存 `static/uploads/`）、`GET /admin`。
+- `templates/admin.html`：开发者发布台，标题计数、contenteditable 富文本（B/I/U/列表/插图）、封面上传、发布时间可留空、右侧列表可删。
+- 前台：信封 → 右侧滑出 `.notification-panel`，倒序、图文混排（`sanitizeNoticeHtml()` 走 DOMParser 白名单再插入）、未读红点，打开面板即写 localStorage 已读。
+
+**前端重构（script.js）**
+
+- 新增 `recordRowHtml / accountRowHtml / listRowHtml` 去操作列；`onRowClick / onRowKeydown / onRecentClick` 事件委托。
+- 新增 `openRecordDetail / buildDetailBody / editFromDetail / deleteFromDetail`。
+- 新增 `readTheme / applyTheme / toggleTheme / readSidebarPref / applySidebar / toggleSidebar / onSearchInput / editBudget / loadNotifications / renderNotifications / openNotifications / closeNotifications / initTooltips`。
+- `refresh()` 原本调用**不存在的** `loadStatistics()`（会 ReferenceError，首页整块渲染不出来），已改为 `Promise.all([loadAccounts, loadRecords, loadCalendarRecords])` 后统一 `renderDashboard()`。
+
+**自测**
+
+- `python -m py_compile app.py database.py`、`node --check static/script.js` 通过。
+- Edge headless 打真实页面：`/` `/admin` `/api/notifications` `/api/records` `/api/statistics` `/api/accounts` `/api/categories` 全 200；通知表 1 条种子数据。
+- 同源 iframe 里模拟真人点击 19 条断言全 PASS：行点击开详情、Enter 进编辑、Esc 关闭、主题切换并落 localStorage、侧栏折叠、搜索过滤 13→5 条、信封开面板且红点消失、切到资产页 8 张账户卡；页面 0 报错。
+- 接口自测：POST 通知 → 上传 1×1 PNG → 访问该图 200 → DELETE 通知，数据回满。
+
+**遗留（后续 Step 再做）**
+
+- ECharts 饼图 / 30 天折线、右下悬浮球、分页、CSV 导出、PWA 都还没进这一版。
+- `style.css` 里仍有少量 v0.06.1 的旧规则（如 `.col-action` 宽度），已不再被 DOM 命中，留着不影响。

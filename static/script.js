@@ -1,23 +1,32 @@
 "use strict";
 
 /*
- * AI记账管家 · 前端逻辑（v0.06）
+ * AI记账管家 · 前端逻辑（v0.06.2）
  *
- * 这一版在 v0.05 的基础上加了四件事：
- *   1. 金额框支持算式（math.js 本地计算，保存时 amount 存结果、formula 存原式）
- *   2. 记账弹窗支持「转账」：隐藏分类，显示转入账户与手续费
- *   3. 所有 alert() 换成页面顶部的 Toast 轻提示
- *   4. 资产页「在此账户下记一笔」只预选账户，不再把账户锁死
+ * 这一版在 v0.06.1 的基础上完成一次结构性重构：
+ *   1. 首页变三栏 Dashboard：巨型本月支出卡 + 预算环 + 近 7 天分组卡片，右栏是日历
+ *   2. 账单不再有行内「编辑 / 删除」按钮，整行点击弹出详情，操作收进详情弹窗（幽灵按钮）
+ *   3. 深色模式（CSS 变量 + localStorage）、侧栏折叠、全局搜索、通知中心
+ *   4. 日历热力图透明度上限降到 0.35，文字始终深色，不再出现白字混搭
  */
 
 /* ==================== 常量 ==================== */
 
 const PAGE_TITLES = {
   home: "首页",
-  calendar: "日历",
   assets: "资产",
   profile: "我的",
 };
+
+// localStorage 键名集中在这里，避免各函数各写一份字符串
+const LS_THEME = "ai-accounting-theme";
+const LS_SIDEBAR = "ai-accounting-sidebar-collapsed";
+const LS_BUDGET = "ai-accounting-budget";
+const LS_NOTIFY_READ = "ai-accounting-notify-read-at";
+const DEFAULT_BUDGET = 3000;
+
+// 预算环半径 52，周长 2πr，画进度时用
+const BUDGET_RING_CIRCUMFERENCE = 326.73;
 
 const TYPE_LABELS = {
   expense: "支出",
@@ -459,11 +468,18 @@ const state = {
   calMonth: new Date().getMonth(),
   calSelectedDate: "",
   calendarRecords: [],
+  // v0.06.2：全局搜索词、通知缓存、预算上限（预算同步存 localStorage）
+  searchQuery: "",
+  notifications: [],
+  budget: DEFAULT_BUDGET,
+  // 详情弹窗当前展示的账单 id，编辑 / 删除都以它为准
+  detailRecordId: null,
 };
 
 let recordModal = null;
 let accountModal = null;
 let categoryModal = null;
+let recordDetailModal = null;
 
 /* ==================== 金额 / 公式 ==================== */
 
@@ -939,7 +955,7 @@ function clearDetail() {
   state.detailRecords = [];
   $("detail-title").textContent = "账户流水";
   $("quick-add-btn").disabled = true;
-  $("account-records").innerHTML = emptyStateHtml(6, "先在上方点一个账户，这里会显示它的流水");
+  $("account-records").innerHTML = emptyStateHtml(5, "先在上方点一个账户，这里会显示它的流水");
 }
 
 async function selectAccount(name) {
@@ -948,7 +964,7 @@ async function selectAccount(name) {
   $("quick-add-btn").disabled = false;
   renderAccountGroups();
 
-  const finish = beginTableLoad($("account-records"), 6);
+  const finish = beginTableLoad($("account-records"), 5);
   try {
     const data = await api("/api/records?account=" + encodeURIComponent(name));
     state.detailRecords = data.records || [];
@@ -958,17 +974,266 @@ async function selectAccount(name) {
   }
 }
 
-/* ==================== 统计卡片 ==================== */
+/* ==================== 三栏看板：主卡 / 预算 / 近 7 天 ==================== */
 
-async function loadStatistics() {
-  const data = await api("/api/statistics");
-  $("stat-income").textContent = money(data.income_total);
-  $("stat-expense").textContent = money(data.expense_total);
+/** 今天所在自然月的账单（主卡固定展示「本月」，不随日历导航变化） */
+function currentMonthRecords() {
+  const today = new Date();
+  return recordsOfMonth(today.getFullYear(), today.getMonth());
+}
 
-  const balance = $("stat-balance");
-  balance.textContent = money(data.balance_total);
-  // 余额是负的就说人话：红色提醒，别装作没事
-  balance.className = Number(data.balance_total) < 0 ? "stat-number text-danger" : "stat-number text-primary";
+/** 本月已过天数（含今天），算日均用；至少 1，避免除 0 */
+function monthDaysElapsed() {
+  return Math.max(1, new Date().getDate());
+}
+
+/** 中栏主卡：本月支出最大，收入 / 结余做陪衬 */
+function renderHero() {
+  const today = new Date();
+  const summary = summarize(currentMonthRecords());
+
+  const label = $("hero-month-label");
+  if (label) {
+    label.textContent = today.getFullYear() + " 年 " + (today.getMonth() + 1) + " 月";
+  }
+
+  if ($("hero-expense")) {
+    $("hero-expense").textContent = money(summary.expense);
+  }
+  if ($("hero-income")) {
+    $("hero-income").textContent = money(summary.income);
+  }
+  if ($("hero-net")) {
+    $("hero-net").textContent = money(summary.net);
+    $("hero-net").classList.toggle("is-negative", summary.net < 0);
+  }
+}
+
+/** 预算上限：localStorage 里没有（或被改坏了）就用默认 3000 */
+function readBudget() {
+  const saved = Number(localStorage.getItem(LS_BUDGET));
+  return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_BUDGET;
+}
+
+/** 预算卡：环形进度 + 日均 + 剩余日均额度。超支时进度条与数字标红 */
+function renderBudget() {
+  const summary = summarize(currentMonthRecords());
+  const spent = summary.expense;
+  const limit = state.budget;
+  const ratio = limit > 0 ? Math.min(1, spent / limit) : 0;
+
+  const arc = $("budget-ring-arc");
+  if (arc) {
+    // stroke-dashoffset 越小，画出来的圆弧越长：满额时偏移 0
+    arc.setAttribute(
+      "stroke-dashoffset",
+      String(BUDGET_RING_CIRCUMFERENCE * (1 - ratio))
+    );
+  }
+
+  if ($("budget-percent")) {
+    $("budget-percent").textContent = Math.round(ratio * 100) + "%";
+  }
+  if ($("budget-spent")) {
+    $("budget-spent").textContent = money(spent);
+  }
+  if ($("budget-limit")) {
+    $("budget-limit").textContent = money(limit);
+  }
+
+  const today = new Date();
+  const daysElapsed = monthDaysElapsed();
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const daysLeft = Math.max(0, daysInMonth - daysElapsed);
+
+  const daily = spent / daysElapsed;
+  const leftDaily = daysLeft > 0 ? Math.max(0, limit - spent) / daysLeft : 0;
+  if ($("budget-daily")) {
+    $("budget-daily").textContent = money(daily);
+  }
+  if ($("budget-left")) {
+    $("budget-left").textContent = money(leftDaily);
+  }
+
+  const fill = $("budget-bar-fill");
+  if (fill) {
+    fill.style.width = Math.round(ratio * 100) + "%";
+  }
+
+  const card = document.querySelector(".budget-card");
+  if (card) {
+    card.classList.toggle("is-over", spent > limit);
+  }
+}
+
+/* ---------- 全局搜索 ---------- */
+
+/** 一条账单是否命中搜索词：分类名、备注、账户、金额、日期、类型都算 */
+function matchesQuery(record, query) {
+  if (!query) {
+    return true;
+  }
+  const text = [
+    record.category,
+    record.note,
+    record.account,
+    record.to_account,
+    String(record.amount),
+    String(record.fee || 0),
+    displayDate(record.date),
+    TYPE_LABELS[record.type] || "",
+  ]
+    .join(" ")
+    .toLowerCase();
+  return text.indexOf(query) !== -1;
+}
+
+/** 首页「全部账单」表格用的数据：账户筛选由后端做，搜索在本地做 */
+function filteredRecords() {
+  const query = state.searchQuery.trim().toLowerCase();
+  return state.allRecords.filter(function (record) {
+    return matchesQuery(record, query);
+  });
+}
+
+/* ---------- 近 7 天分组卡片 ---------- */
+
+/** 在 YYYY-MM-DD 上加减天数，返回同样格式。不碰时区，纯字符串进 / 字符串出 */
+function shiftDateKey(dateKey, delta) {
+  const parts = dateKey.split("-").map(Number);
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  date.setDate(date.getDate() + delta);
+  return (
+    date.getFullYear() + "-" + pad2(date.getMonth() + 1) + "-" + pad2(date.getDate())
+  );
+}
+
+function weekdayText(dateKey) {
+  const parts = dateKey.split("-").map(Number);
+  const names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+  return names[new Date(parts[0], parts[1] - 1, parts[2]).getDay()];
+}
+
+/** 近 7 天里的一条账单（点击整行 → 详情弹窗） */
+function recentRowHtml(record) {
+  const timeText = displayDate(record.date).slice(11) || "00:00";
+  const note = record.note
+    ? '<span class="recent-note">' + escapeHtml(record.note) + "</span>"
+    : "";
+  return (
+    '<button class="recent-row" type="button" data-id="' +
+    record.id +
+    '">' +
+    '<span class="recent-meta">' +
+    '<span class="recent-time">' +
+    escapeHtml(timeText) +
+    "</span>" +
+    '<span class="recent-label">' +
+    categoryLabel(record) +
+    "</span>" +
+    note +
+    "</span>" +
+    '<span class="recent-amount">' +
+    amountCellHtml(record) +
+    "</span>" +
+    "</button>"
+  );
+}
+
+/** 近 7 天账单：按天分组，今天 / 昨天优先，日期新的在上 */
+function renderRecentGroups() {
+  const box = $("recent-groups");
+  if (!box) {
+    return;
+  }
+
+  const query = state.searchQuery.trim().toLowerCase();
+  const todayKey = todayText();
+  const startKey = shiftDateKey(todayKey, -6);
+  const yesterdayKey = shiftDateKey(todayKey, -1);
+
+  const recent = state.calendarRecords.filter(function (record) {
+    const key = dateKeyOf(record);
+    return key >= startKey && key <= todayKey && matchesQuery(record, query);
+  });
+
+  const groups = [];
+  const index = {};
+  recent.forEach(function (record) {
+    const key = dateKeyOf(record);
+    if (!index[key]) {
+      index[key] = { key: key, records: [] };
+      groups.push(index[key]);
+    }
+    index[key].records.push(record);
+  });
+  groups.sort(function (a, b) {
+    return b.key.localeCompare(a.key);
+  });
+
+  if ($("recent-summary")) {
+    $("recent-summary").textContent = query
+      ? "搜索「" + state.searchQuery.trim() + "」命中的近 7 天账单"
+      : "近 7 天共 " + recent.length + " 笔，点任意一条看详情";
+  }
+
+  if (!groups.length) {
+    box.innerHTML = emptyBlockHtml(
+      query ? "近 7 天没有匹配的账单" : "近 7 天还没有记账，点右上角「+ 记一笔」"
+    );
+    return;
+  }
+
+  box.innerHTML = groups
+    .map(function (group) {
+      const summary = summarize(group.records);
+      let dayLabel;
+      if (group.key === todayKey) {
+        dayLabel = "今天";
+      } else if (group.key === yesterdayKey) {
+        dayLabel = "昨天";
+      } else {
+        dayLabel = group.key.slice(5).replace("-", " 月 ") + " 日";
+      }
+
+      const rows = group.records
+        .slice()
+        .sort(function (a, b) {
+          return String(displayDate(b.date)).localeCompare(String(displayDate(a.date)));
+        })
+        .map(recentRowHtml)
+        .join("");
+
+      return (
+        '<section class="recent-group">' +
+        '<div class="recent-group-head">' +
+        '<span class="recent-day">' +
+        dayLabel +
+        "<em>" +
+        group.key.slice(5) +
+        " " +
+        weekdayText(group.key) +
+        "</em></span>" +
+        '<span class="recent-day-total">支 ' +
+        money(summary.expense) +
+        " / 收 " +
+        money(summary.income) +
+        "</span>" +
+        "</div>" +
+        '<div class="recent-rows">' +
+        rows +
+        "</div>" +
+        "</section>"
+      );
+    })
+    .join("");
+}
+
+/** 数据都拉回来之后，一次性刷新三栏看板 */
+function renderDashboard() {
+  renderHero();
+  renderBudget();
+  renderRecentGroups();
 }
 
 /* ==================== 账单列表 ==================== */
@@ -985,92 +1250,98 @@ function amountCellHtml(record) {
   return '<span class="text-danger">-' + money(record.amount) + "</span>";
 }
 
-function actionCellHtml(record) {
+/**
+ * v0.06.2：表格里的一行。整行可点 → 弹出「账单详情」，
+ * 行末不再有实心黄 / 红的编辑删除按钮（痛点：满屏刺眼按钮 + 容易误触）。
+ */
+function recordRowHtml(record) {
   return (
-    '<button class="btn btn-sm btn-warning" type="button" data-action="edit" data-id="' +
+    '<tr data-id="' +
     record.id +
-    '">编辑</button>' +
-    '<button class="btn btn-sm btn-danger ms-1" type="button" data-action="delete" data-id="' +
-    record.id +
-    '">删除</button>'
+    '" tabindex="0">' +
+    '<td class="col-time">' +
+    escapeHtml(displayDate(record.date)) +
+    "</td>" +
+    '<td class="col-type">' +
+    (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
+    "</td>" +
+    "<td>" +
+    categoryLabel(record) +
+    "</td>" +
+    '<td class="col-account">' +
+    escapeHtml(record.account) +
+    "</td>" +
+    '<td class="text-end col-amount">' +
+    amountCellHtml(record) +
+    "</td>" +
+    '<td class="note-cell">' +
+    (record.note ? escapeHtml(record.note) : "-") +
+    "</td>" +
+    "</tr>"
   );
 }
 
 function renderRecords() {
   const tbody = $("record-list");
-  tbody.innerHTML = "";
-
-  if (!state.allRecords.length) {
-    tbody.innerHTML = emptyStateHtml(7, "还没有记录，点右上角「+ 记一笔」开始吧");
+  if (!tbody) {
     return;
   }
 
-  state.allRecords.forEach(function (record) {
-    const row = document.createElement("tr");
-    row.setAttribute("data-id", String(record.id));
-    row.innerHTML =
-      '<td class="col-time">' +
-      escapeHtml(displayDate(record.date)) +
-      "</td>" +
-      '<td class="col-type">' +
-      (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
-      "</td>" +
-      "<td>" +
-      categoryLabel(record) +
-      "</td>" +
-      "<td>" +
-      escapeHtml(record.account) +
-      "</td>" +
-      '<td class="text-end col-amount">' +
-      amountCellHtml(record) +
-      "</td>" +
-      '<td class="note-cell">' +
-      (record.note ? escapeHtml(record.note) : "-") +
-      "</td>" +
-      '<td class="text-end col-action">' +
-      actionCellHtml(record) +
-      "</td>";
-    tbody.appendChild(row);
-  });
+  // 搜索词在本地过滤，账户筛选已经由后端做过
+  const records = filteredRecords();
+  const query = state.searchQuery.trim();
+
+  if (!records.length) {
+    tbody.innerHTML = query
+      ? emptyStateHtml(6, "没有匹配「" + escapeHtml(query) + "」的账单，换个关键词试试")
+      : emptyStateHtml(6, "还没有记录，点右上角「+ 记一笔」开始吧");
+    return;
+  }
+
+  tbody.innerHTML = records.map(recordRowHtml).join("");
+}
+
+/** 账户流水的一行（5 列：时间 / 类型 / 分类 / 金额 / 备注） */
+function accountRowHtml(record) {
+  return (
+    '<tr data-id="' +
+    record.id +
+    '" tabindex="0">' +
+    '<td class="col-time">' +
+    escapeHtml(displayDate(record.date)) +
+    "</td>" +
+    '<td class="col-type">' +
+    (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
+    "</td>" +
+    "<td>" +
+    categoryLabel(record) +
+    "</td>" +
+    '<td class="text-end col-amount">' +
+    amountCellHtml(record) +
+    "</td>" +
+    '<td class="note-cell">' +
+    (record.note ? escapeHtml(record.note) : "-") +
+    "</td>" +
+    "</tr>"
+  );
 }
 
 function renderAccountRecords() {
   const tbody = $("account-records");
-  tbody.innerHTML = "";
-
-  if (!state.detailRecords.length) {
-    tbody.innerHTML = emptyStateHtml(6, "这个账户还没有流水");
+  if (!tbody) {
     return;
   }
 
-  state.detailRecords.forEach(function (record) {
-    const row = document.createElement("tr");
-    row.setAttribute("data-id", String(record.id));
-    row.innerHTML =
-      '<td class="col-time">' +
-      escapeHtml(displayDate(record.date)) +
-      "</td>" +
-      '<td class="col-type">' +
-      (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
-      "</td>" +
-      "<td>" +
-      categoryLabel(record) +
-      "</td>" +
-      '<td class="text-end col-amount">' +
-      amountCellHtml(record) +
-      "</td>" +
-      '<td class="note-cell">' +
-      (record.note ? escapeHtml(record.note) : "-") +
-      "</td>" +
-      '<td class="text-end col-action">' +
-      actionCellHtml(record) +
-      "</td>";
-    tbody.appendChild(row);
-  });
+  if (!state.detailRecords.length) {
+    tbody.innerHTML = emptyStateHtml(5, "这个账户还没有流水");
+    return;
+  }
+
+  tbody.innerHTML = state.detailRecords.map(accountRowHtml).join("");
 }
 
 async function loadRecords() {
-  const finish = beginTableLoad($("record-list"), 7);
+  const finish = beginTableLoad($("record-list"), 6);
   try {
     const account = $("filter-account").value;
     const query = account ? "?account=" + encodeURIComponent(account) : "";
@@ -1088,7 +1359,7 @@ async function refreshDetail() {
   if (!state.detailAccount) {
     return;
   }
-  const finish = beginTableLoad($("account-records"), 6);
+  const finish = beginTableLoad($("account-records"), 5);
   try {
     const data = await api("/api/records?account=" + encodeURIComponent(state.detailAccount));
     state.detailRecords = data.records || [];
@@ -1203,29 +1474,20 @@ function renderCalendarStats(label, records) {
   return summary;
 }
 
-/** 表格一行（7 列），日历明细和首页列表共用同一套渲染规则 */
+/** 日历「当日明细」一行（4 列：时间 / 分类 / 金额 / 备注） */
 function listRowHtml(record) {
   return (
     '<td class="col-time">' +
     escapeHtml(displayDate(record.date)) +
     "</td>" +
-    '<td class="col-type">' +
-    (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
-    "</td>" +
     "<td>" +
     categoryLabel(record) +
-    "</td>" +
-    "<td>" +
-    escapeHtml(record.account) +
     "</td>" +
     '<td class="text-end col-amount">' +
     amountCellHtml(record) +
     "</td>" +
     '<td class="note-cell">' +
     (record.note ? escapeHtml(record.note) : "-") +
-    "</td>" +
-    '<td class="text-end col-action">' +
-    actionCellHtml(record) +
     "</td>"
   );
 }
@@ -1235,25 +1497,22 @@ function renderDayRecords(records, emptyText) {
   if (!tbody) {
     return;
   }
-  tbody.innerHTML = "";
 
   if (!records.length) {
-    tbody.innerHTML = emptyStateHtml(7, emptyText);
+    tbody.innerHTML = emptyStateHtml(4, emptyText);
     return;
   }
 
   // 同一天的账单按时间正序，看起来更符合直觉
-  records
+  tbody.innerHTML = records
     .slice()
     .sort(function (a, b) {
       return String(displayDate(a.date)).localeCompare(String(displayDate(b.date)));
     })
-    .forEach(function (record) {
-      const row = document.createElement("tr");
-      row.setAttribute("data-id", String(record.id));
-      row.innerHTML = listRowHtml(record);
-      tbody.appendChild(row);
-    });
+    .map(function (record) {
+      return '<tr data-id="' + record.id + '" tabindex="0">' + listRowHtml(record) + "</tr>";
+    })
+    .join("");
 }
 
 function setDetailHead(title, sub) {
@@ -1272,25 +1531,10 @@ const HEAT_RGB = {
   plus: [5, 150, 105],
   minus: [220, 38, 38],
 };
-const HEAT_MIN_ALPHA = 0.12;
-const HEAT_MAX_ALPHA = 0.85;
-// 白字阈值：叠色后的相对亮度低于它，就认为底够深，文字转白
-const HEAT_DEEP_LUMINANCE = 0.3;
-
-/** sRGB 单通道线性化，算相对亮度用 */
-function linearChannel(value) {
-  const c = value / 255;
-  return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
-
-/** 相对亮度（WCAG 公式），这里只用来比较「深不深」 */
-function relativeLuminance(rgb) {
-  return (
-    0.2126 * linearChannel(rgb[0]) +
-    0.7152 * linearChannel(rgb[1]) +
-    0.0722 * linearChannel(rgb[2])
-  );
-}
+// v0.06.2：透明度上限压到 0.35。底色最深处也只是浅浅一层，
+// 深色文字在任何格子上都看得清，不再出现「底色一深就把字刷白」的混搭。
+const HEAT_MIN_ALPHA = 0.1;
+const HEAT_MAX_ALPHA = 0.35;
 
 /**
  * 当前视图里最大的 |结余|，热力深浅按它归一化。
@@ -1318,29 +1562,19 @@ function heatTone(net, peak) {
     return null;
   }
   const ratio = Math.min(1, Math.abs(amount) / peak);
-  const alpha = HEAT_MIN_ALPHA + (HEAT_MAX_ALPHA - HEAT_MIN_ALPHA) * ratio;
-  const rgb = HEAT_RGB[amount > 0 ? "plus" : "minus"];
-  // 半透明色实际叠在卡片白底上，按「白底 + alpha」估算真实亮度，决定文字黑白
-  const blended = rgb.map(function (channel) {
-    return 255 * (1 - alpha) + channel * alpha;
-  });
   return {
-    alpha: alpha,
-    rgb: rgb,
-    deep: relativeLuminance(blended) < HEAT_DEEP_LUMINANCE,
+    alpha: HEAT_MIN_ALPHA + (HEAT_MAX_ALPHA - HEAT_MIN_ALPHA) * ratio,
+    rgb: HEAT_RGB[amount > 0 ? "plus" : "minus"],
   };
 }
 
-/** 把热力色刷到格子 / 年卡上：背景色 + 深底时挂 is-deep 让文字转白 */
+/** 把热力色刷到格子 / 年卡上。文字颜色始终交给 CSS（收绿、支红、结余深灰），不随底色反转 */
 function paintHeat(cell, net, peak) {
   const tone = heatTone(net, peak);
   if (!tone) {
     return;
   }
   cell.classList.add("has-heat");
-  if (tone.deep) {
-    cell.classList.add("is-deep");
-  }
   cell.style.backgroundColor =
     "rgba(" + tone.rgb.join(", ") + ", " + tone.alpha.toFixed(3) + ")";
 }
@@ -1862,29 +2096,138 @@ async function removeRecord(recordId) {
   }
 }
 
-function onRecordListClick(event) {
-  const button = event.target.closest("[data-action]");
-  if (!button) {
-    return;
-  }
-  const recordId = Number(button.getAttribute("data-id"));
-  if (button.getAttribute("data-action") === "edit") {
-    const record =
-      state.allRecords.find(function (item) {
-        return item.id === recordId;
-      }) ||
-      state.detailRecords.find(function (item) {
-        return item.id === recordId;
-      }) ||
-      state.calendarRecords.find(function (item) {
-        return item.id === recordId;
-      });
-    if (record) {
-      openRecordModal({ record: record });
+/* ==================== 账单详情弹窗（v0.06.2） ==================== */
+
+/** 从任意一份缓存里找账单：首页表格 / 账户流水 / 日历 / 近 7 天共用 */
+function findRecordById(recordId) {
+  const pools = [state.allRecords, state.detailRecords, state.calendarRecords];
+  for (let i = 0; i < pools.length; i += 1) {
+    const found = pools[i].find(function (item) {
+      return item.id === recordId;
+    });
+    if (found) {
+      return found;
     }
+  }
+  return null;
+}
+
+function detailRowHtml(key, valueHtml, extraClass) {
+  return (
+    '<span class="detail-key">' +
+    key +
+    "</span>" +
+    '<span class="detail-val' +
+    (extraClass ? " " + extraClass : "") +
+    '">' +
+    valueHtml +
+    "</span>"
+  );
+}
+
+/** 详情弹窗的正文：一条账单的全部字段 */
+function buildDetailBody(record) {
+  const amount = cents(record.amount);
+  const sign = record.type === "income" ? "+" : record.type === "expense" ? "-" : "";
+  let amountClass = "";
+  if (record.type === "income") {
+    amountClass = "is-plus";
+  } else if (record.type === "expense") {
+    amountClass = "is-minus";
+  }
+
+  let html = "";
+  html += detailRowHtml("类型", TYPE_BADGES[record.type] || "-");
+  html += detailRowHtml("金额", sign + money(amount), "is-amount " + amountClass);
+  html += detailRowHtml("分类", categoryLabel(record));
+  html += detailRowHtml("账户", escapeHtml(record.account || "-"));
+  if (record.type === "transfer") {
+    html += detailRowHtml("转入", escapeHtml(record.to_account || "-"));
+    html += detailRowHtml("手续费", money(record.fee || 0));
+  }
+  html += detailRowHtml("时间", escapeHtml(displayDate(record.date)));
+  html += detailRowHtml("备注", record.note ? escapeHtml(record.note) : "—");
+  html += detailRowHtml("编号", "#" + record.id);
+  html += '<span class="detail-tip">按 Esc 关闭，按 Enter 直接编辑这条账单</span>';
+  return html;
+}
+
+function openRecordDetail(recordId) {
+  const record = findRecordById(Number(recordId));
+  if (!record) {
+    toast("找不到这条账单，可能已经被删除了", "error");
     return;
   }
+  state.detailRecordId = record.id;
+  if ($("detail-body")) {
+    $("detail-body").innerHTML = buildDetailBody(record);
+  }
+  if ($("record-detail-title")) {
+    $("record-detail-title").textContent = "账单详情 #" + record.id;
+  }
+  if (recordDetailModal) {
+    recordDetailModal.show();
+  }
+}
+
+function closeRecordDetail() {
+  if (recordDetailModal) {
+    recordDetailModal.hide();
+  }
+}
+
+/** Enter / 点「编辑」：关掉详情，直接进记账弹窗的编辑态 */
+function editFromDetail() {
+  const record = state.detailRecordId ? findRecordById(state.detailRecordId) : null;
+  if (!record) {
+    return;
+  }
+  closeRecordDetail();
+  openRecordModal({ record: record });
+}
+
+function deleteFromDetail() {
+  const recordId = state.detailRecordId;
+  if (!recordId) {
+    return;
+  }
+  // 先收起详情再确认，避免两层遮罩叠在一起
+  closeRecordDetail();
   removeRecord(recordId);
+}
+
+/** 表格整行点击 → 详情；行内真有按钮时让它自己处理 */
+function onRowClick(event) {
+  if (event.target.closest("button, a, input, select, label")) {
+    return;
+  }
+  const row = event.target.closest("tr[data-id]");
+  if (!row) {
+    return;
+  }
+  openRecordDetail(row.getAttribute("data-id"));
+}
+
+/** 键盘可达性：行有 tabindex，Enter / 空格也能打开详情 */
+function onRowKeydown(event) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  const row = event.target.closest("tr[data-id]");
+  if (!row || event.target !== row) {
+    return;
+  }
+  event.preventDefault();
+  openRecordDetail(row.getAttribute("data-id"));
+}
+
+/** 近 7 天卡片列表：整条按钮就是一行账单 */
+function onRecentClick(event) {
+  const row = event.target.closest(".recent-row[data-id]");
+  if (!row) {
+    return;
+  }
+  openRecordDetail(row.getAttribute("data-id"));
 }
 
 /* ==================== 分类增删 ==================== */
@@ -2014,11 +2357,318 @@ function switchPage(page) {
   });
 }
 
+/* ==================== 主题（深色模式） ==================== */
+
+function readTheme() {
+  const saved = localStorage.getItem(LS_THEME);
+  if (saved === "dark" || saved === "light") {
+    return saved;
+  }
+  // 没存过就跟随系统
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+function applyTheme(theme) {
+  const dark = theme === "dark";
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  localStorage.setItem(LS_THEME, dark ? "dark" : "light");
+
+  const moon = document.querySelector(".icon-moon");
+  const sun = document.querySelector(".icon-sun");
+  if (moon) {
+    moon.classList.toggle("d-none", dark);
+  }
+  if (sun) {
+    sun.classList.toggle("d-none", !dark);
+  }
+
+  // 提示文案统一用中性的「切换深色 / 浅色模式」（见 index.html），
+  // 这里绝不 dispose / 重建 Tooltip：淡出过程中销毁实例会让 Bootstrap 的
+  // _activeTrigger 变成 undefined，残留回调再调 _isWithActiveTrigger 就抛 TypeError。
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute("data-theme") === "dark";
+  applyTheme(current ? "light" : "dark");
+}
+
+/* ==================== 侧栏折叠 ==================== */
+
+function readSidebarPref() {
+  const saved = localStorage.getItem(LS_SIDEBAR);
+  return saved === "collapsed" || saved === "expanded" ? saved : "";
+}
+
+/** 用户手动选过就听用户的；没选过则 <1200px 自动收成纯图标 */
+function applySidebar() {
+  const pref = readSidebarPref();
+  const collapsed = pref ? pref === "collapsed" : window.innerWidth < 1200;
+  const app = $("app");
+  if (app) {
+    app.classList.toggle("is-collapsed", collapsed);
+  }
+  const button = $("sidebar-toggle");
+  if (button) {
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+}
+
+function toggleSidebar() {
+  const app = $("app");
+  if (!app) {
+    return;
+  }
+  const collapsed = app.classList.contains("is-collapsed");
+  localStorage.setItem(LS_SIDEBAR, collapsed ? "expanded" : "collapsed");
+  applySidebar();
+}
+
+/* ==================== 全局搜索 ==================== */
+
+function onSearchInput() {
+  const input = $("global-search");
+  state.searchQuery = input ? input.value || "" : "";
+  renderRecords();
+  renderRecentGroups();
+}
+
+/* ==================== 预算 ==================== */
+
+function editBudget() {
+  const input = window.prompt("设置本月预算上限（元）", String(cents(state.budget)));
+  if (input === null) {
+    return;
+  }
+  const value = Number(String(input).trim());
+  if (!Number.isFinite(value) || value <= 0) {
+    toast("预算要填一个大于 0 的数字", "error");
+    return;
+  }
+  state.budget = cents(value);
+  localStorage.setItem(LS_BUDGET, String(state.budget));
+  renderBudget();
+  toast("本月预算已改为 " + money(state.budget), "success");
+}
+
+/* ==================== 通知中心 ==================== */
+
+function readReadIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_NOTIFY_READ) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function saveReadIds(ids) {
+  // 只留最近 200 个，防止 localStorage 越攒越大
+  localStorage.setItem(LS_NOTIFY_READ, JSON.stringify(ids.slice(-200)));
+}
+
+/**
+ * 通知正文允许富文本（/admin 的编辑器产出），渲染前过一遍白名单：
+ * 去掉 script / iframe / 事件属性 / javascript: 链接。
+ */
+function sanitizeNoticeHtml(html) {
+  const text = String(html || "");
+  if (!text) {
+    return "";
+  }
+  const doc = new DOMParser().parseFromString("<div>" + text + "</div>", "text/html");
+  const root = doc.body.firstChild;
+  if (!root) {
+    return "";
+  }
+  root
+    .querySelectorAll("script, style, iframe, object, embed, link, meta, form, input, button")
+    .forEach(function (node) {
+      node.remove();
+    });
+  root.querySelectorAll("*").forEach(function (node) {
+    Array.prototype.slice.call(node.attributes).forEach(function (attr) {
+      const name = String(attr.name || "").toLowerCase();
+      const value = String(attr.value || "").replace(/\s+/g, "").toLowerCase();
+      if (name.indexOf("on") === 0) {
+        node.removeAttribute(attr.name);
+      } else if ((name === "href" || name === "src") && value.indexOf("javascript:") === 0) {
+        node.removeAttribute(attr.name);
+      }
+    });
+  });
+  return root.innerHTML;
+}
+
+function notificationsUnreadCount() {
+  const readIds = readReadIds();
+  return (state.notifications || []).filter(function (item) {
+    return readIds.indexOf(item.id) === -1;
+  }).length;
+}
+
+function updateNotifyDot() {
+  const dot = $("notify-dot");
+  if (!dot) {
+    return;
+  }
+  dot.classList.toggle("d-none", notificationsUnreadCount() === 0);
+}
+
+function renderNotifications() {
+  const box = $("notification-list");
+  if (!box) {
+    return;
+  }
+  const list = state.notifications || [];
+  if (!list.length) {
+    box.innerHTML = emptyBlockHtml("还没有通知，管理员在 /admin 发布后会出现在这里");
+    return;
+  }
+
+  const readIds = readReadIds();
+  box.innerHTML = list
+    .map(function (item) {
+      const isNew = readIds.indexOf(item.id) === -1;
+      const dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
+      const content = sanitizeNoticeHtml(item.content);
+      const cover = item.image_url
+        ? '<img class="notice-cover" src="' +
+          escapeHtml(item.image_url) +
+          '" alt="通知配图" loading="lazy">'
+        : "";
+
+      return (
+        '<article class="notice-item' +
+        (isNew ? " is-new" : "") +
+        '">' +
+        '<div class="notice-item-head">' +
+        '<span class="notice-title">' +
+        escapeHtml(item.title) +
+        "</span>" +
+        '<span class="notice-date">' +
+        escapeHtml(dateText) +
+        "</span>" +
+        "</div>" +
+        (content ? '<div class="notice-content">' + content + "</div>" : "") +
+        cover +
+        "</article>"
+      );
+    })
+    .join("");
+}
+
+async function loadNotifications() {
+  try {
+    const data = await api("/api/notifications");
+    state.notifications = data.notifications || [];
+  } catch (error) {
+    state.notifications = [];
+  }
+  renderNotifications();
+  updateNotifyDot();
+}
+
+function openNotifications() {
+  const panel = $("notification-panel");
+  const backdrop = $("notification-backdrop");
+  if (panel) {
+    panel.classList.add("is-open");
+    panel.setAttribute("aria-hidden", "false");
+  }
+  if (backdrop) {
+    backdrop.classList.remove("d-none");
+    window.requestAnimationFrame(function () {
+      backdrop.classList.add("is-open");
+    });
+  }
+  renderNotifications();
+  markNotificationsRead();
+}
+
+function closeNotifications() {
+  const panel = $("notification-panel");
+  const backdrop = $("notification-backdrop");
+  if (panel) {
+    panel.classList.remove("is-open");
+    panel.setAttribute("aria-hidden", "true");
+  }
+  if (backdrop) {
+    backdrop.classList.remove("is-open");
+    window.setTimeout(function () {
+      backdrop.classList.add("d-none");
+    }, 220);
+  }
+}
+
+/** 打开面板就算已读：红点消失，localStorage 记住 */
+function markNotificationsRead() {
+  const readIds = readReadIds();
+  (state.notifications || []).forEach(function (item) {
+    if (readIds.indexOf(item.id) === -1) {
+      readIds.push(item.id);
+    }
+  });
+  saveReadIds(readIds);
+  updateNotifyDot();
+}
+
+/* ==================== 全站 Tooltip ==================== */
+
+function initTooltips() {
+  if (!window.bootstrap || !bootstrap.Tooltip) {
+    return;
+  }
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (element) {
+    if (bootstrap.Tooltip.getInstance(element)) {
+      return;
+    }
+    // 契约要求：悬停 0.5s 才出现，移开很快就收
+    new bootstrap.Tooltip(element, {
+      delay: { show: 500, hide: 80 },
+      trigger: "hover focus",
+    });
+  });
+}
+
+function notifyComingSoon(name) {
+  toast(name + "功能还在开发中，后续版本见", "success");
+}
+
+/**
+ * 点掉的按钮立刻把它的 Tooltip 收起来。
+ * 不处理的话：hover 触发的浮窗要等 hide 延时（还叠了 Bootstrap 的淡出），
+ * 用户点了按钮，浮窗会「卡」在页面上好几秒，还会盖住刚打开的弹窗。
+ */
+function hideTooltipOf(element) {
+  if (!element || !element.closest || !window.bootstrap || !bootstrap.Tooltip) {
+    return;
+  }
+  const trigger = element.closest('[data-bs-toggle="tooltip"]');
+  if (!trigger) {
+    return;
+  }
+  const instance = bootstrap.Tooltip.getInstance(trigger);
+  // tip 为空 = 这个实例还没弹过 / 刚被 dispose 又重建，此时它内部的状态还没建好，
+  // 直接调 hide() 会在 Bootstrap 里抛 TypeError，所以先看一眼再说
+  if (!instance || !instance.tip) {
+    return;
+  }
+  try {
+    instance.hide();
+  } catch (error) {
+    // 浮窗已经没了就无所谓，绝不能因为收提示把按钮点击搞崩
+  }
+}
+
 /* ==================== 刷新 ==================== */
 
 async function refresh() {
-  await Promise.all([loadStatistics(), loadAccounts(), loadRecords(), loadCalendarRecords()]);
+  // 首页三栏都靠这几份数据，拉完一起重绘，避免主卡先渲染出 0 再跳数字
+  await Promise.all([loadAccounts(), loadRecords(), loadCalendarRecords()]);
   await refreshDetail();
+  renderDashboard();
 }
 
 /* ==================== 事件绑定 ==================== */
@@ -2080,10 +2730,27 @@ function bindEvents() {
     modalElement.addEventListener("hidden.bs.modal", resetRecordForm);
   }
 
-  // 列表里的编辑 / 删除（事件委托，动态行也能响应）
-  $("record-list").addEventListener("click", onRecordListClick);
-  $("account-records").addEventListener("click", onRecordListClick);
-  $("day-records").addEventListener("click", onRecordListClick);
+  // v0.06.2：表格里不再有编辑 / 删除按钮，改成「点整行 → 详情弹窗」
+  ["record-list", "account-records", "day-records"].forEach(function (id) {
+    const tbody = $(id);
+    if (tbody) {
+      tbody.addEventListener("click", onRowClick);
+      tbody.addEventListener("keydown", onRowKeydown);
+    }
+  });
+
+  // 近 7 天卡片列表同样点一条弹详情
+  if ($("recent-groups")) {
+    $("recent-groups").addEventListener("click", onRecentClick);
+  }
+
+  // 详情弹窗底部两个幽灵按钮
+  if ($("detail-edit-btn")) {
+    $("detail-edit-btn").addEventListener("click", editFromDetail);
+  }
+  if ($("detail-delete-btn")) {
+    $("detail-delete-btn").addEventListener("click", deleteFromDetail);
+  }
 
   // 日历：上/下月（年视图里是上/下一年）、按年查看、点某天、点某月
   $("cal-prev").addEventListener("click", function () {
@@ -2159,6 +2826,96 @@ function bindEvents() {
       removeCategory(Number(button.getAttribute("data-del-category")));
     }
   });
+
+  /* ---------- v0.06.2 顶栏 / 侧栏 / 搜索 / 通知 / 预算 ---------- */
+
+  if ($("theme-toggle")) {
+    $("theme-toggle").addEventListener("click", toggleTheme);
+  }
+
+  if ($("sidebar-toggle")) {
+    $("sidebar-toggle").addEventListener("click", toggleSidebar);
+  }
+
+  if ($("global-search")) {
+    $("global-search").addEventListener("input", onSearchInput);
+  }
+
+  if ($("budget-edit-btn")) {
+    $("budget-edit-btn").addEventListener("click", editBudget);
+  }
+
+  if ($("notification-btn")) {
+    $("notification-btn").addEventListener("click", function () {
+      openNotifications();
+      // 打开时顺手拉一次最新，保证刚发布的通知能立刻看到
+      loadNotifications().catch(function () {});
+    });
+  }
+  if ($("notification-close")) {
+    $("notification-close").addEventListener("click", closeNotifications);
+  }
+  if ($("notification-backdrop")) {
+    $("notification-backdrop").addEventListener("click", closeNotifications);
+  }
+
+  // 侧栏底部两个占位图标
+  if ($("sync-btn")) {
+    $("sync-btn").addEventListener("click", function () {
+      notifyComingSoon("云同步");
+    });
+  }
+  if ($("settings-btn")) {
+    $("settings-btn").addEventListener("click", function () {
+      notifyComingSoon("设置");
+    });
+  }
+
+  // 详情弹窗：Enter = 编辑（按钮 / 输入框自己的 Enter 不抢）
+  const detailElement = $("record-detail-modal");
+  if (detailElement) {
+    detailElement.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter") {
+        return;
+      }
+      const tag = String(event.target.tagName || "").toLowerCase();
+      if (tag === "button" || tag === "textarea" || tag === "input" || tag === "select") {
+        return;
+      }
+      event.preventDefault();
+      editFromDetail();
+    });
+  }
+
+  // Esc：先关通知面板（弹窗的 Esc 交给 Bootstrap data-bs-keyboard）
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") {
+      return;
+    }
+    const panel = $("notification-panel");
+    if (panel && panel.classList.contains("is-open")) {
+      closeNotifications();
+    }
+  });
+
+  // 窗口变窄 / 变宽：按 1200px 阈值自动折叠侧栏（用户手动选过则以用户为准）
+  window.addEventListener("resize", function () {
+    applySidebar();
+  });
+
+  // 点击任何带 Tooltip 的按钮：立刻收掉浮窗，绝不卡在屏幕上
+  // 用捕获阶段，保证先收浮窗、再走按钮自己的逻辑（打开弹窗 / 切主题 / 折叠侧栏）
+  document.addEventListener(
+    "click",
+    function (event) {
+      hideTooltipOf(event.target);
+      // 点击会让按钮获得焦点，hover/focus 触发可能在同一帧又把浮窗拉起来，收尾再收一次
+      window.setTimeout(function () {
+        hideTooltipOf(event.target);
+      }, 0);
+    },
+    true
+  );
 }
 
 /* ==================== 启动 ==================== */
@@ -2167,16 +2924,29 @@ async function init() {
   const modalElement = $("record-modal");
   const accountElement = $("account-modal");
   const categoryElement = $("category-modal");
+  const detailElement = $("record-detail-modal");
   if (window.bootstrap) {
     recordModal = new window.bootstrap.Modal(modalElement);
     accountModal = new window.bootstrap.Modal(accountElement);
     categoryModal = new window.bootstrap.Modal(categoryElement);
+    if (detailElement) {
+      recordDetailModal = new window.bootstrap.Modal(detailElement);
+    }
     bindEscClose(modalElement, recordModal);
     bindEscClose(accountElement, accountModal);
     bindEscClose(categoryElement, categoryModal);
+    if (detailElement && recordDetailModal) {
+      bindEscClose(detailElement, recordDetailModal);
+    }
   }
 
+  // 主题 / 侧栏 / 预算都从 localStorage 恢复，刷新页面不闪
+  applyTheme(readTheme());
+  state.budget = readBudget();
+  applySidebar();
+
   bindEvents();
+  initTooltips();
 
   try {
     await loadCategories();
@@ -2184,6 +2954,9 @@ async function init() {
   } catch (error) {
     toast(error.message, "error");
   }
+
+  // 通知失败不该拦住整个看板，单独兜底
+  loadNotifications().catch(function () {});
 
   switchPage("home");
 }

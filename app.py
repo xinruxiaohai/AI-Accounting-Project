@@ -1,4 +1,6 @@
 import datetime
+import os
+import uuid
 
 from flask import Flask, jsonify, render_template, request
 
@@ -8,6 +10,13 @@ app = Flask(__name__)
 
 # 让 jsonify 直接输出中文，而不是 \uXXXX 转义，方便浏览器里肉眼检查
 app.json.ensure_ascii = False
+
+# 通知里的配图统一存这里，用 /static/uploads/<uuid>.<ext> 访问
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
+ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # 启动就建表 / 升级表结构。表已存在时 CREATE TABLE 会跳过，缺列时自动补列
 database.init_db()
@@ -433,6 +442,98 @@ def remove_account(name):
 def statistics():
     """总览：总收入、总支出、总余额，给首页三张卡片用。"""
     return jsonify(database.get_statistics())
+
+
+# ---------------- 通知中心（v0.06.2） ----------------
+
+
+@app.route("/api/notifications", methods=["GET"])
+def list_notifications():
+    """全部通知，前端信封面板按时间倒序展示。"""
+    return jsonify(notifications=database.list_notifications())
+
+
+@app.route("/api/notifications", methods=["POST"])
+def create_notification():
+    """开发者发布通知。content 允许带 HTML（后台编辑器产出），只给本机 /admin 用。"""
+    data = request.get_json(silent=True) or {}
+
+    title = data.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return jsonify(error="title 必须是非空字符串"), 400
+    if len(title.strip()) > 80:
+        return jsonify(error="title 最多 80 个字符"), 400
+
+    content = data.get("content", "")
+    if content is None:
+        content = ""
+    if not isinstance(content, str):
+        return jsonify(error="content 必须是字符串"), 400
+    if len(content) > 20000:
+        return jsonify(error="content 太长了，最多 20000 个字符"), 400
+
+    image_url = data.get("image_url", "")
+    if image_url is None:
+        image_url = ""
+    if not isinstance(image_url, str):
+        return jsonify(error="image_url 必须是字符串"), 400
+    # 只收站内相对路径或 http(s) 链接，防止塞进 javascript: 之类的伪协议
+    if image_url and not (
+        image_url.startswith("/static/")
+        or image_url.startswith("http://")
+        or image_url.startswith("https://")
+    ):
+        return jsonify(error="image_url 只能是 /static/ 下的路径或 http(s) 链接"), 400
+
+    publish_date = data.get("publish_date")
+    if publish_date is not None and not isinstance(publish_date, str):
+        return jsonify(error="publish_date 必须是字符串"), 400
+
+    try:
+        notification = database.create_notification(
+            title, content, image_url, publish_date
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(notification), 201
+
+
+@app.route("/api/notifications/<int:notify_id>", methods=["DELETE"])
+def delete_notification(notify_id):
+    """删通知。找不到就是 404，前端 Toast 直接显示。"""
+    if not database.delete_notification(notify_id):
+        return jsonify(error="通知不存在"), 404
+    return jsonify(deleted=notify_id)
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_image():
+    """接收 multipart 表单里的 file 字段，存进 static/uploads，返回可直接访问的 URL。"""
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return jsonify(error="没有收到文件，字段名应为 file"), 400
+
+    ext = os.path.splitext(upload.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return jsonify(error="只支持 png / jpg / jpeg / gif / webp 图片"), 400
+
+    data = upload.read()
+    if not data:
+        return jsonify(error="图片是空文件"), 400
+    if len(data) > MAX_UPLOAD_BYTES:
+        return jsonify(error="图片不能超过 5MB"), 400
+
+    # 文件名用 uuid 重命名：避免中文名、空格、同名覆盖，也顺带切断路径穿越
+    filename = uuid.uuid4().hex + ext
+    with open(os.path.join(UPLOAD_DIR, filename), "wb") as handle:
+        handle.write(data)
+    return jsonify(url="/static/uploads/" + filename, filename=filename), 201
+
+
+@app.route("/admin", methods=["GET"])
+def admin():
+    """开发者发布端：填标题 + 富文本 + 配图，发布后立刻出现在前台信封里。"""
+    return render_template("admin.html", notifications=database.list_notifications())
 
 
 if __name__ == "__main__":
