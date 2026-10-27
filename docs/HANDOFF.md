@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.07.2-DEV
-当前进度：AI 接口代码已全部写完并测试了 Mock 逻辑（顶栏「AI 快记」→ POST /api/records/ai → 智谱解析 → 复用 add_record 写库并联动余额），但真实 API 调用卡在 401 密钥无效，需更换有效 Key 后重启服务验证；v0.07 Step 3 报销与回收站界面仍未开始。
+当前版本：v0.08-DEV（已封版）
+当前进度：AI 快记全链路已真实联调通过（智谱 GLM-4-Flash 解析 → 本地校验 → 复用 add_record 写库并联动余额），顶栏「AI 快记」可正常使用；v0.07 Step 3 的报销与回收站界面尚未开始。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -52,10 +52,9 @@ categories: id, name, parent_id (二级分类)。
 /api/upload (POST)
 
 六、下一步行动计划
-当前目标：换到有效密钥后完成 AI 解析的真实联调，通过即封版 v0.08。
+当前目标：启动 v0.09-DEV，补齐 v0.07 Step 3 的回收站与报销界面。
 执行步骤：
-1. 在项目根目录 `.env` 写入有效的 `ZHIPU_API_KEY`，保存后重启 Flask（debug 模式会自动重载，但 .env 只在启动时读一次，建议手动重启）。
-2. 运行 `D:\Project\temp\test_ai_real.py`（venv 的 python），必须打印 `STRICT_JSON_OK`，金额 30、类型 expense、日期为「昨天」对应的 `YYYY-MM-DD HH:MM`。
-3. 打开首页，在顶栏 AI 快记输入「昨天打车花了 30」，确认 Toast 报出分类与金额、账单列表与本月支出随之刷新、账户余额正确扣减；测试账目用唯一备注定位后删除。
-4. 全部通过后：更新 dev-log 与 HANDOFF 为 v0.08-DEV（已封版），提交代码并打 tag `v0.08-DEV` 推送。
-备注：若仍 401，先确认 key 未过期且有 glm-4-flash 权限，再用 curl 直打智谱接口排除网络/代理因素。
+1. 回收站：删除改为写 deleted_at 软删除，新增回收站列表与恢复接口，恢复时按余额效果回补账户；账单列表与统计默认排除已删记录。
+2. 报销：先定下状态字段（待报销 / 已报销）与入口，再补申请、状态切换与列表筛选，余额口径保持不变。
+3. 每步完成跑 py_compile / node --check 与端到端自测，通过后更新 dev-log，全部完成封 v0.09-DEV 并打 tag 推送。
+备注：.env 换 Key 后必须彻底结束旧 Flask 进程再启动，否则旧进程仍持有旧密钥返回 401。

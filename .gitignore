@@ -14,6 +14,9 @@ __pycache__/
 # 环境变量 / 密钥（API Key 一律不进 Git）
 .env
 
+# 用户上传的图片（运行时数据，不进 Git）
+static/uploads/
+
 # 编辑器与系统垃圾文件
 .vscode/
 .idea/
