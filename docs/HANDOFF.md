@@ -273,3 +273,24 @@ D:\Project\AI-Accounting-Project\
 - 深色模式：`document.documentElement[data-theme]`，存 `localStorage["ai-accounting-theme"]`
 
 自测：19 条 headless 点击断言全通过，7 条路由全 200，0 页面报错。
+
+## 十四、v0.06.3-DEV 补记（2026-10-27）
+
+v0.06.2 遗留的「ECharts 饼图 / 30 天折线、右下悬浮球、分页」已在 v0.06.3 全部落地：
+
+| 文件 | 变化 |
+|---|---|
+| `static/vendor/echarts.min.js` | **新增**：ECharts 13 本地包（1,030,855 字节），本地引用不用 CDN |
+| `templates/index.html` | 中栏预算卡下加 `.charts-panel`（`#chart-pie` / `#chart-trend` / `#charts-sub`）；账单 panel 加分页条（`#record-pager` / `#pager-info` / `#page-size` / `#pager-pages`）；页尾加 `#fab`（预算剩余 + 快捷键面板） |
+| `static/style.css` | 图表卡、分页条、悬浮球与展开面板、超支红字，深色模式同步适配 |
+| `static/script.js` | 图表：`monthExpenseByCategory / dailyExpenseSeries / chartToolbox / pieOption / trendOption / initCharts / renderCharts / resizeCharts / watchChartResize`；分页：`readPageSize / pageCountOf / pageButtonsHtml / renderPager / resetPaging`；滚动加载：`sentinelText / sentinelRowHtml / observeScrollSentinel / maybeAppendOnScroll / appendMoreRecords`；悬浮球与快捷键：`renderFab / openFab / closeFab / toggleFab / isTypingTarget / onGlobalKeydown` |
+
+关键行为：
+
+- 图表 Toolbox 可存图；`restore` 事件回灌最新数据，不会退回初始 option。
+- 分页每页 20 / 50 / 100 /「不分页」，选择存 `localStorage["ai-accounting-page-size"]`；「不分页」先出 20 条，滚到底自动追加 20 条，到底显示「已经到底啦，共 N 笔」。
+- N 记一笔 / Ctrl+K 聚焦搜索 / Esc 关弹窗与面板；输入框内打字不抢键。
+- 已知不修：弹窗淡入未结束（约 300ms）时点保存，Bootstrap 的 `hide()` 会被 `_isTransitioning` 吃掉、弹窗不关；真人填表快不到这个程度。
+- 浏览器控制台唯一的报错是既有 `/favicon.ico` 404，与本版无关。
+
+数据现状（2026-10-27 自测后）：13 条账目（收入 21413.01、支出 865.03、总余额 24161.20），分类 24 条，账户 8 个三组；`records.db` 不进 Git。

@@ -237,3 +237,42 @@
 
 - ECharts 饼图 / 30 天折线、右下悬浮球、分页、CSV 导出、PWA 都还没进这一版。
 - `style.css` 里仍有少量 v0.06.1 的旧规则（如 `.col-action` 宽度），已不再被 DOM 命中，留着不影响。
+
+## v0.06.3-DEV · ECharts 图表 / 预算悬浮球 / 账单分页与滚动加载（2026-10-27）
+
+**为什么要改**：v0.06.2 的「遗留」清单里，饼图、30 天折线、悬浮球、分页都还没落地；预算环只能看一个数，看不出钱花在哪；账单攒到几十条就整页铺开，找一条要滚半天。
+
+**图表（index.html + style.css + script.js）**
+
+- ECharts 13 下载到 `static/vendor/echarts.min.js`（1,030,855 字节），本地引用不走 CDN；中栏预算卡下方插 `.charts-panel`，两张 `#chart-pie` / `#chart-trend`，副标题 `#charts-sub` 实时报「本月支出 N 笔 · 近 30 天合计 ¥X」。
+- `monthExpenseByCategory()` 按分类汇总本月支出，超过 8 类时前 7 + 「其他」；`dailyExpenseSeries(30)` 用 `shiftDateKey` 补零，保证折线一定是 30 个点。
+- `pieOption / trendOption` 共用 `chartToolbox()`（saveAsImage + restore）；`restore` 事件回灌最新数据，避免 Toolbox 刷新后回到初始 option。
+- 实例懒初始化 `initCharts()`，`renderDashboard()` 里调 `renderCharts()`；切页、切主题、容器变宽都重画。
+
+**悬浮球**
+
+- `#fab` 在右下角，`#fab-ball` 悬停/点击展开 `#fab-panel`：本月预算剩余、进度条、已花/上限、N/Ctrl+K/Esc 快捷键。
+- 超支时剩余金额转红并加 `is-over`，进度条封顶 100%；鼠标移开 260ms 后收起，避免误触。
+- `onGlobalKeydown`：N 记一笔、Ctrl+K 聚焦搜索、Esc 关弹窗/面板；输入框里打字不抢键（`isTypingTarget`）。
+
+**分页与滚动加载**
+
+- `#page-size` 20/50/100/不分页，选择存 `localStorage["ai-accounting-page-size"]`；`renderRecords` 分页/不分页两个分支，分页渲染 `#record-pager`（共 N 笔 · 第 a–b 条 · x/y 页 + 页码按钮）。
+- 「不分页」先渲染 20 条，底部哨兵行用 IntersectionObserver 监听，滚到底自动追加 20 条，追加完显示「已经到底啦，共 N 笔」；`.content` 才是滚动容器，监听用 capture。
+- 搜索/新增账单后 `resetPaging()` 回第一页 —— 新账目按时间倒序排在第一行，停在旧页会以为没存上。
+
+**修掉的两个坑**
+
+- 1024px 下侧栏折叠后图表宽度停在 190px：`window.resize` 在回流前触发，改成 `ResizeObserver`（`watchChartResize()` + rAF 防抖）盯容器；容器宽 0（切走首页）时跳过 resize，避免 ECharts 把画布压成 0。
+- 空列表还显示「第 0–0 条 · 1/1 页」：`renderPager` 加 total=0 分支，只留「共 0 笔」。
+
+**自测**
+
+- `node --check static/script.js` 通过；Chrome headless + CDP 驱动 9 组脚本打真实页面（非 DOM 桩）。
+- 图表：饼 6 类（交通 443 / 餐饮 277.13 / 卫浴 100 / 购物 23 / 晚餐 12 / 早餐 9.9），折线 30 点合计 865.03，canvas 308×236，Toolbox saveAsImage 存在。
+- 分页：内存注入 45 条，默认 3 页、第 3 页 5 条、每页 50 变 1/1 页并落 localStorage、「不分页」20→40→45 无重复、哨兵文案正确。
+- 悬浮球：剩余 ¥2134.97、已花 ¥865.03 / ¥3000.00、fill 29%；超支 -¥365.03 红字；N/Esc/Ctrl+K 全通，搜索框内按 N 不弹窗。
+- 端到端：UI 存一笔 1.23（备注 SELFTEST-V063-…）→ 首行即新账、pager 14 笔、饼图餐饮 +1.23；`DELETE /api/records/91` 后回到 13 笔 / 865.03，一分不差。
+- 响应式 1280/1024/768/390 无横向溢出，图表宽度与容器一致；页面 0 报错（仅既有 favicon 404）。
+
+**遗留**：CSV 导出、PWA、软删除/借贷、桑基图/分享长图按蓝图 Step 6–10 继续。

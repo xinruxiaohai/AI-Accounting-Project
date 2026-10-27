@@ -1,9 +1,14 @@
 "use strict";
 
 /*
- * AI记账管家 · 前端逻辑（v0.06.2）
+ * AI记账管家 · 前端逻辑（v0.06.3）
  *
- * 这一版在 v0.06.1 的基础上完成一次结构性重构：
+ * v0.06.3 在 v0.06.2 的三栏看板上补上蓝图里欠的三件：
+ *   1. ECharts 支出分类饼图 + 近 30 天折线（本地 vendor，Toolbox 可存图）
+ *   2. 右下悬浮球：本月预算剩余 + 快捷键面板（N / Ctrl+K / Esc）
+ *   3. 账单分页（20/50/100/不分页）与滚动到底自动追加 20 条
+ *
+ * v0.06.2 完成的结构性重构：
  *   1. 首页变三栏 Dashboard：巨型本月支出卡 + 预算环 + 近 7 天分组卡片，右栏是日历
  *   2. 账单不再有行内「编辑 / 删除」按钮，整行点击弹出详情，操作收进详情弹窗（幽灵按钮）
  *   3. 深色模式（CSS 变量 + localStorage）、侧栏折叠、全局搜索、通知中心
@@ -23,7 +28,23 @@ const LS_THEME = "ai-accounting-theme";
 const LS_SIDEBAR = "ai-accounting-sidebar-collapsed";
 const LS_BUDGET = "ai-accounting-budget";
 const LS_NOTIFY_READ = "ai-accounting-notify-read-at";
+// v0.06.3：账单列表每页条数（0 = 不分页，滚动到底自动追加）
+const LS_PAGE_SIZE = "ai-accounting-page-size";
+const PAGE_SIZE_OPTIONS = [20, 50, 100, 0];
+const INFINITE_STEP = 20;
 const DEFAULT_BUDGET = 3000;
+
+// 饼图配色：蓝 / 橙 / 绿 / 红 / 紫 / 青 / 橘 / 灰，深浅色下都能看清
+const PIE_COLORS = [
+  "#2563eb",
+  "#f59e0b",
+  "#10b981",
+  "#ef4444",
+  "#8b5cf6",
+  "#06b6d4",
+  "#f97316",
+  "#64748b",
+];
 
 // 预算环半径 52，周长 2πr，画进度时用
 const BUDGET_RING_CIRCUMFERENCE = 326.73;
@@ -474,6 +495,10 @@ const state = {
   budget: DEFAULT_BUDGET,
   // 详情弹窗当前展示的账单 id，编辑 / 删除都以它为准
   detailRecordId: null,
+  // v0.06.3：账单列表分页（0 = 不分页）与滚动加载进度
+  pageSize: 20,
+  pageIndex: 1,
+  renderedCount: INFINITE_STEP,
 };
 
 let recordModal = null;
@@ -1066,6 +1091,380 @@ function renderBudget() {
   }
 }
 
+/* ==================== 数据可视化（ECharts，本地 vendor 引入） ==================== */
+
+let pieChart = null;
+let trendChart = null;
+
+function isDarkMode() {
+  return document.documentElement.getAttribute("data-theme") === "dark";
+}
+
+/** 图表用的文字 / 线条颜色，跟随深色模式 */
+function chartPalette() {
+  const dark = isDarkMode();
+  return {
+    text: dark ? "#cbd5e1" : "#475569",
+    strong: dark ? "#e2e8f0" : "#1e293b",
+    line: dark ? "#24334a" : "#e6ebf2",
+    surface: dark ? "#131c2b" : "#ffffff",
+    brand: dark ? "#3b82f6" : "#2563eb",
+  };
+}
+
+/**
+ * 本月支出按分类汇总。
+ * 类别多于 8 个时，前 7 名单独成片，剩下的合并成「其他」，避免饼图碎成渣。
+ */
+function monthExpenseByCategory() {
+  const now = new Date();
+  const groups = {};
+  let count = 0;
+  recordsOfMonth(now.getFullYear(), now.getMonth()).forEach(function (record) {
+    if (record.type !== "expense") {
+      return;
+    }
+    const name = record.category || "未分类";
+    groups[name] = (groups[name] || 0) + Number(record.amount || 0);
+    count += 1;
+  });
+
+  let list = Object.keys(groups).map(function (name) {
+    return { name: name, value: cents(groups[name]) };
+  });
+  list.sort(function (a, b) {
+    return b.value - a.value;
+  });
+
+  if (list.length > 8) {
+    const rest = list.slice(7).reduce(function (sum, item) {
+      return sum + item.value;
+    }, 0);
+    list = list.slice(0, 7).concat([{ name: "其他", value: cents(rest) }]);
+  }
+  return { list: list, count: count };
+}
+
+/** 近 N 天每天的支出合计（没有账单的日子补 0，折线才连续） */
+function dailyExpenseSeries(days) {
+  const todayKey = todayText();
+  const startKey = shiftDateKey(todayKey, -(days - 1));
+  const totals = {};
+  let total = 0;
+
+  state.calendarRecords.forEach(function (record) {
+    if (record.type !== "expense") {
+      return;
+    }
+    const key = dateKeyOf(record);
+    if (key < startKey || key > todayKey) {
+      return;
+    }
+    const amount = Number(record.amount || 0);
+    totals[key] = (totals[key] || 0) + amount;
+    total += amount;
+  });
+
+  const labels = [];
+  const values = [];
+  for (let i = 0; i < days; i += 1) {
+    const key = shiftDateKey(startKey, i);
+    labels.push(key.slice(5).replace("-", "/"));
+    values.push(cents(totals[key] || 0));
+  }
+  return { labels: labels, values: values, total: cents(total) };
+}
+
+/** Toolbox：保存图片 + 刷新（restore），按需求两件都开 */
+function chartToolbox() {
+  const palette = chartPalette();
+  return {
+    right: 4,
+    top: 0,
+    itemSize: 13,
+    itemGap: 10,
+    iconStyle: { borderColor: palette.text },
+    feature: {
+      saveAsImage: {
+        title: "保存为图片",
+        name: "AI记账管家-图表",
+        pixelRatio: 2,
+        backgroundColor: palette.surface,
+      },
+      restore: { title: "刷新图表" },
+    },
+  };
+}
+
+function pieOption(list, count) {
+  const palette = chartPalette();
+  const empty = !list.length;
+
+  return {
+    tooltip: {
+      trigger: "item",
+      formatter: function (params) {
+        return (
+          params.marker +
+          params.name +
+          "：" +
+          money(params.value) +
+          "（" +
+          params.percent +
+          "%）"
+        );
+      },
+      backgroundColor: palette.surface,
+      borderColor: palette.line,
+      textStyle: { color: palette.strong },
+    },
+    toolbox: chartToolbox(),
+    title: empty
+      ? {
+          text: "本月还没有支出记录",
+          left: "center",
+          top: "44%",
+          textStyle: { color: palette.text, fontSize: 12, fontWeight: "normal" },
+        }
+      : undefined,
+    color: PIE_COLORS,
+    legend: {
+      type: "scroll",
+      bottom: 0,
+      icon: "circle",
+      itemWidth: 8,
+      itemHeight: 8,
+      textStyle: { color: palette.text, fontSize: 11 },
+      pageIconColor: palette.text,
+      pageTextStyle: { color: palette.text },
+    },
+    series: [
+      {
+        name: "本月支出",
+        type: "pie",
+        radius: ["40%", "66%"],
+        center: ["50%", "42%"],
+        avoidLabelOverlap: true,
+        itemStyle: {
+          borderColor: palette.surface,
+          borderWidth: 2,
+          borderRadius: 4,
+        },
+        label: {
+          color: palette.text,
+          fontSize: 11,
+          formatter: "{b} {d}%",
+        },
+        labelLine: { length: 8, length2: 8, lineStyle: { color: palette.line } },
+        emphasis: {
+          label: { fontSize: 12, fontWeight: "bold", color: palette.strong },
+          itemStyle: { shadowBlur: 10, shadowColor: "rgba(15, 23, 42, .2)" },
+        },
+        data: empty
+          ? []
+          : list.map(function (item, index) {
+              return {
+                name: item.name,
+                value: item.value,
+                itemStyle: { color: PIE_COLORS[index % PIE_COLORS.length] },
+              };
+            }),
+      },
+    ],
+    graphic: empty
+      ? []
+      : [
+          {
+            type: "text",
+            left: "center",
+            top: "36%",
+            style: {
+              text: money(
+                list.reduce(function (sum, item) {
+                  return sum + item.value;
+                }, 0)
+              ),
+              fill: palette.strong,
+              fontSize: 15,
+              fontWeight: 600,
+            },
+            silent: true,
+          },
+          {
+            type: "text",
+            left: "center",
+            top: "45%",
+            style: { text: count + " 笔支出", fill: palette.text, fontSize: 11 },
+            silent: true,
+          },
+        ],
+  };
+}
+
+function trendOption(series) {
+  const palette = chartPalette();
+  const empty = series.total <= 0;
+
+  return {
+    tooltip: {
+      trigger: "axis",
+      formatter: function (params) {
+        const point = params[0] || {};
+        return point.axisValue + "<br/>支出 " + money(point.value || 0);
+      },
+      backgroundColor: palette.surface,
+      borderColor: palette.line,
+      textStyle: { color: palette.strong },
+    },
+    toolbox: chartToolbox(),
+    title: empty
+      ? {
+          text: "近 30 天还没有支出",
+          left: "center",
+          top: "44%",
+          textStyle: { color: palette.text, fontSize: 12, fontWeight: "normal" },
+        }
+      : undefined,
+    grid: { left: 8, right: 12, top: 22, bottom: 6, containLabel: true },
+    xAxis: {
+      type: "category",
+      boundaryGap: false,
+      data: series.labels,
+      axisLine: { lineStyle: { color: palette.line } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: palette.text,
+        fontSize: 10,
+        interval: 4,
+        formatter: function (value) {
+          return value;
+        },
+      },
+    },
+    yAxis: {
+      type: "value",
+      splitNumber: 3,
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: {
+        color: palette.text,
+        fontSize: 10,
+        formatter: function (value) {
+          return value >= 1000 ? value / 1000 + "k" : value;
+        },
+      },
+      splitLine: { lineStyle: { color: palette.line, type: "dashed" } },
+    },
+    series: [
+      {
+        name: "支出",
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        symbolSize: 6,
+        data: series.values,
+        lineStyle: { width: 2.2, color: palette.brand },
+        itemStyle: { color: palette.brand },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: "rgba(37, 99, 235, .28)" },
+            { offset: 1, color: "rgba(37, 99, 235, .02)" },
+          ]),
+        },
+        emphasis: { focus: "series" },
+      },
+    ],
+  };
+}
+
+/** 第一次真正画图时才 init，避免页面还没有数据就建实例 */
+function initCharts() {
+  if (!window.echarts) {
+    return false;
+  }
+  const pieEl = $("chart-pie");
+  const trendEl = $("chart-trend");
+  if (!pieEl || !trendEl) {
+    return false;
+  }
+
+  if (!pieChart) {
+    pieChart = echarts.init(pieEl);
+    // Toolbox 的「刷新」会把图回到初始 option，这里重新喂一次最新数据
+    pieChart.on("restore", function () {
+      renderCharts();
+    });
+  }
+  if (!trendChart) {
+    trendChart = echarts.init(trendEl);
+    trendChart.on("restore", function () {
+      renderCharts();
+    });
+  }
+  watchChartResize();
+  return true;
+}
+
+/**
+ * 容器宽度变化时自己 resize。
+ * 只靠 window.resize 不够：侧栏折叠、媒体查询换栏、窗口缩放后的回流都在
+ * resize 事件之后才落定，图表会停在旧宽度上。
+ */
+let chartResizeObserver = null;
+let chartResizeFrame = 0;
+
+function watchChartResize() {
+  if (chartResizeObserver || !("ResizeObserver" in window)) {
+    return;
+  }
+  chartResizeObserver = new ResizeObserver(function () {
+    window.cancelAnimationFrame(chartResizeFrame);
+    chartResizeFrame = window.requestAnimationFrame(resizeCharts);
+  });
+  [pieChart, trendChart].forEach(function (chart) {
+    if (chart && chart.getDom()) {
+      chartResizeObserver.observe(chart.getDom());
+    }
+  });
+}
+
+function renderCharts() {
+  if (!initCharts()) {
+    return;
+  }
+  const pie = monthExpenseByCategory();
+  const trend = dailyExpenseSeries(30);
+
+  pieChart.setOption(pieOption(pie.list, pie.count), true);
+  trendChart.setOption(trendOption(trend), true);
+
+  if ($("charts-sub")) {
+    $("charts-sub").textContent =
+      "本月支出 " +
+      pie.count +
+      " 笔 · 近 30 天合计 " +
+      money(trend.total);
+  }
+}
+
+function resizeCharts() {
+  [pieChart, trendChart].forEach(function (chart) {
+    if (!chart) {
+      return;
+    }
+    const dom = chart.getDom();
+    // 首页被切走时容器宽 0，这时候 resize 会把画布压成 0，等它显示回来再量
+    if (!dom || !dom.clientWidth) {
+      return;
+    }
+    try {
+      chart.resize();
+    } catch (error) {
+      // 容器被隐藏时 resize 可能失败，忽略即可
+    }
+  });
+}
+
 /* ---------- 全局搜索 ---------- */
 
 /** 一条账单是否命中搜索词：分类名、备注、账户、金额、日期、类型都算 */
@@ -1233,7 +1632,9 @@ function renderRecentGroups() {
 function renderDashboard() {
   renderHero();
   renderBudget();
+  renderCharts();
   renderRecentGroups();
+  renderFab();
 }
 
 /* ==================== 账单列表 ==================== */
@@ -1281,6 +1682,229 @@ function recordRowHtml(record) {
   );
 }
 
+/* ---------- 分页 / 滚动加载（v0.06.3） ---------- */
+
+/** 每页条数：localStorage 里只认 20 / 50 / 100 / 0（0 = 不分页）；没存过就是 20 */
+function readPageSize() {
+  const raw = localStorage.getItem(LS_PAGE_SIZE);
+  if (raw === null || raw === "") {
+    return 20;
+  }
+  const saved = Number(raw);
+  return PAGE_SIZE_OPTIONS.indexOf(saved) >= 0 ? saved : 20;
+}
+
+/** 搜索 / 切账户 / 换每页条数后回到第一页 */
+function resetPaging() {
+  state.pageIndex = 1;
+  state.renderedCount = state.pageSize === 0 ? INFINITE_STEP : 0;
+}
+
+function pageCountOf(total) {
+  if (!state.pageSize) {
+    return 1;
+  }
+  return Math.max(1, Math.ceil(total / state.pageSize));
+}
+
+/** 页码按钮：首页、末页、当前页 ±1，中间用 … 省略 */
+function pageButtonsHtml(pageCount) {
+  const current = state.pageIndex;
+  const wanted = [1, current - 1, current, current + 1, pageCount];
+  const pages = [];
+  wanted.forEach(function (number) {
+    if (number >= 1 && number <= pageCount && pages.indexOf(number) === -1) {
+      pages.push(number);
+    }
+  });
+  pages.sort(function (a, b) {
+    return a - b;
+  });
+
+  let html =
+    '<button class="pager-btn" type="button" data-page="' +
+    (current - 1) +
+    '"' +
+    (current <= 1 ? " disabled" : "") +
+    ' aria-label="上一页">‹</button>';
+
+  let previous = 0;
+  pages.forEach(function (number) {
+    if (previous && number - previous > 1) {
+      html += '<span class="pager-ellipsis">…</span>';
+    }
+    html +=
+      '<button class="pager-btn' +
+      (number === current ? " is-active" : "") +
+      '" type="button" data-page="' +
+      number +
+      '" aria-current="' +
+      (number === current ? "page" : "false") +
+      '">' +
+      number +
+      "</button>";
+    previous = number;
+  });
+
+  html +=
+    '<button class="pager-btn" type="button" data-page="' +
+    (current + 1) +
+    '"' +
+    (current >= pageCount ? " disabled" : "") +
+    ' aria-label="下一页">›</button>';
+
+  return html;
+}
+
+function renderPager(total) {
+  const info = $("pager-info");
+  const pages = $("pager-pages");
+  const sizeSelect = $("page-size");
+  if (sizeSelect && Number(sizeSelect.value) !== state.pageSize) {
+    sizeSelect.value = String(state.pageSize);
+  }
+  if (!info || !pages) {
+    return;
+  }
+
+  // 一条都没有：只留「共 0 笔」，别摆一个空的第 1/1 页出来
+  if (!total) {
+    info.textContent = "共 0 笔";
+    pages.innerHTML = "";
+    return;
+  }
+
+  if (!state.pageSize) {
+    const shown = Math.min(state.renderedCount, total);
+    info.textContent =
+      "共 " +
+      total +
+      " 笔 · 已展示 " +
+      shown +
+      " 笔" +
+      (shown < total ? "（滚动到底自动加载）" : "");
+    pages.innerHTML = "";
+    return;
+  }
+
+  const pageCount = pageCountOf(total);
+  state.pageIndex = Math.min(Math.max(1, state.pageIndex), pageCount);
+  const start = total ? (state.pageIndex - 1) * state.pageSize + 1 : 0;
+  const end = Math.min(total, state.pageIndex * state.pageSize);
+  info.textContent =
+    "共 " +
+    total +
+    " 笔 · 第 " +
+    start +
+    "–" +
+    end +
+    " 条 · " +
+    state.pageIndex +
+    "/" +
+    pageCount +
+    " 页";
+  pages.innerHTML = pageButtonsHtml(pageCount);
+}
+
+function sentinelText(rendered, total) {
+  const left = Math.max(0, total - rendered);
+  return left
+    ? "继续往下滚，自动加载剩余 " + left + " 条…"
+    : "已经到底啦，共 " + total + " 笔";
+}
+
+function sentinelRowHtml(rendered, total) {
+  return (
+    '<tr class="sentinel-row"><td colspan="6" class="sentinel-cell" id="scroll-sentinel">' +
+    sentinelText(rendered, total) +
+    "</td></tr>"
+  );
+}
+
+let recordObserver = null;
+
+function stopRecordObserver() {
+  if (recordObserver) {
+    recordObserver.disconnect();
+    recordObserver = null;
+  }
+}
+
+/** 不分页模式：监听表格底部的哨兵行，进入视口就追加 20 条 */
+function observeScrollSentinel() {
+  const sentinel = $("scroll-sentinel");
+  if (!sentinel || !("IntersectionObserver" in window)) {
+    return;
+  }
+  stopRecordObserver();
+  recordObserver = new IntersectionObserver(
+    function (entries) {
+      const hit = entries.some(function (entry) {
+        return entry.isIntersecting;
+      });
+      if (hit) {
+        appendMoreRecords();
+      }
+    },
+    { rootMargin: "180px 0px", threshold: 0 }
+  );
+  recordObserver.observe(sentinel);
+}
+
+/**
+ * 滚动兜底：某些环境（老浏览器 / 隐藏容器）IntersectionObserver 不触发，
+ * 就在 scroll 事件里按哨兵行的位置判断一次，保证「滚到底自动加载」一定生效。
+ */
+function maybeAppendOnScroll() {
+  if (state.pageSize !== 0) {
+    return;
+  }
+  const sentinel = $("scroll-sentinel");
+  if (!sentinel) {
+    return;
+  }
+  const rect = sentinel.getBoundingClientRect();
+  const viewport =
+    window.innerHeight || document.documentElement.clientHeight || 0;
+  if (viewport > 0 && rect.top - viewport < 160 && rect.bottom > -160) {
+    appendMoreRecords();
+  }
+}
+
+/** 追加下一批 20 条：只往表格尾部插，不重建已有行 */
+function appendMoreRecords() {
+  if (state.pageSize !== 0) {
+    return;
+  }
+  const records = filteredRecords();
+  const total = records.length;
+  if (state.renderedCount >= total) {
+    return;
+  }
+  const sentinel = $("scroll-sentinel");
+  if (!sentinel) {
+    return;
+  }
+
+  const nextCount = Math.min(total, state.renderedCount + INFINITE_STEP);
+  const rowsHtml = records
+    .slice(state.renderedCount, nextCount)
+    .map(recordRowHtml)
+    .join("");
+  state.renderedCount = nextCount;
+
+  const row = sentinel.closest("tr");
+  if (row) {
+    row.insertAdjacentHTML("beforebegin", rowsHtml);
+    sentinel.textContent = sentinelText(nextCount, total);
+  }
+
+  renderPager(total);
+  if (state.renderedCount >= total) {
+    stopRecordObserver();
+  }
+}
+
 function renderRecords() {
   const tbody = $("record-list");
   if (!tbody) {
@@ -1290,15 +1914,44 @@ function renderRecords() {
   // 搜索词在本地过滤，账户筛选已经由后端做过
   const records = filteredRecords();
   const query = state.searchQuery.trim();
+  const total = records.length;
 
-  if (!records.length) {
+  if (!total) {
+    stopRecordObserver();
+    state.renderedCount = 0;
     tbody.innerHTML = query
       ? emptyStateHtml(6, "没有匹配「" + escapeHtml(query) + "」的账单，换个关键词试试")
       : emptyStateHtml(6, "还没有记录，点右上角「+ 记一笔」开始吧");
+    renderPager(0);
     return;
   }
 
-  tbody.innerHTML = records.map(recordRowHtml).join("");
+  // 不分页：先渲染 20 条，之后交给 IntersectionObserver 追加
+  if (!state.pageSize) {
+    state.renderedCount = Math.min(
+      Math.max(state.renderedCount, INFINITE_STEP),
+      total
+    );
+    tbody.innerHTML =
+      records
+        .slice(0, state.renderedCount)
+        .map(recordRowHtml)
+        .join("") + sentinelRowHtml(state.renderedCount, total);
+    renderPager(total);
+    observeScrollSentinel();
+    return;
+  }
+
+  // 分页：只渲染当前页
+  stopRecordObserver();
+  const pageCount = pageCountOf(total);
+  state.pageIndex = Math.min(Math.max(1, state.pageIndex), pageCount);
+  const start = (state.pageIndex - 1) * state.pageSize;
+  tbody.innerHTML = records
+    .slice(start, start + state.pageSize)
+    .map(recordRowHtml)
+    .join("");
+  renderPager(total);
 }
 
 /** 账户流水的一行（5 列：时间 / 类型 / 分类 / 金额 / 备注） */
@@ -2066,6 +2719,8 @@ async function saveRecord() {
     } else {
       await api("/api/records", jsonOptions("POST", payload));
       toast("记账成功", "success");
+      // 新账目按时间倒序排在第一页，回到首页才看得见
+      resetPaging();
     }
     closeRecordModal();
     await refresh();
@@ -2355,6 +3010,11 @@ function switchPage(page) {
   document.querySelectorAll(".page").forEach(function (section) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
+
+  // 首页从隐藏变回可见时 ECharts 需要重新量一次容器宽度
+  if (target === "home") {
+    window.setTimeout(resizeCharts, 40);
+  }
 }
 
 /* ==================== 主题（深色模式） ==================== */
@@ -2387,6 +3047,11 @@ function applyTheme(theme) {
   // 提示文案统一用中性的「切换深色 / 浅色模式」（见 index.html），
   // 这里绝不 dispose / 重建 Tooltip：淡出过程中销毁实例会让 Bootstrap 的
   // _activeTrigger 变成 undefined，残留回调再调 _isWithActiveTrigger 就抛 TypeError。
+
+  // 图表配色跟着换肤（还没初始化过就什么都不做，等 renderDashboard 再画）
+  if (pieChart || trendChart) {
+    renderCharts();
+  }
 }
 
 function toggleTheme() {
@@ -2430,6 +3095,7 @@ function toggleSidebar() {
 function onSearchInput() {
   const input = $("global-search");
   state.searchQuery = input ? input.value || "" : "";
+  resetPaging();
   renderRecords();
   renderRecentGroups();
 }
@@ -2450,6 +3116,126 @@ function editBudget() {
   localStorage.setItem(LS_BUDGET, String(state.budget));
   renderBudget();
   toast("本月预算已改为 " + money(state.budget), "success");
+}
+
+/* ==================== 右下角悬浮球（预算剩余 + 快捷键） ==================== */
+
+let fabCloseTimer = null;
+
+function renderFab() {
+  const summary = summarize(currentMonthRecords());
+  const spent = summary.expense;
+  const limit = state.budget;
+  const left = cents(limit - spent);
+  const ratio = limit > 0 ? Math.min(1, spent / limit) : 0;
+
+  if ($("fab-left")) {
+    $("fab-left").textContent = money(left);
+    $("fab-left").classList.toggle("is-negative", left < 0);
+  }
+  if ($("fab-spent")) {
+    $("fab-spent").textContent = money(spent) + " / " + money(limit);
+  }
+  const fill = $("fab-fill");
+  if (fill) {
+    fill.style.width = Math.round(ratio * 100) + "%";
+  }
+  const fab = $("fab");
+  if (fab) {
+    fab.classList.toggle("is-over", spent > limit);
+  }
+}
+
+function openFab() {
+  const fab = $("fab");
+  if (!fab) {
+    return;
+  }
+  window.clearTimeout(fabCloseTimer);
+  renderFab();
+  fab.classList.add("is-open");
+  if ($("fab-ball")) {
+    $("fab-ball").setAttribute("aria-expanded", "true");
+  }
+  if ($("fab-panel")) {
+    $("fab-panel").setAttribute("aria-hidden", "false");
+  }
+}
+
+function closeFab() {
+  const fab = $("fab");
+  if (!fab || !fab.classList.contains("is-open")) {
+    return;
+  }
+  fab.classList.remove("is-open");
+  if ($("fab-ball")) {
+    $("fab-ball").setAttribute("aria-expanded", "false");
+  }
+  if ($("fab-panel")) {
+    $("fab-panel").setAttribute("aria-hidden", "true");
+  }
+}
+
+/** 鼠标移出后留一点缓冲，方便从球滑进面板 */
+function scheduleCloseFab() {
+  window.clearTimeout(fabCloseTimer);
+  fabCloseTimer = window.setTimeout(closeFab, 220);
+}
+
+function toggleFab() {
+  const fab = $("fab");
+  if (!fab) {
+    return;
+  }
+  if (fab.classList.contains("is-open")) {
+    closeFab();
+  } else {
+    openFab();
+  }
+}
+
+/* ---------- 全局快捷键：N 记一笔、Ctrl + K 搜索 ---------- */
+
+function isTypingTarget(target) {
+  if (!target || !target.tagName) {
+    return false;
+  }
+  const tag = String(target.tagName).toUpperCase();
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    target.isContentEditable === true
+  );
+}
+
+function onGlobalKeydown(event) {
+  const key = String(event.key || "").toLowerCase();
+
+  // Ctrl / ⌘ + K：不管焦点在哪都跳到全局搜索
+  if ((event.ctrlKey || event.metaKey) && key === "k") {
+    event.preventDefault();
+    const search = $("global-search");
+    if (search) {
+      search.focus();
+      search.select();
+    }
+    return;
+  }
+
+  if (event.key === "Escape" && $("fab")) {
+    closeFab();
+  }
+
+  if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
+    return;
+  }
+
+  // N：记一笔（有弹窗开着就不抢，避免叠出第二个框）
+  if (key === "n" && !document.querySelector(".modal.show")) {
+    event.preventDefault();
+    openRecordModal();
+  }
 }
 
 /* ==================== 通知中心 ==================== */
@@ -2702,10 +3488,58 @@ function bindEvents() {
 
   // 账户筛选
   $("filter-account").addEventListener("change", function () {
+    resetPaging();
     loadRecords().catch(function (error) {
       toast(error.message, "error");
     });
   });
+
+  // 分页：换每页条数 / 点页码
+  if ($("page-size")) {
+    $("page-size").addEventListener("change", function (event) {
+      const size = Number(event.target.value);
+      state.pageSize = PAGE_SIZE_OPTIONS.indexOf(size) >= 0 ? size : 20;
+      localStorage.setItem(LS_PAGE_SIZE, String(state.pageSize));
+      resetPaging();
+      renderRecords();
+      renderPager(filteredRecords().length);
+    });
+  }
+  if ($("pager-pages")) {
+    $("pager-pages").addEventListener("click", function (event) {
+      const button = event.target.closest("[data-page]");
+      if (!button || button.disabled) {
+        return;
+      }
+      const pageCount = pageCountOf(filteredRecords().length);
+      const page = Number(button.getAttribute("data-page"));
+      if (!Number.isFinite(page)) {
+        return;
+      }
+      state.pageIndex = Math.min(Math.max(1, page), pageCount);
+      renderRecords();
+    });
+  }
+
+  // 悬浮球：悬停展开、移出收起；点击也能开合（触屏友好）
+  if ($("fab")) {
+    $("fab").addEventListener("mouseenter", openFab);
+    $("fab").addEventListener("mouseleave", scheduleCloseFab);
+    if ($("fab-ball")) {
+      $("fab-ball").addEventListener("click", function (event) {
+        event.stopPropagation();
+        toggleFab();
+      });
+    }
+    document.addEventListener("click", function (event) {
+      if ($("fab") && !$("fab").contains(event.target)) {
+        closeFab();
+      }
+    });
+  }
+
+  // 全局快捷键（N 记一笔、Ctrl + K 搜索）
+  document.addEventListener("keydown", onGlobalKeydown);
 
   // 保存
   $("save-btn").addEventListener("click", saveRecord);
@@ -2898,10 +3732,14 @@ function bindEvents() {
     }
   });
 
-  // 窗口变窄 / 变宽：按 1200px 阈值自动折叠侧栏（用户手动选过则以用户为准）
+  // 窗口变窄 / 变宽：按 1200px 阈值自动折叠侧栏（用户手动选过则以用户为准），图表跟着重排
   window.addEventListener("resize", function () {
     applySidebar();
+    resizeCharts();
   });
+
+  // 不分页模式下，任何滚动容器滚动都检查一次哨兵行（IntersectionObserver 的兜底）
+  window.addEventListener("scroll", maybeAppendOnScroll, true);
 
   // 点击任何带 Tooltip 的按钮：立刻收掉浮窗，绝不卡在屏幕上
   // 用捕获阶段，保证先收浮窗、再走按钮自己的逻辑（打开弹窗 / 切主题 / 折叠侧栏）
@@ -2940,9 +3778,14 @@ async function init() {
     }
   }
 
-  // 主题 / 侧栏 / 预算都从 localStorage 恢复，刷新页面不闪
+  // 主题 / 侧栏 / 预算 / 每页条数都从 localStorage 恢复，刷新页面不闪
   applyTheme(readTheme());
   state.budget = readBudget();
+  state.pageSize = readPageSize();
+  resetPaging();
+  if ($("page-size")) {
+    $("page-size").value = String(state.pageSize);
+  }
   applySidebar();
 
   bindEvents();

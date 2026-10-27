@@ -2407,3 +2407,291 @@ body {
     max-width: 100vw;
   }
 }
+
+/* ==================== v0.06.3：图表 / 分页 / 悬浮球 ==================== */
+
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.chart-box {
+  min-width: 0;
+  padding: 10px 10px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.chart-title {
+  margin-bottom: 4px;
+  padding-left: 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.chart-canvas {
+  width: 100%;
+  height: 236px;
+}
+
+/* ---------- 分页条 ---------- */
+
+.table-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.pager-info {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.pager-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pager-size {
+  width: auto;
+  min-width: 152px;
+}
+
+.pager-pages {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.pager-btn {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 12.5px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.pager-btn:hover:not(:disabled):not(.is-active) {
+  border-color: var(--brand-blue);
+  color: var(--brand-blue);
+}
+
+.pager-btn.is-active {
+  background: var(--brand-blue);
+  border-color: var(--brand-blue);
+  color: #fff;
+  cursor: default;
+}
+
+.pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pager-ellipsis {
+  padding: 0 2px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.sentinel-cell {
+  padding: 12px !important;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- 右下角悬浮球 ---------- */
+
+.fab {
+  position: fixed;
+  right: 26px;
+  bottom: 26px;
+  z-index: 1035;
+}
+
+.fab-ball {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.38), 0 2px 6px rgba(15, 23, 42, 0.18);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.fab-ball svg {
+  width: 22px;
+  height: 22px;
+}
+
+.fab-ball:hover {
+  transform: translateY(-2px) scale(1.04);
+  box-shadow: 0 16px 32px rgba(37, 99, 235, 0.45);
+}
+
+.fab-ball:active {
+  transform: scale(0.97);
+}
+
+.fab-panel {
+  position: absolute;
+  right: 0;
+  bottom: 66px;
+  width: 250px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px) scale(0.97);
+  transform-origin: bottom right;
+  transition: opacity 0.22s ease, transform 0.22s ease, visibility 0.22s ease;
+}
+
+.fab.is-open .fab-panel {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+}
+
+.fab-head {
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+}
+
+.fab-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.fab-line strong {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.fab-line strong.is-negative,
+.fab.is-over .fab-line strong {
+  color: var(--neg);
+}
+
+.fab-bar {
+  height: 6px;
+  margin: 10px 0 2px;
+  border-radius: 99px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.fab-bar-fill {
+  width: 0;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #3b82f6, #6366f1);
+  transition: width 0.3s ease;
+}
+
+.fab.is-over .fab-bar-fill {
+  background: linear-gradient(90deg, #f97316, #ef4444);
+}
+
+.fab-line-sub {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.fab-line-sub b {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.fab-divider {
+  height: 1px;
+  margin: 12px 0;
+  background: var(--line);
+}
+
+.fab-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fab-keys li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.fab-keys kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-main);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.fab-plus {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 1023.98px) {
+  .charts-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 767.98px) {
+  .chart-canvas {
+    height: 220px;
+  }
+
+  .table-pager {
+    padding: 10px 12px 12px;
+  }
+
+  .fab {
+    right: 16px;
+    bottom: 16px;
+  }
+}

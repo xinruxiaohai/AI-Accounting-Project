@@ -73,7 +73,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.06.2-DEV · 开发中</div>
+      <div class="sidebar-version" id="sidebar-version">v0.06.3-DEV · 开发中</div>
     </div>
   </aside>
 
@@ -184,6 +184,24 @@
               </div>
             </div>
 
+            <!-- 数据可视化：本月支出分类饼图 + 近 30 天支出折线（ECharts 本地引入） -->
+            <div class="panel charts-panel">
+              <div class="panel-head">
+                <span class="panel-title">数据可视化</span>
+                <span class="panel-sub" id="charts-sub">本月支出结构 · 近 30 天趋势</span>
+              </div>
+              <div class="charts-grid">
+                <div class="chart-box">
+                  <div class="chart-title">本月支出分类</div>
+                  <div class="chart-canvas" id="chart-pie"></div>
+                </div>
+                <div class="chart-box">
+                  <div class="chart-title">近 30 天支出趋势</div>
+                  <div class="chart-canvas" id="chart-trend"></div>
+                </div>
+              </div>
+            </div>
+
             <!-- 近 7 天账单：按天分组的卡片列表，取代旧的大表格 -->
             <div class="panel recent-panel">
               <div class="panel-head">
@@ -230,6 +248,20 @@
                     </tr>
                   </tbody>
                 </table>
+              </div>
+              <!-- 分页条：20 / 50 / 100，或「不分页」走滚动到底自动追加 -->
+              <div class="table-pager" id="record-pager">
+                <span class="pager-info" id="pager-info">共 0 笔</span>
+                <div class="pager-controls">
+                  <select class="form-select form-select-sm pager-size" id="page-size"
+                          aria-label="每页条数">
+                    <option value="20">每页 20 条</option>
+                    <option value="50">每页 50 条</option>
+                    <option value="100">每页 100 条</option>
+                    <option value="0">不分页（全部展示）</option>
+                  </select>
+                  <div class="pager-pages" id="pager-pages"></div>
+                </div>
               </div>
             </div>
 
@@ -586,10 +618,43 @@
   </div>
 </aside>
 
+<!-- 右下角悬浮球：本月预算剩余 + 快捷键提示（悬停 / 点击弹出迷你面板） -->
+<div class="fab" id="fab">
+  <button class="fab-ball" type="button" id="fab-ball"
+          aria-expanded="false" aria-controls="fab-panel" aria-label="预算余额与快捷键">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 3a9 9 0 1 0 9 9h-9z"></path>
+      <path d="M15.4 3.7A9 9 0 0 1 20.3 8.6L15.4 11z"></path>
+    </svg>
+  </button>
+  <div class="fab-panel" id="fab-panel" role="dialog" aria-label="预算与快捷键" aria-hidden="true">
+    <div class="fab-head">本月预算</div>
+    <div class="fab-line">
+      <span>剩余可用</span>
+      <strong id="fab-left">¥0.00</strong>
+    </div>
+    <div class="fab-bar"><div class="fab-bar-fill" id="fab-fill"></div></div>
+    <div class="fab-line fab-line-sub">
+      <span>已花 / 上限</span>
+      <b id="fab-spent">¥0.00 / ¥0.00</b>
+    </div>
+    <div class="fab-divider"></div>
+    <div class="fab-head">快捷键</div>
+    <ul class="fab-keys">
+      <li><kbd>N</kbd><span>记一笔</span></li>
+      <li><kbd>Ctrl</kbd><span class="fab-plus">+</span><kbd>K</kbd><span>全局搜索</span></li>
+      <li><kbd>Esc</kbd><span>关闭弹窗 / 面板</span></li>
+    </ul>
+  </div>
+</div>
+
 <!-- Bootstrap 的 JS（弹窗 / Tooltip 靠它），必须在使用弹窗的标签之后加载 -->
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
 <!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
 <script src="/static/vendor/math.min.js"></script>
+<!-- ECharts：本地引入（static/vendor/echarts.min.js），不依赖 CDN / 外网 -->
+<script src="/static/vendor/echarts.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
 <script src="/static/script.js"></script>
 
