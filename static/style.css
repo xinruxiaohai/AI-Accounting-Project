@@ -225,7 +225,8 @@ body {
   flex: 0 0 var(--topbar-h);
   height: var(--topbar-h);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(220px, 460px) minmax(0, 1fr);
+  /* 第三列按内容收：AI 快记 + 图标 + 记一笔 需要稳定宽度，不跟着窗口一起被压扁 */
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 460px) auto;
   align-items: center;
   gap: 16px;
   padding: 0 22px;
@@ -3361,5 +3362,105 @@ body {
 @media (max-width: 1024px) {
   .contacts-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ---------- v0.08 AI 快记：顶栏一句话输入 ---------- */
+.ai-quick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 300px;
+  min-width: 0;
+  height: 38px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-3);
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ai-quick:focus-within {
+  border-color: var(--brand-blue);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.ai-quick-icon {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--brand-blue);
+}
+
+.ai-quick-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 30px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+}
+
+.ai-quick-input:focus {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.btn-ai {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
+}
+
+.btn-ai:hover {
+  filter: brightness(1.06);
+}
+
+.btn-ai:disabled {
+  opacity: 0.65;
+  box-shadow: none;
+}
+
+[data-theme="dark"] .ai-quick {
+  background: #1e293b;
+}
+
+[data-theme="dark"] .ai-quick:focus-within {
+  background: #0f172a;
+}
+
+@media (max-width: 1439.98px) {
+  .ai-quick {
+    flex-basis: 240px;
+  }
+}
+
+@media (max-width: 1279.98px) {
+  .ai-quick {
+    flex-basis: 200px;
+  }
+
+  .btn-ai {
+    padding: 0 9px;
+  }
+}
+
+@media (max-width: 1023.98px) {
+  .ai-quick {
+    flex-basis: 168px;
+  }
+
+  .ai-quick-input {
+    font-size: 12px;
   }
 }

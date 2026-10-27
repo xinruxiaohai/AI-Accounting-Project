@@ -4156,6 +4156,12 @@ function bindEvents() {
     }
   });
 
+  // AI 快记：回车即提交一句话，后端解析成功会直接刷新看板与列表
+  const aiForm = $("ai-quick-form");
+  if (aiForm) {
+    aiForm.addEventListener("submit", onAiQuickSubmit);
+  }
+
   // 近 7 天卡片列表同样点一条弹详情
   if ($("recent-groups")) {
     $("recent-groups").addEventListener("click", onRecentClick);
@@ -4436,6 +4442,46 @@ async function loadVersion() {
     }
   } catch (error) {
     // 版本号读不到不影响任何功能，模板里的静态文字就是兜底
+  }
+}
+
+/** AI 快记：一句话交给后端解析入库，成功后刷新看板与账单列表 */
+async function onAiQuickSubmit(event) {
+  event.preventDefault();
+  const input = $("ai-quick-input");
+  const button = $("ai-quick-btn");
+  if (!input || !button) {
+    return;
+  }
+
+  const text = input.value.trim();
+  if (!text) {
+    toast("先输入一句话，比如「昨天打车花了 30」", "error");
+    input.focus();
+    return;
+  }
+  if (button.disabled) {
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "识别中";
+  try {
+    const data = await api("/api/records/ai", jsonOptions("POST", { text: text }));
+    const record = (data && data.record) || {};
+    const amount = Number(record.amount || 0);
+    toast(
+      "AI 已记账：" + (record.category || "未分类") + " ¥" + amount.toFixed(2),
+      "success"
+    );
+    input.value = "";
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
   }
 }
 

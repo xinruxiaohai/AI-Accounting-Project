@@ -6,6 +6,7 @@ import uuid
 
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
+import ai_service
 import database
 
 app = Flask(__name__)
@@ -210,6 +211,57 @@ def create_record():
 
     # 201 表示"已创建"
     return jsonify(id=new_id, **payload), 201
+
+
+@app.route("/api/records/ai", methods=["POST"])
+def create_record_by_ai():
+    """把一句自然语言交给智谱解析，再复用普通记账的入库逻辑。
+
+    模型只负责抽字段，金额/类型/日期到本地还会再校验一遍；写库仍走
+    database.add_record，余额联动、转账校验与手工记账完全一致。
+    """
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
+
+    try:
+        parsed = ai_service.parse_record(text)
+    except ai_service.AIServiceError as exc:
+        # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
+        return jsonify(error=str(exc)), 502
+
+    category = parsed.get("category") or "其他"
+    record_type = parsed["type"]
+
+    category_id = None
+    if record_type in ("expense", "income"):
+        try:
+            category_id = database.ensure_category(category)["id"]
+        except database.RecordError:
+            category_id = None
+
+    new_id, error_message = database.add_record(
+        parsed["amount"],
+        category,
+        parsed.get("note", ""),
+        parsed["date"],
+        parsed.get("account") or database.DEFAULT_ACCOUNT,
+        record_type,
+        category_id,
+        "",
+        parsed.get("to_account", ""),
+        parsed.get("fee", 0),
+    )
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+
+    return jsonify(
+        id=new_id,
+        source="ai",
+        text=text.strip(),
+        record=parsed,
+    ), 201
 
 
 @app.route("/api/records", methods=["GET"])

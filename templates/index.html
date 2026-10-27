@@ -135,6 +135,17 @@
           </svg>
         </button>
 
+        <!-- AI 快记：一句自然语言，后端交给智谱解析后直接入库 -->
+        <form class="ai-quick" id="ai-quick-form" autocomplete="off">
+          <svg class="ai-quick-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3.5 13.6 8l4.4 1.6L13.6 11 12 15.5 10.4 11 6 9.6 10.4 8z"></path>
+            <path d="M18.5 15.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"></path>
+          </svg>
+          <input class="form-control ai-quick-input" id="ai-quick-input" type="text" maxlength="200"
+                 placeholder="AI 快记：昨天打车 30" aria-label="用一句话记账">
+          <button class="btn btn-ai" type="submit" id="ai-quick-btn">记</button>
+        </form>
+
         <button class="btn btn-primary btn-add" type="button" id="add-record-btn">+ 记一笔</button>
       </div>
     </header>
