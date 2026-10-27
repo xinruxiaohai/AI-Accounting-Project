@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.08-DEV (开发中)
-当前进度：v0.08 AI 快记已落地——顶栏一句话输入，后端调用智谱 GLM-4-Flash 解析后写库并联动余额；接口与界面均自测通过（空输入提示、失败 Toast、写入与删除余额回滚），但 .env 里的 ZHIPU_API_KEY 被智谱判定失效（401），真实解析需换有效密钥后重测。v0.07 Step 3 报销与回收站界面仍未开始。
+当前版本：v0.07.2-DEV
+当前进度：AI 接口代码已全部写完并测试了 Mock 逻辑（顶栏「AI 快记」→ POST /api/records/ai → 智谱解析 → 复用 add_record 写库并联动余额），但真实 API 调用卡在 401 密钥无效，需更换有效 Key 后重启服务验证；v0.07 Step 3 报销与回收站界面仍未开始。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -52,9 +52,10 @@ categories: id, name, parent_id (二级分类)。
 /api/upload (POST)
 
 六、下一步行动计划
-当前目标：v0.07-DEV 通讯录、双向借贷与报销系统。
+当前目标：换到有效密钥后完成 AI 解析的真实联调，通过即封版 v0.08。
 执行步骤：
-Step 1（后端已完成）: 建 contacts/debts 表与 CRUD 接口；records 补 deleted_at、is_reimbursable、reimbursement_contact_id、reimbursed_amount、total_reimbursement；所有 records 查询过滤已删除账目。
-Step 2（已完成）: 前端通讯录与借贷页面、借贷时联动资金账户余额。
-Step 3（待做）: 记账支持勾选报销，报销进度与回收站界面；通讯录详情里可继续补“记一笔”快捷入口。
-备注：智谱 GLM-4-Flash 联调已接到顶栏「AI 快记」，当前 .env 密钥被服务端判定过期（401），换密钥后重跑真实解析即可；v0.08 功能细节见 dev-log 与 prompts/15。
+1. 在项目根目录 `.env` 写入有效的 `ZHIPU_API_KEY`，保存后重启 Flask（debug 模式会自动重载，但 .env 只在启动时读一次，建议手动重启）。
+2. 运行 `D:\Project\temp\test_ai_real.py`（venv 的 python），必须打印 `STRICT_JSON_OK`，金额 30、类型 expense、日期为「昨天」对应的 `YYYY-MM-DD HH:MM`。
+3. 打开首页，在顶栏 AI 快记输入「昨天打车花了 30」，确认 Toast 报出分类与金额、账单列表与本月支出随之刷新、账户余额正确扣减；测试账目用唯一备注定位后删除。
+4. 全部通过后：更新 dev-log 与 HANDOFF 为 v0.08-DEV（已封版），提交代码并打 tag `v0.08-DEV` 推送。
+备注：若仍 401，先确认 key 未过期且有 glm-4-flash 权限，再用 curl 直打智谱接口排除网络/代理因素。
