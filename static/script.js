@@ -524,6 +524,9 @@ const state = {
   pageSize: 20,
   pageIndex: 1,
   renderedCount: INFINITE_STEP,
+  // v0.07：通讯录与当前选中的联系人
+  contacts: [],
+  selectedContactId: null,
 };
 
 let recordModal = null;
@@ -641,14 +644,30 @@ function isTransferType() {
   return currentType() === "transfer";
 }
 
+function isDebtType() {
+  return currentType() === "debt";
+}
+
 function applyTypeUi() {
   const transfer = isTransferType();
+  const debt = isDebtType();
 
-  // 转账没有分类概念：收支分类整块藏起来，换成转入账户和手续费
-  $("category-col").classList.toggle("d-none", transfer);
+  // 转账、借贷都没有分类概念：分类整块藏起来
+  $("category-col").classList.toggle("d-none", transfer || debt);
   $("to-account-wrap").classList.toggle("d-none", !transfer);
   $("fee-wrap").classList.toggle("d-none", !transfer);
-  $("account-label").innerHTML = (transfer ? "转出账户" : "账户") + REQ_MARK;
+  $("contact-col").classList.toggle("d-none", !debt);
+  $("debt-direction-wrap").classList.toggle("d-none", !debt);
+  // debts 表没有备注字段，借贷模式不显示备注，免得填了却没处存
+  $("note-col").classList.toggle("d-none", debt);
+
+  let label = "账户";
+  if (transfer) {
+    label = "转出账户";
+  } else if (debt) {
+    label = "资金账户";
+  }
+  $("account-label").innerHTML = label + REQ_MARK;
 
   // 切类型时把被藏起来那一组的红框清掉，免得下次显示还挂着旧错误
   if (transfer) {
@@ -656,6 +675,10 @@ function applyTypeUi() {
   } else {
     clearFieldError($("to-account"));
     clearFieldError($("fee"));
+  }
+  if (debt) {
+    clearFieldError($("category"));
+    fillContactSelect();
   }
 
   updateSubCategoryVisibility();
@@ -746,11 +769,11 @@ function updateSubCategoryVisibility() {
   const wrap = $("sub-category-wrap");
   const select = $("sub-category");
   const hasChildren = select.options.length > 0;
-  wrap.classList.toggle("d-none", isTransferType() || !hasChildren);
+  wrap.classList.toggle("d-none", isTransferType() || isDebtType() || !hasChildren);
 }
 
 function selectedCategoryId() {
-  if (isTransferType()) {
+  if (isTransferType() || isDebtType()) {
     return null;
   }
   const child = $("sub-category");
@@ -2707,6 +2730,18 @@ function collectRecordValues() {
       issues.push({ field: $("fee"), message: "手续费必须是不小于 0 的数字" });
     }
     values.fee = Number.isFinite(fee) && fee > 0 ? cents(fee) : 0;
+  } else if (type === "debt") {
+    const contactId = Number($("contact-select").value);
+    values.contact_id = Number.isFinite(contactId) && contactId > 0 ? contactId : null;
+    values.debt_type = document.querySelector('input[name="debt-direction"]:checked').value;
+    if (!values.contact_id) {
+      issues.push({
+        field: $("contact-select"),
+        message: state.contacts.length
+          ? "请选择联系人"
+          : "还没有联系人，先去「我的 → 通讯录」添加一个",
+      });
+    }
   } else {
     values.category_id = selectedCategoryId();
     if (!values.category_id) {
@@ -2758,6 +2793,319 @@ function collectCategoryValues() {
   };
 }
 
+/* ==================== 通讯录与借贷（v0.07 Step 2） ==================== */
+
+let contactModal = null;
+let editingContactId = null;
+let pendingConfirmKey = "";
+
+/** 危险操作不用 confirm 弹窗：第一次点给提示，3 秒内再点一次才真删 */
+function askConfirm(key, message) {
+  if (pendingConfirmKey === key) {
+    pendingConfirmKey = "";
+    return true;
+  }
+  pendingConfirmKey = key;
+  toast(message + "，3 秒内再点一次确认", "error");
+  window.setTimeout(function () {
+    if (pendingConfirmKey === key) {
+      pendingConfirmKey = "";
+    }
+  }, 3000);
+  return false;
+}
+
+function contactById(contactId) {
+  const id = Number(contactId);
+  return state.contacts.find(function (contact) {
+    return Number(contact.id) === id;
+  }) || null;
+}
+
+function fillContactSelect() {
+  const select = $("contact-select");
+  if (!select) {
+    return;
+  }
+  const keep = select.value;
+  if (!state.contacts.length) {
+    select.innerHTML = '<option value="">还没有联系人，先去「我的 → 通讯录」添加</option>';
+    return;
+  }
+  select.innerHTML = state.contacts
+    .map(function (contact) {
+      const suffix = contact.identity ? " · " + escapeHtml(contact.identity) : "";
+      return '<option value="' + contact.id + '">' + escapeHtml(contact.name) + suffix + "</option>";
+    })
+    .join("");
+  if (keep) {
+    select.value = keep;
+  }
+}
+
+function renderContacts() {
+  const list = $("contacts-list");
+  if (!list) {
+    return;
+  }
+  if (!state.contacts.length) {
+    list.innerHTML = '<div class="empty-cell">通讯录还是空的，点上方「+ 新增联系人」把常来往的人记下来。</div>';
+    $("contact-detail").innerHTML = '<div class="empty-cell">新增联系人后，这里会显示你们之间的借贷明细。</div>';
+    return;
+  }
+  if (!contactById(state.selectedContactId)) {
+    state.selectedContactId = state.contacts[0].id;
+  }
+  list.innerHTML = state.contacts
+    .map(function (contact) {
+      const active = Number(contact.id) === Number(state.selectedContactId);
+      return (
+        '<button type="button" class="contact-item' + (active ? " is-active" : "") +
+        '" data-contact-id="' + contact.id + '">' +
+        '<span class="contact-avatar">' + escapeHtml(String(contact.name || "?").slice(0, 1)) + "</span>" +
+        '<span class="contact-main">' +
+        '<span class="contact-name">' + escapeHtml(contact.name) + "</span>" +
+        '<span class="contact-sub">' + escapeHtml(contact.identity || "未填写关系") + "</span>" +
+        "</span>" +
+        '<span class="contact-count">' + (contact.debt_count || 0) + " 笔</span>" +
+        "</button>"
+      );
+    })
+    .join("");
+  renderContactDetail();
+}
+
+async function loadContacts() {
+  try {
+    const data = await api("/api/contacts");
+    state.contacts = data.contacts || [];
+  } catch (error) {
+    state.contacts = [];
+    toast("通讯录加载失败：" + error.message, "error");
+  }
+  fillContactSelect();
+  renderContacts();
+}
+
+function debtRowHtml(debt) {
+  const lend = debt.type === "lend";
+  const paid = debt.status === "paid";
+  return (
+    '<div class="debt-row' + (paid ? " is-paid" : "") + '">' +
+    '<div class="debt-main">' +
+    '<span class="debt-dir ' + (lend ? "is-lend" : "is-borrow") + '">' + (lend ? "借出" : "借入") + "</span>" +
+    '<span class="debt-amount">' + (lend ? "-" : "+") + money(debt.amount) + "</span>" +
+    '<span class="debt-meta">' + escapeHtml(debt.date || "") + " · " + escapeHtml(debt.account || "") + "</span>" +
+    '<span class="debt-status">' + (paid ? "已结清" : "未结清") + "</span>" +
+    "</div>" +
+    '<div class="debt-actions">' +
+    '<button type="button" class="btn btn-light btn-sm" data-debt-action="toggle" data-debt-id="' + debt.id +
+    '" data-debt-status="' + (paid ? "unpaid" : "paid") + '">' + (paid ? "撤销结清" : "标记结清") + "</button>" +
+    '<button type="button" class="btn btn-outline-danger btn-sm" data-debt-action="delete" data-debt-id="' + debt.id +
+    '">删除</button>' +
+    "</div>" +
+    "</div>"
+  );
+}
+
+async function renderContactDetail() {
+  const box = $("contact-detail");
+  if (!box) {
+    return;
+  }
+  const contact = contactById(state.selectedContactId);
+  if (!contact) {
+    box.innerHTML = '<div class="empty-cell">选中一个联系人，这里会显示你们之间的借贷明细。</div>';
+    return;
+  }
+  box.innerHTML =
+    '<div class="contact-head">' +
+    '<div class="contact-head-main">' +
+    '<span class="contact-avatar is-lg">' + escapeHtml(String(contact.name || "?").slice(0, 1)) + "</span>" +
+    "<div>" +
+    '<h3 class="contact-name-lg">' + escapeHtml(contact.name) + "</h3>" +
+    '<p class="contact-meta">' + escapeHtml(contact.identity || "未填写关系") +
+    (contact.phone ? " · 电话 " + escapeHtml(contact.phone) : "") +
+    (contact.wechat ? " · 微信 " + escapeHtml(contact.wechat) : "") +
+    "</p>" +
+    "</div>" +
+    "</div>" +
+    '<div class="contact-head-actions">' +
+    '<button type="button" class="btn btn-light btn-sm" data-contact-action="edit">编辑</button>' +
+    '<button type="button" class="btn btn-outline-danger btn-sm" data-contact-action="delete">删除</button>' +
+    "</div>" +
+    "</div>" +
+    '<div class="contact-debts"><div class="empty-cell">正在加载借贷记录…</div></div>';
+
+  let debts = [];
+  try {
+    const data = await api("/api/debts?contact_id=" + encodeURIComponent(contact.id));
+    debts = data.debts || [];
+  } catch (error) {
+    toast(error.message, "error");
+  }
+  // 用户可能在请求期间切到了别人，过期响应直接丢掉
+  if (Number(state.selectedContactId) !== Number(contact.id)) {
+    return;
+  }
+  const hold = box.querySelector(".contact-debts");
+  if (!hold) {
+    return;
+  }
+  if (!debts.length) {
+    hold.innerHTML = '<div class="empty-cell">还没有和 TA 的借贷记录，点「记一笔 → 借贷」就能记上。</div>';
+    return;
+  }
+  let receivable = 0;
+  let payable = 0;
+  debts.forEach(function (debt) {
+    if (debt.status === "paid") {
+      return;
+    }
+    if (debt.type === "lend") {
+      receivable += Number(debt.amount) || 0;
+    } else {
+      payable += Number(debt.amount) || 0;
+    }
+  });
+  hold.innerHTML =
+    '<div class="debt-summary">' +
+    '<span>待收 <b class="is-lend">' + money(receivable) + "</b></span>" +
+    '<span>待还 <b class="is-borrow">' + money(payable) + "</b></span>" +
+    '<span>合计 <b>' + money(receivable - payable) + "</b></span>" +
+    "</div>" +
+    debts.map(debtRowHtml).join("");
+}
+
+function openContactModal(contact) {
+  editingContactId = contact ? contact.id : null;
+  $("contact-modal-title").textContent = contact ? "编辑联系人" : "新增联系人";
+  $("contact-name").value = contact ? contact.name : "";
+  $("contact-identity").value = contact ? contact.identity || "" : "";
+  $("contact-phone").value = contact ? contact.phone || "" : "";
+  $("contact-wechat").value = contact ? contact.wechat || "" : "";
+  clearFormErrors($("contact-modal"));
+  if (!contactModal) {
+    contactModal = new window.bootstrap.Modal($("contact-modal"));
+  }
+  contactModal.show();
+  window.setTimeout(function () {
+    $("contact-name").focus();
+  }, 200);
+}
+
+async function saveContact() {
+  const name = $("contact-name").value.trim();
+  if (!name) {
+    $("contact-name").classList.add("is-invalid");
+    toast("联系人姓名不能为空", "error");
+    return;
+  }
+  const payload = {
+    name: name,
+    identity: $("contact-identity").value.trim(),
+    phone: $("contact-phone").value.trim(),
+    wechat: $("contact-wechat").value.trim(),
+  };
+  const button = $("contact-save-btn");
+  setButtonBusy(button, true, "保存中…");
+  try {
+    let saved = null;
+    if (editingContactId) {
+      saved = await api("/api/contacts/" + editingContactId, jsonOptions("PUT", payload));
+      toast("联系人已更新", "success");
+    } else {
+      saved = await api("/api/contacts", jsonOptions("POST", payload));
+      toast("联系人已添加", "success");
+    }
+    if (saved && saved.id) {
+      state.selectedContactId = saved.id;
+    }
+    if (contactModal) {
+      contactModal.hide();
+    }
+    await loadContacts();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function deleteContact(contactId) {
+  const contact = contactById(contactId);
+  if (!contact) {
+    return;
+  }
+  if (!askConfirm("contact-" + contactId, "删除联系人「" + contact.name + "」？")) {
+    return;
+  }
+  try {
+    await api("/api/contacts/" + contactId, { method: "DELETE" });
+    toast("联系人已删除", "success");
+    if (Number(state.selectedContactId) === Number(contactId)) {
+      state.selectedContactId = null;
+    }
+    await loadContacts();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function toggleDebtStatus(debtId, status) {
+  try {
+    await api("/api/debts/" + debtId, jsonOptions("PUT", { status: status }));
+    toast(status === "paid" ? "已标记结清" : "已撤销结清", "success");
+    await loadContacts();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function deleteDebt(debtId) {
+  if (!askConfirm("debt-" + debtId, "删除这条借贷记录？账户余额会一起退回")) {
+    return;
+  }
+  try {
+    await api("/api/debts/" + debtId, { method: "DELETE" });
+    toast("借贷记录已删除，余额已回滚", "success");
+    // refresh 会重新拉账户，资产页和首页余额一起回到删除后的值
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+/** 借贷保存：POST /api/debts，后端在同一事务里改账户余额 */
+async function saveDebt(values) {
+  if (!lockAction("record-save")) {
+    return;
+  }
+  const button = $("save-btn");
+  setButtonBusy(button, true, "保存中…");
+  const payload = {
+    contact_id: values.contact_id,
+    amount: values.amount,
+    type: values.debt_type,
+    account: values.account,
+  };
+  if (values.date) {
+    payload.date = values.date;
+  }
+  try {
+    await api("/api/debts", jsonOptions("POST", payload));
+    toast(values.debt_type === "lend" ? "已借出，资金账户余额已扣减" : "已借入，资金账户余额已增加", "success");
+    closeRecordModal();
+    // refresh 内部已经包含 loadContacts，借贷条数也会一起刷新
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+    unlockAction("record-save");
+  }
+}
+
 /* ==================== 记账弹窗 ==================== */
 
 function resetRecordForm() {
@@ -2780,6 +3128,8 @@ function resetRecordForm() {
   $("sub-category").value = "";
 
   setType("expense");
+  $("debt-lend").checked = true;
+  fillContactSelect();
   if (state.accounts.length) {
     $("account").value = state.accounts[0].name;
   }
@@ -2861,11 +3211,18 @@ async function saveRecord() {
   }
 
   // 2) 并发锁：连点几下也只有第一次真的发请求
+  // 借贷走 /api/debts 且自己加锁，必须在 records 的并发锁之前分流
+  if (check.values.type === "debt") {
+    await saveDebt(check.values);
+    return;
+  }
+
   if (!lockAction("record-save")) {
     return;
   }
 
   const values = check.values;
+
   const payload = {
     amount: values.amount,
     formula: values.formula,
@@ -3629,7 +3986,7 @@ function hideTooltipOf(element) {
 
 async function refresh() {
   // 首页三栏都靠这几份数据，拉完一起重绘，避免主卡先渲染出 0 再跳数字
-  await Promise.all([loadAccounts(), loadRecords(), loadCalendarRecords()]);
+  await Promise.all([loadAccounts(), loadRecords(), loadCalendarRecords(), loadContacts()]);
   await refreshDetail();
   renderDashboard();
 }
@@ -3981,6 +4338,82 @@ function bindEvents() {
     },
     true
   );
+
+  // 通讯录：展开 / 收起、新增、选中联系人、详情卡里的编辑与删除
+  const toggleContacts = $("toggle-contacts-btn");
+  if (toggleContacts) {
+    toggleContacts.addEventListener("click", function () {
+      const body = $("contacts-body");
+      const collapsed = body.classList.toggle("d-none");
+      toggleContacts.textContent = collapsed ? "查看通讯录" : "收起通讯录";
+      if (!collapsed && !state.contacts.length) {
+        loadContacts();
+      }
+    });
+  }
+  const addContact = $("add-contact-btn");
+  if (addContact) {
+    addContact.addEventListener("click", function () {
+      $("contacts-body").classList.remove("d-none");
+      if (toggleContacts) {
+        toggleContacts.textContent = "收起通讯录";
+      }
+      openContactModal(null);
+    });
+  }
+  const contactListBox = $("contacts-list");
+  if (contactListBox) {
+    contactListBox.addEventListener("click", function (event) {
+      const item = event.target.closest("[data-contact-id]");
+      if (!item) {
+        return;
+      }
+      state.selectedContactId = Number(item.getAttribute("data-contact-id"));
+      renderContacts();
+    });
+  }
+  const contactDetailBox = $("contact-detail");
+  if (contactDetailBox) {
+    contactDetailBox.addEventListener("click", function (event) {
+      const action = event.target.closest("[data-contact-action]");
+      const debtButton = event.target.closest("[data-debt-action]");
+      if (action) {
+        const kind = action.getAttribute("data-contact-action");
+        const contact = contactById(state.selectedContactId);
+        if (!contact) {
+          return;
+        }
+        if (kind === "edit") {
+          openContactModal(contact);
+        } else if (kind === "delete") {
+          deleteContact(contact.id);
+        }
+        return;
+      }
+      if (debtButton) {
+        const debtId = Number(debtButton.getAttribute("data-debt-id"));
+        if (debtButton.getAttribute("data-debt-action") === "toggle") {
+          toggleDebtStatus(debtId, debtButton.getAttribute("data-debt-status"));
+        } else {
+          deleteDebt(debtId);
+        }
+      }
+    });
+  }
+  const contactSave = $("contact-save-btn");
+  if (contactSave) {
+    contactSave.addEventListener("click", saveContact);
+  }
+  $("contact-name").addEventListener("input", function () {
+    clearFieldError($("contact-name"));
+  });
+  const contactElement = $("contact-modal");
+  if (contactElement) {
+    contactElement.addEventListener("hidden.bs.modal", function () {
+      editingContactId = null;
+      clearFormErrors(contactElement);
+    });
+  }
 }
 
 /* ==================== 版本 / 导出 / 网络 / 右键菜单（v0.06.3 终极补丁） ==================== */

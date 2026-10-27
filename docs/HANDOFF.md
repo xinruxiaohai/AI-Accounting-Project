@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.06.4-DEV (已封版)
-当前进度：首页白屏已修复（断网横幅未闭合标签吞掉 .app），三栏与图表恢复正常；v0.07 后端表已建好（contacts/debts、records 报销与软删除字段、对应接口），前端尚未适配。
+当前版本：v0.07.1-DEV (开发中)
+当前进度：v0.07 Step 2 已完成，通讯录与借贷在“我的”页和记账弹窗里可用，借贷自动联动资金账户余额；本版同时修复通知抽屉黑边、通讯录说明文字对齐、CSV 日期列显示 ####，并给 /admin 补上编辑通知功能。Step 3（报销与回收站界面）未开始。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -46,13 +46,13 @@ categories: id, name, parent_id (二级分类)。
 /api/accounts (GET/POST/PUT/DELETE)
 /api/categories (GET/POST/PUT/DELETE)
 /api/statistics (GET)
-/api/notifications (GET/POST/DELETE)
+/api/notifications (GET/POST/PUT/DELETE)
 /api/upload (POST)
 
 六、下一步行动计划
 当前目标：v0.07-DEV 通讯录、双向借贷与报销系统。
 执行步骤：
 Step 1（后端已完成）: 建 contacts/debts 表与 CRUD 接口；records 补 deleted_at、is_reimbursable、reimbursement_contact_id、reimbursed_amount、total_reimbursement；所有 records 查询过滤已删除账目。
-Step 2（待做）: 前端通讯录与借贷页面、借贷时联动资金账户余额；前端适配报销与回收站。
-Step 3（待做）: 记账支持勾选报销，报销进度与回收站界面。
+Step 2（已完成）: 前端通讯录与借贷页面、借贷时联动资金账户余额。
+Step 3（待做）: 记账支持勾选报销，报销进度与回收站界面；通讯录详情里可继续补“记一笔”快捷入口。
 备注：智谱 GLM-4-Flash 联调仍因 .env 缺少 ZHIPU_API_KEY 阻塞，暂缓。

@@ -1,4 +1,3 @@
-import csv
 import datetime
 import io
 import os
@@ -501,6 +500,57 @@ def create_notification():
     return jsonify(notification), 201
 
 
+@app.route("/api/notifications/<int:notify_id>", methods=["PUT"])
+def update_notification(notify_id):
+    """开发者修改已发布的通知：只改 body 里出现的字段，没传的保持原样。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    title = data.get("title")
+    if title is not None:
+        if not isinstance(title, str) or not title.strip():
+            return jsonify(error="title 必须是非空字符串"), 400
+        if len(title.strip()) > 80:
+            return jsonify(error="title 最多 80 个字符"), 400
+
+    content = data.get("content")
+    if content is not None:
+        if not isinstance(content, str):
+            return jsonify(error="content 必须是字符串"), 400
+        if len(content) > 20000:
+            return jsonify(error="content 太长了，最多 20000 个字符"), 400
+
+    image_url = data.get("image_url")
+    if image_url is not None:
+        if not isinstance(image_url, str):
+            return jsonify(error="image_url 必须是字符串"), 400
+        if image_url and not (
+            image_url.startswith("/static/")
+            or image_url.startswith("http://")
+            or image_url.startswith("https://")
+        ):
+            return jsonify(error="image_url 只能是 /static/ 下的路径或 http(s) 链接"), 400
+
+    publish_date = data.get("publish_date")
+    if publish_date is not None and not isinstance(publish_date, str):
+        return jsonify(error="publish_date 必须是字符串"), 400
+
+    try:
+        notification = database.update_notification(
+            notify_id,
+            title=title,
+            content=content,
+            image_url=image_url,
+            publish_date=publish_date,
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if notification is None:
+        return jsonify(error="通知不存在"), 404
+    return jsonify(notification)
+
+
 @app.route("/api/notifications/<int:notify_id>", methods=["DELETE"])
 def delete_notification(notify_id):
     """删通知。找不到就是 404，前端 Toast 直接显示。"""
@@ -566,7 +616,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.06.3-DEV"
+APP_VERSION_FALLBACK = "v0.07.1-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
@@ -605,24 +655,33 @@ TYPE_LABELS = {"expense": "支出", "income": "收入", "transfer": "转账"}
 def export_records():
     """把全部账目导成 CSV。开头的 \\ufeff 是给 Excel 认 UTF-8 用的 BOM。"""
     buffer = io.StringIO()
-    buffer.write("\ufeff")
-    writer = csv.writer(buffer)
-    writer.writerow(["日期", "类型", "分类", "账户", "转入账户", "金额", "手续费", "公式", "备注"])
+    buffer.write(chr(0xFEFF))
+    headers = ["日期", "类型", "分类", "账户", "转入账户", "金额", "手续费", "公式", "备注"]
+    crlf = chr(13) + chr(10)
+    buffer.write(",".join(headers) + crlf)
+
+    def cell(value):
+        """普通字段：含逗号/引号/换行时才加引号，其余保持可读。"""
+        text = "" if value is None else str(value)
+        if any(char in text for char in (",", '"', chr(13), chr(10))):
+            return '"' + text.replace('"', '""') + '"'
+        return text
 
     for record in database.list_records():
-        writer.writerow(
-            [
-                record["date"],
-                TYPE_LABELS.get(record["type"], record["type"]),
-                record["category"],
-                record["account"],
-                record.get("to_account", ""),
-                "%.2f" % round(record["amount"], 2),
-                "%.2f" % round(record.get("fee", 0), 2),
-                record.get("formula", ""),
-                record.get("note", ""),
-            ]
-        )
+        # 日期列写成 ="2026-10-26 22:07"：Excel 会当成公式算成文本，
+        # 不再把「2026-10-26 22:07」误认成超长数字而只显示一串 ####。
+        date_cell = '="%s"' % record["date"]
+        rest = [
+            TYPE_LABELS.get(record["type"], record["type"]),
+            record["category"],
+            record["account"],
+            record.get("to_account", ""),
+            "%.2f" % round(record["amount"], 2),
+            "%.2f" % round(record.get("fee", 0), 2),
+            record.get("formula", ""),
+            record.get("note", ""),
+        ]
+        buffer.write(date_cell + "," + ",".join(cell(value) for value in rest) + crlf)
 
     filename = "ai-accounting-%s.csv" % datetime.datetime.now().strftime("%Y%m%d-%H%M")
     return Response(

@@ -98,6 +98,17 @@ def _apply_effects(conn, effects):
         _apply_balance(conn, name, delta)
 
 
+def _debt_effects(debt_type, account, amount):
+    """借贷对资金账户的影响：借出扣钱，借入加钱。"""
+    return [(account, -amount if debt_type == "lend" else amount)]
+
+
+def _debt_balance_problem(conn, account):
+    """借贷必须落到一个真实存在的资金账户上，否则余额无处加减。"""
+    row = conn.execute("SELECT 1 FROM accounts WHERE name = ?", (account,)).fetchone()
+    return None if row is not None else "账户「%s」不存在" % account
+
+
 def _transfer_problem(conn, account, to_account, amount, fee):
     """转账的业务校验，没问题返回 None，有问题返回给用户看的中文原因。"""
     if not to_account:
@@ -1286,12 +1297,18 @@ def create_debt(
             ).fetchone()
             if exists is None:
                 return None, "联系人不存在"
+            problem = _debt_balance_problem(conn, account)
+            if problem is not None:
+                return None, problem
+            debt_id = 0
             cur = conn.execute(
                 "INSERT INTO debts (contact_id, account, amount, type, date, status) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (contact_id, account, round(float(amount), 2), debt_type, normalize_date(date), status),
             )
             debt_id = cur.lastrowid
+            # 借出=钱从账户出去，借入=钱进账户，和账单共用同一套余额规则
+            _apply_effects(conn, _debt_effects(debt_type, account, round(float(amount), 2)))
     finally:
         conn.close()
     return get_debt(debt_id), None
@@ -1347,6 +1364,26 @@ def update_debt(
                 ).fetchone()
                 if contact is None:
                     return None, "联系人不存在"
+            old = conn.execute(
+                "SELECT account, amount, type FROM debts WHERE id = ?", (debt_id,)
+            ).fetchone()
+            new_account = fields.get("account", old["account"])
+            if "account" in fields:
+                problem = _debt_balance_problem(conn, new_account)
+                if problem is not None:
+                    return None, problem
+            # 金额/类型/账户任一变化，先把旧影响整体撤回，再按新值记一次
+            _apply_effects(
+                conn, _reverse_effects(_debt_effects(old["type"], old["account"], old["amount"]))
+            )
+            _apply_effects(
+                conn,
+                _debt_effects(
+                    fields.get("type", old["type"]),
+                    new_account,
+                    fields.get("amount", old["amount"]),
+                ),
+            )
             assignments = ", ".join("%s = ?" % key for key in fields)
             conn.execute(
                 "UPDATE debts SET " + assignments + " WHERE id = ?",
@@ -1362,10 +1399,19 @@ def delete_debt(debt_id):
     conn = get_conn()
     try:
         with conn:
-            exists = conn.execute("SELECT 1 FROM debts WHERE id = ?", (debt_id,)).fetchone()
+            exists = conn.execute(
+                "SELECT account, amount, type FROM debts WHERE id = ?", (debt_id,)
+            ).fetchone()
             if exists is None:
                 return False, "借贷记录不存在"
             conn.execute("DELETE FROM debts WHERE id = ?", (debt_id,))
+            # 删掉借贷就把当时动过的余额还回去
+            _apply_effects(
+                conn,
+                _reverse_effects(
+                    _debt_effects(exists["type"], exists["account"], exists["amount"])
+                ),
+            )
             return True, None
     finally:
         conn.close()
@@ -1419,6 +1465,45 @@ def create_notification(title, content="", image_url="", publish_date=None):
         row = conn.execute(
             "SELECT id, title, content, image_url, publish_date FROM notifications WHERE id = ?",
             (new_id,),
+        ).fetchone()
+        return _row_to_notification(row)
+    finally:
+        conn.close()
+
+
+def update_notification(notify_id, title=None, content=None, image_url=None, publish_date=None):
+    """改通知：只更新传进来的字段（None 表示不动），返回改后的完整字典。
+
+    没有这条通知返回 None，由 app.py 转成 404。
+    """
+    fields = {}
+    if title is not None:
+        title = str(title).strip()
+        if not title:
+            raise RecordError("通知标题不能为空")
+        fields["title"] = title
+    if content is not None:
+        fields["content"] = content
+    if image_url is not None:
+        fields["image_url"] = image_url
+    if publish_date is not None:
+        fields["publish_date"] = publish_date
+
+    conn = get_conn()
+    try:
+        exists = conn.execute("SELECT 1 FROM notifications WHERE id = ?", (notify_id,)).fetchone()
+        if exists is None:
+            return None
+        if fields:
+            assignments = ", ".join("%s = ?" % key for key in fields)
+            with conn:
+                conn.execute(
+                    "UPDATE notifications SET " + assignments + " WHERE id = ?",
+                    list(fields.values()) + [notify_id],
+                )
+        row = conn.execute(
+            "SELECT id, title, content, image_url, publish_date FROM notifications WHERE id = ?",
+            (notify_id,),
         ).fetchone()
         return _row_to_notification(row)
     finally:

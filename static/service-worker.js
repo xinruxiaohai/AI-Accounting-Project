@@ -1,4 +1,4 @@
-/* AI记账管家 · Service Worker（v0.06.4）
+/* AI记账管家 · Service Worker（v0.07.1）
  *
  * 目标：装到桌面后断网也能打开，核心样式 / 脚本 / 图表库全部走本地缓存。
  * 策略：
@@ -6,7 +6,7 @@
  *   - 静态资源：stale-while-revalidate，先用缓存秒开，后台顺手更新
  *   - /api/ 与后台页面：完全不缓存，避免把旧余额当成新数据
  */
-const CACHE_NAME = "ai-accounting-v0.06.4";
+const CACHE_NAME = "ai-accounting-v0.07.1";
 const CACHE_PREFIX = "ai-accounting-";
 const PRECACHE_URLS = [
   "/",

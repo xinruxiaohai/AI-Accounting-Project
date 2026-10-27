@@ -229,7 +229,7 @@
       <!-- 左：发布表单 -->
       <section>
         <div class="admin-card">
-          <h2 class="admin-card-title">写一条新通知</h2>
+          <h2 class="admin-card-title" id="editor-title">写一条新通知</h2>
 
           <div class="mb-3">
             <label class="admin-label" for="notice-title">标题</label>
@@ -273,6 +273,7 @@
 
           <div class="d-flex align-items-center gap-3">
             <button type="button" class="btn btn-primary" id="publish-btn">发布通知</button>
+            <button type="button" class="btn btn-outline-secondary d-none" id="cancel-edit-btn">取消编辑</button>
             <span class="admin-count" id="publish-hint"></span>
           </div>
         </div>
@@ -298,7 +299,7 @@
       "use strict";
 
       var $ = function (id) { return document.getElementById(id); };
-      var state = { notifications: [], imageUrl: "", publishing: false };
+      var state = { notifications: [], imageUrl: "", publishing: false, editingId: null };
 
       function toast(message, isError) {
         var box = $("admin-toast");
@@ -415,9 +416,49 @@
         state.publishing = busy;
         var button = $("publish-btn");
         button.disabled = busy;
-        button.textContent = busy ? "发布中…" : "发布通知";
+        button.textContent = busy ? "保存中…" : (state.editingId ? "保存修改" : "发布通知");
         $("publish-hint").textContent = busy ? "正在写入数据库…" : "";
       }
+
+      function resetForm() {
+        state.editingId = null;
+        $("editor-title").textContent = "写一条新通知";
+        $("notice-title").value = "";
+        $("title-count").textContent = "0";
+        editor.innerHTML = "";
+        $("notice-date").value = "";
+        state.imageUrl = "";
+        $("cover-preview").textContent = "未选择";
+        $("cover-input").value = "";
+        $("publish-btn").textContent = "发布通知";
+        $("cancel-edit-btn").classList.add("d-none");
+      }
+
+      function fillForm(item) {
+        state.editingId = item.id;
+        $("editor-title").textContent = "编辑通知 #" + item.id;
+        $("notice-title").value = item.title || "";
+        $("title-count").textContent = String(($("notice-title").value || "").length);
+        editor.innerHTML = item.content || "";
+        state.imageUrl = item.image_url || "";
+        if (state.imageUrl) {
+          $("cover-preview").innerHTML = '<img src="' + escapeHtml(state.imageUrl) + '" alt="封面预览">';
+        } else {
+          $("cover-preview").textContent = "未选择";
+        }
+        $("cover-input").value = "";
+        var dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
+        $("notice-date").value = dateText ? dateText.replace(" ", "T") : "";
+        $("publish-btn").textContent = "保存修改";
+        $("cancel-edit-btn").classList.remove("d-none");
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        toast("已载入通知 #" + item.id + "，改完点「保存修改」");
+      }
+
+      $("cancel-edit-btn").addEventListener("click", function () {
+        resetForm();
+        toast("已取消编辑");
+      });
 
       $("publish-btn").addEventListener("click", function () {
         if (state.publishing) { return; }
@@ -440,21 +481,19 @@
           payload.publish_date = dateValue.replace("T", " ") + ":00";
         }
 
+        var editingId = state.editingId;
+        var url = editingId ? "/api/notifications/" + editingId : "/api/notifications";
         setPublishing(true);
-        request("/api/notifications", {
-          method: "POST",
+        request(url, {
+          method: editingId ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
         })
           .then(function () {
-            toast("发布成功，前台刷新即可看到");
-            $("notice-title").value = "";
-            $("title-count").textContent = "0";
-            editor.innerHTML = "";
-            $("notice-date").value = "";
-            state.imageUrl = "";
-            $("cover-preview").textContent = "未选择";
-            $("cover-input").value = "";
+            toast(editingId
+              ? "通知 #" + editingId + " 已更新，前台刷新即可看到"
+              : "发布成功，前台刷新即可看到");
+            resetForm();
             return loadList();
           })
           .catch(function (error) { toast(error.message, true); })
@@ -482,6 +521,7 @@
               '<div class="admin-notice-body">' + (plain ? escapeHtml(plain.slice(0, 140)) : "（无正文）") + "</div>" +
               '<div class="admin-notice-foot">' +
                 '<span class="admin-count">#' + item.id + (item.image_url ? " · 有配图" : "") + "</span>" +
+                '<button type="button" class="btn btn-sm btn-outline-primary" data-edit="' + item.id + '">编辑</button>' +
                 '<button type="button" class="btn btn-sm btn-outline-danger" data-del="' + item.id + '">删除</button>' +
               "</div>" +
             "</article>"
@@ -501,13 +541,25 @@
       }
 
       $("notice-list").addEventListener("click", function (event) {
+        var editButton = event.target.closest("[data-edit]");
+        if (editButton) {
+          var targetId = Number(editButton.getAttribute("data-edit"));
+          var target = state.notifications.filter(function (item) { return item.id === targetId; })[0];
+          if (target) { fillForm(target); }
+          return;
+        }
+
         var button = event.target.closest("[data-del]");
         if (!button) { return; }
         var id = button.getAttribute("data-del");
         if (!window.confirm("确定删除通知 #" + id + " 吗？")) { return; }
         button.disabled = true;
         request("/api/notifications/" + id, { method: "DELETE" })
-          .then(function () { toast("已删除"); return loadList(); })
+          .then(function () {
+            toast("已删除");
+            if (String(state.editingId) === String(id)) { resetForm(); }
+            return loadList();
+          })
           .catch(function (error) { button.disabled = false; toast(error.message, true); });
       });
 

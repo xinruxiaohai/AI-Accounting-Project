@@ -2187,10 +2187,16 @@ body {
   max-width: 92vw;
   height: 100vh;
   background: var(--surface);
-  border-left: 1px solid var(--line);
-  box-shadow: var(--shadow-lg);
+  border-left: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 16px 0 0 16px;
+  box-shadow: -18px 0 40px rgba(15, 23, 42, 0.12);
   transform: translateX(102%);
   transition: transform 0.26s ease;
+}
+
+[data-theme="dark"] .notification-panel {
+  border-left-color: rgba(148, 163, 184, 0.16);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.38);
 }
 
 .notification-panel.is-open {
@@ -3077,5 +3083,257 @@ body {
 @media (max-width: 820px) {
   .profile-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ==================== 通讯录与借贷（v0.07 Step 2） ==================== */
+.contacts-panel {
+  margin-top: 18px;
+}
+
+.contacts-tools {
+  display: flex;
+  gap: 8px;
+}
+
+.contacts-hint {
+  margin: 4px 0 0;
+  padding: 0 20px;
+  color: var(--text-soft);
+  font-size: 13px;
+  text-align: left;
+}
+
+.contacts-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  padding: 0 20px 20px;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.contact-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.contact-item:hover {
+  border-color: var(--brand-blue);
+}
+
+.contact-item.is-active {
+  border-color: var(--brand-blue);
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.contact-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.contact-avatar.is-lg {
+  width: 44px;
+  height: 44px;
+  flex-basis: 44px;
+  font-size: 18px;
+}
+
+.contact-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.contact-name,
+.contact-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-name {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.contact-sub {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.contact-count {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.contact-detail {
+  min-height: 220px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.contact-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.contact-head-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.contact-name-lg {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.contact-meta {
+  margin: 2px 0 0;
+  color: var(--text-soft);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.contact-head-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.contact-debts {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debt-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-3);
+  font-size: 13px;
+  color: var(--text-soft);
+}
+
+.debt-summary b {
+  color: var(--text-main);
+}
+
+.debt-summary .is-lend {
+  color: var(--neg);
+}
+
+.debt-summary .is-borrow {
+  color: var(--pos);
+}
+
+.debt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.debt-row.is-paid {
+  opacity: 0.62;
+}
+
+.debt-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.debt-dir {
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.debt-dir.is-lend {
+  color: var(--neg);
+  background: rgba(220, 38, 38, 0.1);
+}
+
+.debt-dir.is-borrow {
+  color: var(--pos);
+  background: rgba(5, 150, 105, 0.12);
+}
+
+.debt-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.debt-meta {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.debt-status {
+  font-size: 12px;
+  color: var(--text-soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.debt-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1024px) {
+  .contacts-layout {
+    grid-template-columns: 1fr;
   }
 }

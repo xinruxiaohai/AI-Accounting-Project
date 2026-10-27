@@ -85,7 +85,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.06.4-DEV · 开发中</div>
+      <div class="sidebar-version" id="sidebar-version">v0.07.1-DEV · 开发中</div>
     </div>
   </aside>
 
@@ -451,11 +451,32 @@
             <p class="export-text">
               文件开头带 UTF-8 BOM，Excel / WPS 直接双击打开，中文不会变成乱码。
               列包含日期、类型、分类、账户、转入账户、金额、手续费、公式与备注。
+              日期列已用 ="..." 包成文本，避免 Excel 显示成 ####；如果仍然看到井号，把日期列拖宽即可。
             </p>
             <button class="btn btn-primary" type="button" id="export-btn-profile">
               下载 CSV 文件
             </button>
             <p class="export-hint">导出不影响账本数据，随时可以再导一次。</p>
+          </div>
+        </div>
+
+        <!-- ============ 通讯录（v0.07） ============ -->
+        <div class="panel contacts-panel" id="contacts-panel">
+          <div class="panel-head">
+            <span class="panel-title">通讯录</span>
+            <div class="contacts-tools">
+              <button class="btn btn-light btn-sm" type="button" id="toggle-contacts-btn">查看通讯录</button>
+              <button class="btn btn-primary btn-sm" type="button" id="add-contact-btn">+ 新增联系人</button>
+            </div>
+          </div>
+          <p class="contacts-hint">记下常来往的人，借贷时直接选；点联系人可看你们之间的每一笔账。</p>
+          <div class="contacts-body d-none" id="contacts-body">
+            <div class="contacts-layout">
+              <div class="contacts-side">
+                <div class="contacts-list" id="contacts-list"></div>
+              </div>
+              <div class="contact-detail" id="contact-detail"></div>
+            </div>
           </div>
         </div>
       </section>
@@ -486,6 +507,8 @@
               <label class="btn btn-outline-success" for="type-income">收入</label>
               <input type="radio" class="btn-check" name="record-type" id="type-transfer" value="transfer">
               <label class="btn btn-outline-primary" for="type-transfer">转账</label>
+              <input type="radio" class="btn-check" name="record-type" id="type-debt" value="debt">
+              <label class="btn btn-outline-warning" for="type-debt">借贷</label>
             </div>
           </div>
 
@@ -534,6 +557,24 @@
               <select id="to-account" class="form-select"></select>
             </div>
 
+            <!-- 借贷专用：联系人（平时隐藏，选项来自 /api/contacts） -->
+            <div class="col-6 d-none" id="contact-col">
+              <label class="form-label" for="contact-select">联系人<span class="req">*</span></label>
+              <select id="contact-select" class="form-select"></select>
+            </div>
+
+            <!-- 借贷专用：借出 / 借入 -->
+            <div class="col-6 d-none" id="debt-direction-wrap">
+              <label class="form-label">借贷方向<span class="req">*</span></label>
+              <div class="btn-group w-100" role="group">
+                <input type="radio" class="btn-check" name="debt-direction" id="debt-lend" value="lend" checked>
+                <label class="btn btn-outline-secondary" for="debt-lend">借出</label>
+                <input type="radio" class="btn-check" name="debt-direction" id="debt-borrow" value="borrow">
+                <label class="btn btn-outline-secondary" for="debt-borrow">借入</label>
+              </div>
+              <div class="formula-hint" id="debt-hint">借出：钱从这个账户出去；借入：钱进这个账户。</div>
+            </div>
+
             <!-- 转账专用：手续费（平时隐藏，默认 0） -->
             <div class="col-6 d-none" id="fee-wrap">
               <label class="form-label" for="fee">手续费</label>
@@ -549,7 +590,7 @@
               <input id="record-time" class="form-control" type="datetime-local" value="{{ now }}">
             </div>
 
-            <div class="col-12">
+            <div class="col-12" id="note-col">
               <label class="form-label" for="note">备注</label>
               <input id="note" class="form-control" type="text" placeholder="例如：午饭（可不填）">
             </div>
@@ -679,6 +720,45 @@
 </aside>
 
 <!-- 右下角悬浮球：本月预算剩余 + 快捷键提示（悬停 / 点击弹出迷你面板） -->
+<!-- ================= 联系人弹窗（新增 / 编辑） ================= -->
+<div class="modal fade" id="contact-modal" tabindex="-1" aria-labelledby="contact-modal-title" aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="contact-modal-title">新增联系人</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <form id="contact-form" onsubmit="return false;">
+          <div class="mb-3">
+            <label class="form-label" for="contact-name">姓名 / 称呼<span class="req">*</span></label>
+            <input id="contact-name" class="form-control" type="text" maxlength="30" placeholder="例如：老王">
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="contact-identity">关系</label>
+            <input id="contact-identity" class="form-control" type="text" maxlength="30" placeholder="例如：同事 / 室友 / 家人">
+          </div>
+          <div class="row g-3">
+            <div class="col-6">
+              <label class="form-label" for="contact-phone">电话</label>
+              <input id="contact-phone" class="form-control" type="text" maxlength="30" placeholder="可不填">
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="contact-wechat">微信</label>
+              <input id="contact-wechat" class="form-control" type="text" maxlength="30" placeholder="可不填">
+            </div>
+          </div>
+          <p class="formula-hint">只有姓名必填，其余随时可以补。</p>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="contact-save-btn">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="fab" id="fab">
   <button class="fab-ball" type="button" id="fab-ball"
           aria-expanded="false" aria-controls="fab-panel" aria-label="预算余额与快捷键">
