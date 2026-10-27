@@ -280,7 +280,12 @@ def init_db():
                     type     TEXT    NOT NULL DEFAULT 'expense',
                     formula  TEXT    NOT NULL DEFAULT '',
                     to_account TEXT  NOT NULL DEFAULT '',
-                    fee      REAL    NOT NULL DEFAULT 0
+                    fee      REAL    NOT NULL DEFAULT 0,
+                    deleted_at TEXT,
+                    is_reimbursable INTEGER NOT NULL DEFAULT 0,
+                    reimbursement_contact_id INTEGER,
+                    reimbursed_amount REAL NOT NULL DEFAULT 0,
+                    total_reimbursement REAL NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -310,6 +315,23 @@ def init_db():
                 )
             if "fee" not in columns:
                 conn.execute("ALTER TABLE records ADD COLUMN fee REAL NOT NULL DEFAULT 0")
+            # v0.07 新增：软删除与报销。默认值让老数据保持「未删除、不报销、已报 0 元」
+            if "deleted_at" not in columns:
+                conn.execute("ALTER TABLE records ADD COLUMN deleted_at TEXT")
+            if "is_reimbursable" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN is_reimbursable INTEGER NOT NULL DEFAULT 0"
+                )
+            if "reimbursement_contact_id" not in columns:
+                conn.execute("ALTER TABLE records ADD COLUMN reimbursement_contact_id INTEGER")
+            if "reimbursed_amount" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN reimbursed_amount REAL NOT NULL DEFAULT 0"
+                )
+            if "total_reimbursement" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN total_reimbursement REAL NOT NULL DEFAULT 0"
+                )
 
             # 账户表：name 主键，balance 当前余额，group_name 大类（资金/储蓄/投资）
             # sort_order 供「账户管理」里拖拽排序，新账户一律排到同组最后
@@ -374,6 +396,41 @@ def init_db():
                     publish_date TEXT    NOT NULL
                 )
                 """
+            )
+
+            # 通讯录（v0.07）：name 唯一，避免同一人建两遍导致借贷对不上账
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS contacts (
+                    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name     TEXT    NOT NULL UNIQUE,
+                    identity TEXT    NOT NULL DEFAULT '',
+                    phone    TEXT    NOT NULL DEFAULT '',
+                    wechat   TEXT    NOT NULL DEFAULT ''
+                )
+                """
+            )
+
+            # 借贷（v0.07）：lend=我借出（对方欠我），borrow=我借入（我欠对方）
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS debts (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    contact_id INTEGER NOT NULL REFERENCES contacts(id),
+                    account    TEXT    NOT NULL DEFAULT '现金',
+                    amount     REAL    NOT NULL,
+                    type       TEXT    NOT NULL DEFAULT 'lend',
+                    date       TEXT    NOT NULL,
+                    status     TEXT    NOT NULL DEFAULT 'unpaid'
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_debts_contact ON debts (contact_id)"
+            )
+            # 软删除过滤是每条账单查询的必经条件，单独建索引
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_records_deleted ON records (deleted_at)"
             )
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
@@ -556,7 +613,9 @@ def delete_category(category_id):
                 return False, "该分类下还有 %d 个子分类，请先删掉子分类" % children
 
             used = conn.execute(
-                "SELECT COUNT(*) AS c FROM records WHERE category_id = ?", (category_id,)
+                "SELECT COUNT(*) AS c FROM records "
+                "WHERE category_id = ? AND deleted_at IS NULL",
+                (category_id,),
             ).fetchone()["c"]
             if used:
                 return False, "还有 %d 条账目在用这个分类，删了会让它们失去分类" % used
@@ -712,7 +771,8 @@ def delete_account(name):
 
             used = conn.execute(
                 "SELECT COUNT(*) AS c FROM records "
-                "WHERE account = ? OR (type = 'transfer' AND to_account = ?)",
+                "WHERE (account = ? OR (type = 'transfer' AND to_account = ?)) "
+                "  AND deleted_at IS NULL",
                 (name, name),
             ).fetchone()["c"]
             if used:
@@ -935,7 +995,7 @@ def list_records(account=None, category_id=None, parent_id=None):
         "  LEFT JOIN categories c ON c.id = r.category_id "
         "  LEFT JOIN categories p ON p.id = c.parent_id"
     )
-    conditions = []
+    conditions = ["r.deleted_at IS NULL"]
     params = []
     if account:
         # 转账会同时牵动转出和转入两个账户，查任何一个账户都该看到这笔转账
@@ -972,10 +1032,12 @@ def get_statistics():
     conn = get_conn()
     try:
         income_total = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS total FROM records WHERE type = 'income'"
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
+            "WHERE type = 'income' AND deleted_at IS NULL"
         ).fetchone()["total"]
         expense_total = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS total FROM records WHERE type = 'expense'"
+            "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
+            "WHERE type = 'expense' AND deleted_at IS NULL"
         ).fetchone()["total"]
         balance_total = conn.execute(
             "SELECT COALESCE(SUM(balance), 0) AS total FROM accounts"
@@ -989,6 +1051,324 @@ def get_statistics():
         "expense_total": round(expense_total, 2),
         "balance_total": round(balance_total, 2),
     }
+
+
+# ---------------- 通讯录与借贷（v0.07） ----------------
+
+DEBT_TYPES = ("lend", "borrow")  # lend=我借出（对方欠我），borrow=我借入（我欠对方）
+DEBT_STATUSES = ("unpaid", "paid")
+
+
+def _row_to_contact(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "identity": row["identity"],
+        "phone": row["phone"],
+        "wechat": row["wechat"],
+    }
+
+
+def list_contacts():
+    """全部联系人，顺带带出借贷条数，前端列表不用逐个人再查一次。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT c.id, c.name, c.identity, c.phone, c.wechat, "
+            "       COUNT(d.id) AS debt_count "
+            "  FROM contacts c LEFT JOIN debts d ON d.contact_id = c.id "
+            " GROUP BY c.id "
+            " ORDER BY c.id"
+        ).fetchall()
+        contacts = []
+        for row in rows:
+            contact = _row_to_contact(row)
+            contact["debt_count"] = row["debt_count"]
+            contacts.append(contact)
+        return contacts
+    finally:
+        conn.close()
+
+
+def get_contact(contact_id):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, name, identity, phone, wechat FROM contacts WHERE id = ?",
+            (contact_id,),
+        ).fetchone()
+        return _row_to_contact(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def create_contact(name, identity="", phone="", wechat=""):
+    """新建联系人，返回 (联系人字典, 错误信息)。姓名重复直接拒绝。"""
+    name = (name or "").strip()
+    if not name:
+        return None, "联系人姓名不能为空"
+
+    conn = get_conn()
+    contact_id = None
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO contacts (name, identity, phone, wechat) VALUES (?, ?, ?, ?)",
+                (
+                    name,
+                    (identity or "").strip(),
+                    (phone or "").strip(),
+                    (wechat or "").strip(),
+                ),
+            )
+            contact_id = cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None, "联系人「%s」已存在" % name
+    finally:
+        conn.close()
+    return get_contact(contact_id), None
+
+
+def update_contact(contact_id, name=None, identity=None, phone=None, wechat=None):
+    """改联系人，只改传进来的字段，返回 (联系人字典, 错误信息)。"""
+    fields = {}
+    if name is not None:
+        name = name.strip()
+        if not name:
+            return None, "联系人姓名不能为空"
+        fields["name"] = name
+    for key, value in (("identity", identity), ("phone", phone), ("wechat", wechat)):
+        if value is not None:
+            fields[key] = value.strip()
+    if not fields:
+        return None, "没有要修改的字段"
+
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute(
+                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+            ).fetchone()
+            if exists is None:
+                return None, "联系人不存在"
+            assignments = ", ".join("%s = ?" % key for key in fields)
+            conn.execute(
+                "UPDATE contacts SET " + assignments + " WHERE id = ?",
+                list(fields.values()) + [contact_id],
+            )
+    except sqlite3.IntegrityError:
+        return None, "联系人姓名已存在"
+    finally:
+        conn.close()
+    return get_contact(contact_id), None
+
+
+def delete_contact(contact_id):
+    """删联系人，返回 (是否删除, 错误信息)。还有借贷或报销关联时不让删。"""
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute(
+                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+            ).fetchone()
+            if exists is None:
+                return False, "联系人不存在"
+
+            debts_used = conn.execute(
+                "SELECT COUNT(*) AS c FROM debts WHERE contact_id = ?", (contact_id,)
+            ).fetchone()["c"]
+            if debts_used:
+                return False, "该联系人还有 %d 条借贷记录，先处理掉再删" % debts_used
+
+            records_used = conn.execute(
+                "SELECT COUNT(*) AS c FROM records "
+                "WHERE reimbursement_contact_id = ? AND deleted_at IS NULL",
+                (contact_id,),
+            ).fetchone()["c"]
+            if records_used:
+                return False, "还有 %d 条账单关联这个联系人的报销" % records_used
+
+            conn.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+            return True, None
+    finally:
+        conn.close()
+
+
+def _row_to_debt(row):
+    return {
+        "id": row["id"],
+        "contact_id": row["contact_id"],
+        "contact_name": row["contact_name"],
+        "account": row["account"],
+        "amount": round(row["amount"], 2),
+        "type": row["type"],
+        "date": normalize_date(row["date"]),
+        "status": row["status"],
+    }
+
+
+DEBT_SELECT = (
+    "SELECT d.id, d.contact_id, c.name AS contact_name, d.account, d.amount, "
+    "       d.type, d.date, d.status "
+    "  FROM debts d JOIN contacts c ON c.id = d.contact_id"
+)
+
+
+def list_debts(contact_id=None, status=None):
+    """借贷列表，新的排前面；可按联系人、结清状态筛选。"""
+    conn = get_conn()
+    try:
+        sql = DEBT_SELECT
+        conditions = []
+        params = []
+        if contact_id is not None:
+            conditions.append("d.contact_id = ?")
+            params.append(contact_id)
+        if status:
+            conditions.append("d.status = ?")
+            params.append(status)
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY d.date DESC, d.id DESC"
+        return [_row_to_debt(row) for row in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+
+def get_debt(debt_id):
+    conn = get_conn()
+    try:
+        row = conn.execute(DEBT_SELECT + " WHERE d.id = ?", (debt_id,)).fetchone()
+        return _row_to_debt(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def _check_debt_amount(amount):
+    """金额必须是大于 0 的有限数字，返回错误信息（合法为 None）。"""
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return "amount 必须是数字"
+    if not (0 < float(amount) < float("inf")):
+        return "amount 必须是大于 0 的数字"
+    return None
+
+
+def create_debt(
+    contact_id,
+    amount,
+    debt_type="lend",
+    account=DEFAULT_ACCOUNT,
+    date=None,
+    status="unpaid",
+):
+    """新增一条借贷，返回 (借贷字典, 错误信息)。"""
+    if isinstance(contact_id, bool) or not isinstance(contact_id, int):
+        return None, "contact_id 必须是整数"
+    problem = _check_debt_amount(amount)
+    if problem is not None:
+        return None, problem
+    if debt_type not in DEBT_TYPES:
+        return None, "type 只能是 lend / borrow"
+    if status not in DEBT_STATUSES:
+        return None, "status 只能是 unpaid / paid"
+    account = (account or "").strip()
+    if not account:
+        return None, "account 不能为空"
+    if not date:
+        date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    conn = get_conn()
+    debt_id = None
+    try:
+        with conn:
+            exists = conn.execute(
+                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+            ).fetchone()
+            if exists is None:
+                return None, "联系人不存在"
+            cur = conn.execute(
+                "INSERT INTO debts (contact_id, account, amount, type, date, status) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (contact_id, account, round(float(amount), 2), debt_type, normalize_date(date), status),
+            )
+            debt_id = cur.lastrowid
+    finally:
+        conn.close()
+    return get_debt(debt_id), None
+
+
+def update_debt(
+    debt_id,
+    contact_id=None,
+    amount=None,
+    debt_type=None,
+    account=None,
+    date=None,
+    status=None,
+):
+    """改借贷，只改传进来的字段，返回 (借贷字典, 错误信息)。"""
+    fields = {}
+    if contact_id is not None:
+        if isinstance(contact_id, bool) or not isinstance(contact_id, int):
+            return None, "contact_id 必须是整数"
+        fields["contact_id"] = contact_id
+    if amount is not None:
+        problem = _check_debt_amount(amount)
+        if problem is not None:
+            return None, problem
+        fields["amount"] = round(float(amount), 2)
+    if debt_type is not None:
+        if debt_type not in DEBT_TYPES:
+            return None, "type 只能是 lend / borrow"
+        fields["type"] = debt_type
+    if account is not None:
+        account = account.strip()
+        if not account:
+            return None, "account 不能为空"
+        fields["account"] = account
+    if date is not None:
+        fields["date"] = normalize_date(date)
+    if status is not None:
+        if status not in DEBT_STATUSES:
+            return None, "status 只能是 unpaid / paid"
+        fields["status"] = status
+    if not fields:
+        return None, "没有要修改的字段"
+
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute("SELECT 1 FROM debts WHERE id = ?", (debt_id,)).fetchone()
+            if exists is None:
+                return None, "借贷记录不存在"
+            if "contact_id" in fields:
+                contact = conn.execute(
+                    "SELECT 1 FROM contacts WHERE id = ?", (fields["contact_id"],)
+                ).fetchone()
+                if contact is None:
+                    return None, "联系人不存在"
+            assignments = ", ".join("%s = ?" % key for key in fields)
+            conn.execute(
+                "UPDATE debts SET " + assignments + " WHERE id = ?",
+                list(fields.values()) + [debt_id],
+            )
+    finally:
+        conn.close()
+    return get_debt(debt_id), None
+
+
+def delete_debt(debt_id):
+    """删除借贷，返回 (是否删除, 错误信息)。"""
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute("SELECT 1 FROM debts WHERE id = ?", (debt_id,)).fetchone()
+            if exists is None:
+                return False, "借贷记录不存在"
+            conn.execute("DELETE FROM debts WHERE id = ?", (debt_id,))
+            return True, None
+    finally:
+        conn.close()
 
 
 # ---------------- 通知（v0.06.2） ----------------

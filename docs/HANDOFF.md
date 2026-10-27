@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.06.3-DEV (已封版)
-当前进度：PWA、CSV 导出、动态版本号、右键菜单、拖拽排序、断网横幅、请求超时、自定义 404 全部落地；ai_service.py 已封装 GLM-4-Flash，等待真实密钥完成联调。
+当前版本：v0.06.4-DEV (已封版)
+当前进度：首页白屏已修复（断网横幅未闭合标签吞掉 .app），三栏与图表恢复正常；v0.07 后端表已建好（contacts/debts、records 报销与软删除字段、对应接口），前端尚未适配。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -49,10 +49,10 @@ categories: id, name, parent_id (二级分类)。
 /api/notifications (GET/POST/DELETE)
 /api/upload (POST)
 
-六、下一步行动计划 (等待用户下达)
-当前目标：接入智谱 GLM-4-Flash，实现自然语言解析记账。
+六、下一步行动计划
+当前目标：v0.07-DEV 通讯录、双向借贷与报销系统。
 执行步骤：
-Step 1（已完成）: ai_service.py 封装智谱 API，严格 System Prompt 返回 JSON，本地校验金额、类型、日期、转账字段。
-Step 2（待做）: 后端新增 /api/records/ai 路由，解析后复用入库逻辑。
-Step 3（待做）: 前端顶部加入 AI 输入框与按钮。
-当前阻塞：项目根目录 .env 为空，ZHIPU_API_KEY 未配置，真实调用暂无法验证。
+Step 1（后端已完成）: 建 contacts/debts 表与 CRUD 接口；records 补 deleted_at、is_reimbursable、reimbursement_contact_id、reimbursed_amount、total_reimbursement；所有 records 查询过滤已删除账目。
+Step 2（待做）: 前端通讯录与借贷页面、借贷时联动资金账户余额；前端适配报销与回收站。
+Step 3（待做）: 记账支持勾选报销，报销进度与回收站界面。
+备注：智谱 GLM-4-Flash 联调仍因 .env 缺少 ZHIPU_API_KEY 阻塞，暂缓。

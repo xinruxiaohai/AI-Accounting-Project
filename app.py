@@ -567,20 +567,13 @@ def serve_favicon():
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
 APP_VERSION_FALLBACK = "v0.06.3-DEV"
-_version_cache = None
-
-
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
     优先 APP_VERSION（部署时钉死），否则读 Git Tag；
     Git 不可用（比如拷到 U 盘里演示）时回落到内置版本号。
-    结果只算一次：侧栏每次刷新都会调这个接口，没必要反复起子进程。
+    不做进程级缓存：打 Tag 后不重启服务也能立刻读到新版本，git describe 本身很快。
     """
-    global _version_cache
-    if _version_cache is not None:
-        return _version_cache
-
     version = (os.environ.get("APP_VERSION") or "").strip()
     if not version:
         try:
@@ -595,8 +588,7 @@ def detect_version():
                 version = result.stdout.strip()
         except (OSError, subprocess.SubprocessError):
             version = ""
-    _version_cache = version or APP_VERSION_FALLBACK
-    return _version_cache
+    return version or APP_VERSION_FALLBACK
 
 
 @app.route("/api/version")
@@ -671,6 +663,132 @@ def reorder_accounts():
     error = database.reorder_accounts(data.get("names"))
     if error is not None:
         return jsonify(error=error), 400
+    return jsonify(ok=True)
+
+
+# ---------------- 通讯录接口（v0.07） ----------------
+
+@app.route("/api/contacts", methods=["GET"])
+def list_contacts():
+    """全部联系人，带各自的借贷条数。"""
+    contacts = database.list_contacts()
+    return jsonify(count=len(contacts), contacts=contacts)
+
+
+@app.route("/api/contacts", methods=["POST"])
+def create_contact():
+    """body: {"name": "张三", "identity": "室友", "phone": "138...", "wechat": "zs"}"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    contact, error = database.create_contact(
+        data.get("name"),
+        data.get("identity", ""),
+        data.get("phone", ""),
+        data.get("wechat", ""),
+    )
+    if error is not None:
+        status = 409 if "已存在" in error else 400
+        return jsonify(error=error), status
+    return jsonify(contact), 201
+
+
+@app.route("/api/contacts/<int:contact_id>", methods=["PUT"])
+def update_contact(contact_id):
+    """只改传进来的字段；一个都没传算 400。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    for key in ("name", "identity", "phone", "wechat"):
+        if key in data and not isinstance(data[key], str):
+            return jsonify(error="%s 必须是字符串" % key), 400
+
+    contact, error = database.update_contact(
+        contact_id,
+        name=data.get("name"),
+        identity=data.get("identity"),
+        phone=data.get("phone"),
+        wechat=data.get("wechat"),
+    )
+    if error is not None:
+        status = 404 if error == "联系人不存在" else (409 if "已存在" in error else 400)
+        return jsonify(error=error), status
+    return jsonify(contact)
+
+
+@app.route("/api/contacts/<int:contact_id>", methods=["DELETE"])
+def delete_contact(contact_id):
+    """删联系人；有关联借贷或报销时返回 409，让用户先处理。"""
+    deleted, error = database.delete_contact(contact_id)
+    if error is not None:
+        status = 404 if error == "联系人不存在" else 409
+        return jsonify(error=error), status
+    return jsonify(ok=True)
+
+
+# ---------------- 借贷接口（v0.07） ----------------
+
+@app.route("/api/debts", methods=["GET"])
+def list_debts():
+    """全部借贷；?contact_id=1 筛人，?status=unpaid 筛未结清。"""
+    contact_id = request.args.get("contact_id", type=int)
+    status = (request.args.get("status") or "").strip()
+    if status and status not in database.DEBT_STATUSES:
+        return jsonify(error="status 只能是 unpaid / paid"), 400
+
+    debts = database.list_debts(contact_id=contact_id, status=status or None)
+    return jsonify(count=len(debts), debts=debts)
+
+
+@app.route("/api/debts", methods=["POST"])
+def create_debt():
+    """body: {"contact_id":1,"amount":100,"type":"lend","account":"现金","date":"...","status":"unpaid"}"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    debt, error = database.create_debt(
+        data.get("contact_id"),
+        data.get("amount"),
+        debt_type=data.get("type", "lend"),
+        account=data.get("account", database.DEFAULT_ACCOUNT),
+        date=data.get("date"),
+        status=data.get("status", "unpaid"),
+    )
+    if error is not None:
+        status = 404 if error == "联系人不存在" else 400
+        return jsonify(error=error), status
+    return jsonify(debt), 201
+
+
+@app.route("/api/debts/<int:debt_id>", methods=["PUT"])
+def update_debt(debt_id):
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    debt, error = database.update_debt(
+        debt_id,
+        contact_id=data.get("contact_id"),
+        amount=data.get("amount"),
+        debt_type=data.get("type"),
+        account=data.get("account"),
+        date=data.get("date"),
+        status=data.get("status"),
+    )
+    if error is not None:
+        status = 404 if error == "借贷记录不存在" else 400
+        return jsonify(error=error), status
+    return jsonify(debt)
+
+
+@app.route("/api/debts/<int:debt_id>", methods=["DELETE"])
+def delete_debt(debt_id):
+    deleted, error = database.delete_debt(debt_id)
+    if error is not None:
+        return jsonify(error=error), 404
     return jsonify(ok=True)
 
 

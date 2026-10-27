@@ -206,3 +206,11 @@ v0.06.3-DEV 2026-10-27 终极补丁：PWA、CSV 导出、极客交互与系统�
 交互层用原生事件完成，全局 keydown 接管 Ctrl+K 与 N，账单列表代理 contextmenu 弹自绘菜单并按视口钳位，分类与账户引入本地 Sortable.js，排序结果写入新增的 sort_order 列，接口校验同一父级后按数组下标回写；兜底部分统一封装 fetch 用 AbortController 控制 10 秒超时，online/offline 驱动顶部红绿横幅，404 由 errorhandler 分流为 JSON 或独立模板。
 
 踩坑结论：Sortable 实例在列表重绘后必须 destroy 重建，Service Worker 注册不能挂在 window.load，CSV 的 mimetype 只写 text/csv 避免重复 charset，headless 合成拖拽不可靠，最终以接口幂等和 DOM 结构断言兜底。
+
+v0.06.4-DEV 2026-10-27 白屏紧急修复：断网横幅未闭合
+
+技术路径：浏览器按 HTML 容错解析后，断网横幅的 div 一直没闭合，把整个 .app 三栏布局吞成了自己的子节点；横幅是 position: fixed 且默认透明，于是页面只剩白底，控制台没有 JS 报错，只剩一条无关的 PWA meta 警告。修复为给 #net-banner 补上结束标签，让它成为 body 下的空占位节点。
+
+排查手段：先用 curl 确认页面与静态资源均 200，再用 headless Chrome 加 CDP 读取 body 直接子节点、.app/.sidebar/.main 的几何尺寸和 canvas 宽度，发现 body 只剩 toast-stack 与 net-banner，最终定位到未闭合标签。修复后侧栏回到 232px、主区 1192px，图表 canvas 恢复 304 宽。
+
+踩坑结论：Flask 模板能正常渲染不代表 DOM 结构正确，白屏且无 JS 报错时优先用 DOM 树和布局几何定位，而不是继续翻 JS；新增 fixed 浮层务必确认成对闭合，否则会静默吞掉整页。
