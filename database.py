@@ -261,6 +261,10 @@ def _backfill_category_ids(conn):
 def init_db():
     """建表 + 兼容旧库升级。反复启动不会报错，旧库也不会丢数据。"""
     conn = get_conn()
+    # 这一轮是不是刚补的 sort_order 列：只有刚补时才按旧顺序回填，
+    # 否则每次启动都会把用户拖拽出来的顺序重置回「按 id / rowid」
+    categories_need_order = False
+    accounts_need_order = False
     try:
         # 第一段：只做结构（DDL）。SQLite 的 DDL 会先提交已有事务，所以单独一段更清楚
         with conn:
@@ -308,11 +312,14 @@ def init_db():
                 conn.execute("ALTER TABLE records ADD COLUMN fee REAL NOT NULL DEFAULT 0")
 
             # 账户表：name 主键，balance 当前余额，group_name 大类（资金/储蓄/投资）
+            # sort_order 供「账户管理」里拖拽排序，新账户一律排到同组最后
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS accounts (
-                    name    TEXT PRIMARY KEY,
-                    balance REAL NOT NULL DEFAULT 0
+                    name       TEXT PRIMARY KEY,
+                    balance    REAL NOT NULL DEFAULT 0,
+                    group_name TEXT NOT NULL DEFAULT '资金账户',
+                    sort_order INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -324,17 +331,31 @@ def init_db():
                 conn.execute(
                     "ALTER TABLE accounts ADD COLUMN group_name TEXT NOT NULL DEFAULT '资金账户'"
                 )
+            if "sort_order" not in account_columns:
+                conn.execute(
+                    "ALTER TABLE accounts ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+                )
+                accounts_need_order = True
 
             # 分类表：parent_id 自关联实现两级分类。parent_id 为 NULL 即一级分类
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS categories (
-                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name      TEXT    NOT NULL,
-                    parent_id INTEGER REFERENCES categories(id)
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name       TEXT    NOT NULL,
+                    parent_id  INTEGER REFERENCES categories(id),
+                    sort_order INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            category_columns = [
+                row["name"] for row in conn.execute("PRAGMA table_info(categories)")
+            ]
+            if "sort_order" not in category_columns:
+                conn.execute(
+                    "ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+                )
+                categories_need_order = True
             # 同一父级下不允许同名。parent_id 为 NULL 时 COALESCE 成 0，避免 NULL 不参与唯一约束
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_categories "
@@ -361,12 +382,19 @@ def init_db():
             _seed_accounts(conn)
             _seed_notifications(conn)
             _backfill_category_ids(conn)
+            # 只有刚补列的那一次才回填：分类按 id、账户按 rowid，
+            # 正好等于升级前「按创建先后」的显示顺序
+            if categories_need_order:
+                conn.execute("UPDATE categories SET sort_order = id")
             # 老账目里出现过的自定义账户也补进账户表，否则列表里查不到它
             conn.execute(
                 "INSERT OR IGNORE INTO accounts (name, balance, group_name) "
                 "SELECT DISTINCT account, 0, ? FROM records",
                 (DEFAULT_GROUP,),
             )
+            # 账户回填放在补账户之后：新补进来的行 rowid 最大，理应排最后
+            if accounts_need_order:
+                conn.execute("UPDATE accounts SET sort_order = rowid")
     finally:
         conn.close()  # with 只管事务，连接必须手动关
 
@@ -404,7 +432,7 @@ def list_categories_tree():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, parent_id FROM categories ORDER BY id"
+            "SELECT id, name, parent_id FROM categories ORDER BY sort_order, id"
         ).fetchall()
     finally:
         conn.close()
@@ -452,8 +480,13 @@ def create_category(name, parent_id=None):
             if dup is not None:
                 return None, "同级下已存在同名分类"
 
+            sibling_order = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories WHERE parent_id IS ?",
+                (parent_id,),
+            ).fetchone()["m"]
             cur = conn.execute(
-                "INSERT INTO categories (name, parent_id) VALUES (?, ?)", (name, parent_id)
+                "INSERT INTO categories (name, parent_id, sort_order) VALUES (?, ?, ?)",
+                (name, parent_id, sibling_order + 1),
             )
             return {
                 "id": cur.lastrowid,
@@ -534,12 +567,47 @@ def delete_category(category_id):
         conn.close()
 
 
+def reorder_categories(ids, parent_id=None):
+    """按拖拽后的顺序重排某一级下的分类，返回错误信息（成功为 None）。
+
+    只接受「同一父级」的完整 id 列表：一半一级、一半二级混着传会把树拖乱。
+    """
+    if not isinstance(ids, list) or not ids:
+        return "ids 必须是非空数组"
+    if len(ids) != len(set(ids)):
+        return "ids 里有重复的分类"
+    if any(isinstance(item, bool) or not isinstance(item, int) for item in ids):
+        return "ids 必须全是整数"
+
+    conn = get_conn()
+    try:
+        with conn:
+            placeholders = ",".join("?" for _ in ids)
+            rows = conn.execute(
+                "SELECT id, parent_id FROM categories WHERE id IN (%s)" % placeholders,
+                ids,
+            ).fetchall()
+            if len(rows) != len(ids):
+                return "有分类不存在，刷新后再试"
+            for row in rows:
+                if (row["parent_id"] or None) != (parent_id or None):
+                    return "只能重排同一父级下的分类"
+            for index, category_id in enumerate(ids):
+                conn.execute(
+                    "UPDATE categories SET sort_order = ? WHERE id = ?",
+                    (index, category_id),
+                )
+            return None
+    finally:
+        conn.close()
+
+
 def get_all_categories():
     """一级分类名字列表。给旧模板的下拉框用，保持向后兼容。"""
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name FROM categories WHERE parent_id IS NULL ORDER BY id"
+            "SELECT name FROM categories WHERE parent_id IS NULL ORDER BY sort_order, id"
         ).fetchall()
         return [row["name"] for row in rows]
     finally:
@@ -558,7 +626,7 @@ def list_accounts():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name, balance, group_name FROM accounts ORDER BY rowid"
+            "SELECT name, balance, group_name FROM accounts ORDER BY sort_order, rowid"
         ).fetchall()
         accounts = []
         for row in rows:
@@ -593,9 +661,13 @@ def create_account(name, group_name=DEFAULT_GROUP, balance=0):
             ).fetchone()
             if exists is not None:
                 return None, "账户已存在"
+            account_order = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM accounts"
+            ).fetchone()["m"]
             conn.execute(
-                "INSERT INTO accounts (name, balance, group_name) VALUES (?, ?, ?)",
-                (name, round(balance, 2), group_name),
+                "INSERT INTO accounts (name, balance, group_name, sort_order) "
+                "VALUES (?, ?, ?, ?)",
+                (name, round(balance, 2), group_name, account_order + 1),
             )
             return {"name": name, "balance": round(balance, 2), "group_name": group_name}, None
     finally:
@@ -648,6 +720,36 @@ def delete_account(name):
 
             conn.execute("DELETE FROM accounts WHERE name = ?", (name,))
             return True, None
+    finally:
+        conn.close()
+
+
+def reorder_accounts(names):
+    """按拖拽后的顺序重排账户（跨大类一起排），返回错误信息（成功为 None）。
+
+    账户列表是「全量顺序」，分组只是展示时再按大类切开，
+    所以拖到别的组里也不算错——只要名字都在。
+    """
+    if not isinstance(names, list) or not names:
+        return "names 必须是非空数组"
+    if len(names) != len(set(names)):
+        return "names 里有重复的账户"
+
+    conn = get_conn()
+    try:
+        with conn:
+            rows = conn.execute(
+                "SELECT name FROM accounts WHERE name IN (%s)"
+                % ",".join("?" for _ in names),
+                names,
+            ).fetchall()
+            if len(rows) != len(names):
+                return "有账户不存在，刷新后再试"
+            for index, name in enumerate(names):
+                conn.execute(
+                    "UPDATE accounts SET sort_order = ? WHERE name = ?", (index, name)
+                )
+            return None
     finally:
         conn.close()
 

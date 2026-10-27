@@ -1,278 +1,208 @@
-# 开发日志
-
-> 版本策略：按「功能里程碑」打 Tag，而不是每次 commit 都升版本。
-> 命名规则：`v0.XX-DEV`，`XX` 为里程碑序号，尾缀 `-DEV` 表示开发中、接口随时可能调整。
-
-## v0.01-DEV (2026-10-25) 项目基建与基础 CRUD 跑通：涵盖环境搭建、SQLite接入、前端极简UI。
-
-对应提交：`54b13fc` → `da15180`（共 7 个 commit，Tag 打在 `da15180`）
-
-**环境搭建**
-
-- 机器上原本没有 Python：`python` 指向微软商店占位符，执行即报 `Python was not found`。
-- 用 `winget install Python.Python.3.12 --scope user` 装好 Python 3.12.10，用户级 PATH 自动带上 `Python312` 与 `Scripts`。
-- 在项目根目录建 `venv`，`pip install -r requirements.txt` 装上 Flask 3.1.3，依赖清单锁进 `requirements.txt`。
-- `.gitignore` 覆盖 `venv/`、`__pycache__/`、`*.db`、`.env` —— 环境、缓存、本地数据、密钥一律不进 Git。
-
-**SQLite 接入**
-
-- `database.py` 用内置 `sqlite3`，四个函数：`get_conn()` / `init_db()` / `add_record()` / `list_records()`。
-- `CREATE TABLE IF NOT EXISTS records (id, amount, category, note, date)`，启动即建表，重启不重复建。
-- 持久化用「杀进程 → 重启 → 再 GET」验证通过：`count` 不变，数据仍在。
-- 整个过程零新增依赖，`requirements.txt` 始终只有一行 `flask>=3.0`。
-
-**前端极简 UI**
-
-- `templates/index.html` + `static/style.css` + `static/script.js`，原生 JS，不引任何框架。
-- 金额 / 分类 / 备注三个输入框 +「记一笔」按钮，`fetch` POST 成功后弹窗提示、清空输入框、自动刷新列表。
-- 首屏自动 `GET /api/records` 渲染 `<ul id="record-list">`，空库显示「还没有记录，先记一笔吧」。
-- `/` 由 JSON 探针改为 `render_template("index.html")`，`/health` 与 `/api/records` 行为保持不变。
-
-**目录重构**
-
-- 项目从杂乱的 `D:\AI` 迁到 `D:\Project\AI-Accounting-Project`，同盘符移动 `.git` 保留全部历史。
-- 旧环境 `venv` 删除后重建，旧目录里的项目文件清理干净，私人文件夹（backup、Deepseek harness 等）未动。
-
-## v0.02-DEV (2026-10-25) 完善比赛文档与版本规范：涵盖补齐 Prompt 快照与踩坑记录。
-
-对应提交：`docs: complete dev log, bug tracker, and prompt snapshots`（Tag 打在本次提交）
-
-**版本规范**
-
-- 确立「功能里程碑 Tag」策略：`v0.01-DEV` 覆盖基建 + CRUD + 前端，`v0.02-DEV` 覆盖文档补齐。
-- Tag 使用 annotated（`git tag -a`），带打标人与说明文字，`git log --oneline --decorate` 里可直接看出里程碑边界。
-
-**文档资产补齐**
-
-- `docs/prompts/` 三份 Prompt 快照齐全：`01-flask-skeleton.md`、`02-memory-api.md`、`03-sqlite.md`。
-  每份固定记录「这一步要解决什么 / 用户原始 Prompt 摘录 / AI 给出的方案要点 / 验证记录 / 踩坑与结论」。
-- `docs/bugs-and-solutions.md` 沉淀真实踩过的三个坑：终端切盘、Git root-commit、Python 商店占位符。
-- `docs/dev-log.md`（本文件）改为按里程碑分段，成为版本演进的唯一时间线。
-
-## v0.03-DEV (2026-10-25) 完整基础账本：涵盖账户维度、CRUD 补全、收支类型与余额联动、Bootstrap 界面升级。
-
-对应提交：`feat: support income/expense with account balances` → `docs: add v0.03 dev log and income-accounts prompt snapshot`（共 3 个 commit，Tag 打在最后一次提交）
-
-**账目维度与 CRUD**
-
-- `records` 用 `ALTER TABLE ADD COLUMN` 加了 `account`（默认「现金」）与 `type`（默认 `expense`），带非空默认值的加列只改表定义，老数据零丢失、迁移幂等。
-- 补齐 `DELETE /api/records/<id>` 与 `PUT /api/records/<id>`；PUT 采用「整条覆盖」语义，避免漏传字段被静默清空。
-- GET 显式 `ORDER BY id DESC`，把「内存版正序 → SQLite 倒序」的顺序变化写进接口契约，不再依赖存储层默认行为（v0.02 记下的技术债在此结清）。
-
-**收支与账户余额**
-
-- 新建 `accounts(name 主键, balance)`，预置现金 / 微信 / 支付宝 / 银行卡；写账目时账户不存在会自动落库，避免余额更新影响 0 行。
-- 增、改、删账目都在**同一个 `with conn:` 事务**里改记录与余额；修改 = 先撤销旧账、再记新账，账户从 A 换到 B 时两边余额一起搬。
-- `GET /api/statistics` 收敛为总收入 / 总支出 / 总余额；总余额取 `SUM(accounts.balance)` 而非收入减支出，因为允许手工修正余额。
-- 余额口径决策：选择「如实记录历史」，账户余额可以为负（当前现金 `-773.23`，等于 0 - 773.23 支出），不做静默归零，界面标红提示。
-
-**界面升级**
-
-- 引入 Bootstrap 5.3.3（CDN）+ 自有 `style.css`：Navbar、三张统计卡片、表单栅格、`table-hover` 表格、账户管理弹窗。
-- 支出 / 收入做成分段单选按钮，列表用徽章区分类型（支出红、收入绿），金额按 `-¥` / `+¥` 渲染。
-- 卡片 header 内嵌账户筛选下拉，对应 `GET /api/records?account=微信`；切换筛选只重拉列表、不动统计。
-- 「账户管理」弹窗可逐个改余额，直接调 `PUT /api/accounts/<name>`；负余额在卡片与弹窗中统一标红。
-
-## v0.04-DEV (2026-10-26) PC 端后台改版与分钟级时间：涵盖后台布局、分钟级时间、编辑与删除、资产页与日历。
-
-对应提交：`feat: support minute-level record time` → `docs: add v0.04 dev log and prompt snapshot`（共 4 个 commit，Tag 打在最后一次提交）
-
-**分钟级时间**
-
-- 老数据只有 `YYYY-MM-DD`，`normalize_date()` 只在**读时**补 `00:00`，库里物理值不动；新数据写入即 16 位 `YYYY-MM-DD HH:MM`。
-- `_parse_datetime()` 同时接受 `YYYY-MM-DD`、`YYYY-MM-DD HH:MM`、`YYYY-MM-DDTHH:MM` 以及带秒的两种；秒被截断到分；空值取当前时间；其余格式一律 400。
-- 前端改用 `<input type="datetime-local">`，默认值由服务端注入（带 `T`），避免浏览器与服务器时区不一致时显示成空白。
-
-**PC 端后台布局**
-
-- 左侧 220px 深色侧边栏（`#1e293b`）承载 Logo + 首页 / 日历 / 资产 / 我的，右侧主区吃满剩余宽度，`100vh` 不出整页滚动条，只有 `.content` 自己滚。
-- 顶栏固定 64px 白底带阴影，左侧标题跟随菜单变化，右侧「+ 记一笔」是唯一主按钮。
-- 记账从页内表单改为居中的 Bootstrap Modal（`modal-dialog-centered`），弹窗关闭时统一复位表单。
-- Bootstrap 5.3.3 改为**本地引用**（`static/vendor/`，CSS 232803 B + JS 80721 B），断网也能跑 —— 比赛现场网络不可控。
-- 资产页承载账户余额编辑（每行一个输入框 + 保存），日历页做当月网格，格子里的数字是当天支出合计。
-
-**前端业务逻辑**
-
-- `script.js` 重写为「拉数据 → 渲染 → 事件委托」三段式：`refresh()` = `Promise.all([loadStatistics(), loadAccounts(), loadRecords()])`，写操作成功后只重拉数据，页面不刷新。
-- 编辑复用同一个弹窗：`editingId` 区分 POST / PUT，标题变「编辑记录 #id」、按钮变「保存修改」；`hidden.bs.modal` 事件里复位，取消编辑不会把状态带进下一次新增。
-- 动态生成的表格行与账户行用**事件委托**（`#record-list`、`#account-list` 各绑一次），重渲染不会丢监听。
-- `ensureOption()` / `clearTempOptions()` 处理「卫浴」这类不在下拉选项里的分类，避免 `select.value = xxx` 静默失败。
-- 日历不额外请求接口，直接复用列表数据按日期聚合，切页零延迟。
-
-**联调验证**
-
-- Node + 极简 DOM 桩把 `script.js` 真跑在真实接口上：34 条断言全过（首屏卡片 / 表格 / 资产页 / 日历、POST 后不刷新即更新、编辑回填、PUT、筛选、DELETE、改余额、切页），全程 `alert` 触发 0 次。
-- 再用 Edge headless 渲染真实页面复核：卡片 `¥0.01 / ¥783.13 / ¥2830.10`，表格首行 `2026-10-26 14:30 | 支出 | 餐饮 | 微信 | -¥9.90`，日历 34 格，资产页 4 个账户。
-
-## v0.05-DEV (2026-10-26) 二级分类与资产页：涵盖分类树、账户大类、级联选择与账户专属流水。
-
-对应提交：`feat: support two-level categories and grouped accounts` → `docs: add v0.05 dev log and prompt snapshot`（共 3 个 commit，Tag 打在最后一次提交）
-
-**数据模型升级**
-
-- 新增 `categories(id, name, parent_id)` 自关联表，用 `parent_id IS NULL` 表示一级分类；唯一索引建在 `COALESCE(parent_id, 0)` 上，让「同名但父级不同」合法、同一父级下不允许重名（`NULL` 在 SQLite 里互不相等，直接建 `(parent_id, name)` 唯一索引会漏掉一级分类的重复）。
-- `records` 加可空 `category_id` 指向分类表，同时**保留** `category` 文本列作为显示名：改名时两处一起同步，旧接口、旧页面、导出都不受影响。
-- `accounts` 加 `group_name`（默认「资金账户」），把「账户」从一维列表变成「大类 → 账户」两层；余额仍按单个账户记，大类金额前端求和。
-- 升级全程只有 `ALTER TABLE ADD COLUMN` 与 `CREATE TABLE IF NOT EXISTS`，不重建表；DDL 与 DML 分成两个 `with conn:`，因为 SQLite 的 DDL 会隐式提交事务，混在一起会破坏「要么全成、要么全不成」的预期。
-
-**老数据兼容**
-
-- 启动时 `_backfill_category_ids()` 三步回填：先把库里出现过的文本分类登记成一级分类 → 再按一级同名回填 `category_id` → 最后按任意层级同名兜底。
-- 记账接口仍然接受纯文本 `category`：遇到不存在的名字自动建一级分类，v0.04 的页面与脚本不改也能继续记账。
-- 实际升级结果：8 条老账目一条没少，金额合计 808.14 不变，`category_id` 空值 0 条，老分类「卫浴」自动成为一级分类，重复执行 `init_db()` 无副作用。
-
-**后端接口**
-
-- 分类：`GET /api/categories`（两级树）、`POST`（可带 `parent_id`）、`PUT /<id>` 改名（连带改账目里的冗余名）、`DELETE /<id>`。
-- 账户：`GET /api/accounts` 同时返回平铺列表与大类分组；`POST` 新增（名称 + 大类 + 初始余额）、`PUT /<name>` 改余额或大类、`DELETE /<name>`。
-- 删除都带保护：分类下有子分类或有账目在用、账户下还有账目时返回 409 与中文原因，不做级联删除。
-- `GET /api/records` 新增 `category_id` 与 `parent_id` 筛选，`parent_id` 会同时命中该一级分类自己和它的全部二级分类。
-
-**前端交互**
-
-- 记账弹窗的一级分类下拉由分类表重建（`value` 是分类 id），选中后若该分类有子分类才显示「二级分类」下拉，提交时优先取二级 id、没有二级就用一级 id。
-- 账户下拉用 `<optgroup>` 按「资金账户 / 储蓄账户 / 投资账户」分组，选项文字带上当前余额，方便记账时先看一眼钱在哪。
-- 资产页按大类渲染账户卡片（含该类小计），点卡片即选中：卡片描边高亮、下方表格切到该账户的专属流水、「在此账户下记一笔」解除禁用。
-- 快捷记账把账户下拉设为 `disabled` 并锁定为当前账户，弹窗关闭时统一复位移除锁定，避免下一次新增被悄悄绑到某个账户上。
-- 「分类管理」弹窗树形展示所有分类，可新增一级或挂在某个一级下的二级，删除按钮逐节点独立，失败时把后端的拒绝原因直接 `alert` 出来。
-
-**验证**
-
-- 迁移与接口自检：迁移 33 条 + 接口 47 条断言全过（二级分类记账返回 `category_parent`、未知分类文本自动建一级、重复分类 409、二级下再建三级被拒、有子分类或有账目不可删、改名连带改账目、未知大类 400、有账目不可删账户、`?account=` 与 `?parent_id=` 筛选均正确）。
-- 前端自检：Node + DOM 桩跑真实接口 42 条断言全过、`alert` 0 次（级联出现与隐藏、optgroup 三组、卡片数=账户数、点卡片出专属流水、快捷记账锁定与解锁、二级分类保存后 `category_parent` 正确、编辑回填五字段、删除回基线、分类与账户的新增删除、日历 35 格、统计卡片与接口一致）。
-- Edge headless 复核真实页面：DOM 32412 字符，表格 9 行，首行 `2026-10-26 09:30`，账户卡片已渲染，日历 35 格，总余额 `¥2795.20` 与账户表一致。
-
-## v0.06-DEV (2026-10-26) 转账、公式与 Toast
-
-**数据模型升级**
-
-- `records` 新增三列：`formula TEXT NOT NULL DEFAULT ''`（金额算式原式）、`to_account TEXT NOT NULL DEFAULT ''`（转账转入账户）、`fee REAL NOT NULL DEFAULT 0`（转账手续费）。仍是 `ALTER TABLE ... ADD COLUMN`，老库升级不丢数据。
-- `type` 的合法值从两种扩到三种：`expense / income / transfer`。转账的分类固定记成「转账」、`category_id` 置 NULL —— 它不属于任何收支分类。
-
-**余额联动的统一写法**
-
-- 新增 `_balance_effects(record_type, account, to_account, amount, fee)`，把一笔账对余额的影响统一算成 `[(账户, 变化量), ...]`：收入 `+amount`、支出 `-amount`、转账 `[(转出, -(amount+fee)), (转入, +amount)]`。
-- 删掉旧的 `_signed()`，避免「加法在一处、判断在另一处」两套规则各自演化。新增、编辑、删除三个动作都走这一份效果表：编辑时先按旧值撤销、再按新值施加。
-- 校验集中到 `_transfer_problem()`：转出与转入不能同名、两个账户都必须真实存在、余额不足（`balance + 1e-9 < amount + fee`）一律拒绝。加 `1e-9` 是让 `0.1 + 0.2` 这类浮点误差不至于误伤「刚好够」的转账。
-
-**为什么转账要求账户必须存在**
-
-支出记账时账户名打错会自动建一个新账户（v0.03 留下的便利），但转账若也这样，`银行卡 → 招行卡` 手滑写成「招商卡」就会凭空多出一个账户，钱转进去再也对不上账。所以转账的两个账户都必须是已存在的账户，写错直接 400。
-
-**为什么余额不足只卡转账**
-
-支出允许把余额记成负数（v0.03 定下的「如实记录」），但转账是把钱从一个口袋挪到另一个口袋，余额不够就不是「记录」而是「编造」。所以只有转账做余额校验。
-
-**后端接口**
-
-- `POST /api/records` 与 `PUT /api/records/<id>` 接收 `formula`、`to_account`、`fee`；转账时后端强制把 `category` 写成「转账」、`category_id` 置空。
-- `GET /api/records?account=` 的筛选条件改成 `(r.account = ? OR (r.type = 'transfer' AND r.to_account = ?))` —— 一笔转账在转出、转入两个账户的流水里都该看到。
-- `DELETE /api/accounts/<name>` 的引用检查补上 `to_account`，避免删掉还在被当作转入方的账户。
-- 新增 `_parse_formula()`：只校验类型与长度（≤ 200 字符），不解析算式 —— 结果由前端算好再提交，后端不做二次计算，避免两边算出不同的数。
-
-**前端**
-
-- 金额框从 `type="number"` 改成 `type="text"`（HTML 的数字框根本存不下 `15.5+20*2`），输入里带运算符时下方实时显示 `= ¥55.50`，算不出来就红字提示；保存时 `amount` 提交结果、`formula` 提交原式；编辑时金额框回显公式，还能接着改。
-- 计算用 math.js（`13.2.3`，本地 `static/vendor/math.min.js`），不用 `eval`；`math.js` 的 `evaluate("alert(1)")` 会抛 `Undefined function`，比 `eval` 安全。
-- 记账弹窗的类型加了「转账」：选中后隐藏一级/二级分类，显示「转入账户」与「手续费」，账户标签从「账户」变成「转出账户」。
-- 列表里转账显示 `微信 → 支付宝`、徽章「转账」，金额下方小字标出「含手续费 ¥1.50」；转账不计入总收入/总支出，但会改变总余额与两个账户的余额。
-- 全局 `toast(message, type)`：顶部居中滑出，成功绿、失败红，2.4 秒后自动消失；原来所有 `alert()` 都换成它，删除操作改用 `confirm` 保留二次确认。
-- 资产页快捷记账只预选账户、不再 `disabled`：点开之后想改账户随时能改。
-
-**验证**
-
-- 后端自测 47/47：迁移 5 条、转账主流程 11 条、非法请求 13 条（负数、0、字符串金额、转出=转入、缺转入账户、账户不存在、手续费负数/非数字、余额不足、未知 type、公式超长/非数字）、公式留存 6 条、编辑删除回滚 7 条、账户保护 1 条、清理 3 条。
-- 前端自检 52/52（Node + DOM 桩跑真实接口，`alert` 0 次）：卡片与接口一致、公式实时结果 `= ¥55.50`、错误公式红字、金额写错只弹 Toast 不落库、公式记账入库为 `amount=55.5 / formula=15.5+20*2`、转账转出 -11.5 转入 +10、转账不计入收支、列表出现「转账」徽章与 `微信 → 支付宝`、编辑回显公式与转账字段、快捷记账不再 disabled、删除后余额与统计一分不差地回到基线。
-- Edge headless 复核真实页面：DOM 30663 字符，表格 10 行，账户卡片 8 张，日历 35 格，三张卡片 `¥0.01 / ¥830.03 / ¥2783.20`，首行 `2026-10-26 09:11 · 支出 · 餐饮 / 晚餐 · 银行卡 · -¥12.00`。
-
-
-
-
-## v0.06.2-DEV · 三栏看板 / 详情弹窗 / 通知中心 / 视觉修复（2026-10-27）
-
-**为什么要改**：旧版单列布局浪费 PC 宽屏；表格在小窗口里把「金额」「操作」挤出屏幕；
-满屏实心黄/红按钮扎眼；热力图底色一深就把文字刷白，红绿白混在一起没法看。
-
-**布局（index.html + style.css）**
-
-- 首页改 `.dash-grid`：中栏（巨型主卡 + 预算环 + 近 7 天分组 + 全部账单），右栏（日历 + 当日明细）。
-- 顶栏改为 `grid minmax(0,1fr) minmax(220px,460px) minmax(0,1fr)`：搜索框真正居中；右侧信封 / 月亮太阳 / + 记一笔。
-- 侧栏加汉堡折叠，`.app.is-collapsed` + `--sidebar-collapsed-width:76px`；<1200px 自动收起，用户手动选过就以 localStorage 为准。
-- 主题变量拆成 `:root` 与 `[data-theme="dark"]` 两套，`body` 加 transition，切主题不闪。
-- 全站 12 个图标按钮挂 `data-bs-toggle="tooltip"`，`delay: {show:500, hide:80}`，满足「悬停 0.5 秒才出现」。
-
-**表格响应式与详情弹窗（真正的痛点修复）**
-
-- 删掉最后一列「编辑 / 删除」按钮列，`records` 6 列 / `account` 5 列 / `day` 4 列，最后一列就是备注。
-- 行变 `<tr data-id tabindex="0">`，整行点击（含键盘 Enter / 空格）打开 `#record-detail-modal`；按钮用 `btn-outline-danger` / `btn-outline-warning` 幽灵样式。
-- 详情里 Esc 关闭、Enter 直接进编辑（按钮和输入框自己的 Enter 不被抢）。
-- `.records-table min-width:660px` + `.table-responsive`，1439px 隐藏「账户」列、1199px 隐藏「备注」列 —— 金额永远看得见。
-
-**日期热力图**
-
-- `HEAT_MAX_ALPHA = 0.35` 封顶，最深也只是淡色；删掉 `.cal-cell.is-deep` / `.year-cell.is-deep` 的 `color:#fff` 规则，结余固定深灰、收入绿、支出红。
-
-**通知中心全栈**
-
-- `database.py`：`notifications(id, title, content, image_url, publish_date)` + `list/create/delete` + `_seed_notifications()`（空表时插一条上线通知）。
-- `app.py`：`GET/POST /api/notifications`、`DELETE /api/notifications/<id>`、`POST /api/upload`（png/jpg/jpeg/gif/webp，≤5MB，uuid 重命名存 `static/uploads/`）、`GET /admin`。
-- `templates/admin.html`：开发者发布台，标题计数、contenteditable 富文本（B/I/U/列表/插图）、封面上传、发布时间可留空、右侧列表可删。
-- 前台：信封 → 右侧滑出 `.notification-panel`，倒序、图文混排（`sanitizeNoticeHtml()` 走 DOMParser 白名单再插入）、未读红点，打开面板即写 localStorage 已读。
-
-**前端重构（script.js）**
-
-- 新增 `recordRowHtml / accountRowHtml / listRowHtml` 去操作列；`onRowClick / onRowKeydown / onRecentClick` 事件委托。
-- 新增 `openRecordDetail / buildDetailBody / editFromDetail / deleteFromDetail`。
-- 新增 `readTheme / applyTheme / toggleTheme / readSidebarPref / applySidebar / toggleSidebar / onSearchInput / editBudget / loadNotifications / renderNotifications / openNotifications / closeNotifications / initTooltips`。
-- `refresh()` 原本调用**不存在的** `loadStatistics()`（会 ReferenceError，首页整块渲染不出来），已改为 `Promise.all([loadAccounts, loadRecords, loadCalendarRecords])` 后统一 `renderDashboard()`。
-
-**自测**
-
-- `python -m py_compile app.py database.py`、`node --check static/script.js` 通过。
-- Edge headless 打真实页面：`/` `/admin` `/api/notifications` `/api/records` `/api/statistics` `/api/accounts` `/api/categories` 全 200；通知表 1 条种子数据。
-- 同源 iframe 里模拟真人点击 19 条断言全 PASS：行点击开详情、Enter 进编辑、Esc 关闭、主题切换并落 localStorage、侧栏折叠、搜索过滤 13→5 条、信封开面板且红点消失、切到资产页 8 张账户卡；页面 0 报错。
-- 接口自测：POST 通知 → 上传 1×1 PNG → 访问该图 200 → DELETE 通知，数据回满。
-
-**遗留（后续 Step 再做）**
-
-- ECharts 饼图 / 30 天折线、右下悬浮球、分页、CSV 导出、PWA 都还没进这一版。
-- `style.css` 里仍有少量 v0.06.1 的旧规则（如 `.col-action` 宽度），已不再被 DOM 命中，留着不影响。
-
-## v0.06.3-DEV · ECharts 图表 / 预算悬浮球 / 账单分页与滚动加载（2026-10-27）
-
-**为什么要改**：v0.06.2 的「遗留」清单里，饼图、30 天折线、悬浮球、分页都还没落地；预算环只能看一个数，看不出钱花在哪；账单攒到几十条就整页铺开，找一条要滚半天。
-
-**图表（index.html + style.css + script.js）**
-
-- ECharts 13 下载到 `static/vendor/echarts.min.js`（1,030,855 字节），本地引用不走 CDN；中栏预算卡下方插 `.charts-panel`，两张 `#chart-pie` / `#chart-trend`，副标题 `#charts-sub` 实时报「本月支出 N 笔 · 近 30 天合计 ¥X」。
-- `monthExpenseByCategory()` 按分类汇总本月支出，超过 8 类时前 7 + 「其他」；`dailyExpenseSeries(30)` 用 `shiftDateKey` 补零，保证折线一定是 30 个点。
-- `pieOption / trendOption` 共用 `chartToolbox()`（saveAsImage + restore）；`restore` 事件回灌最新数据，避免 Toolbox 刷新后回到初始 option。
-- 实例懒初始化 `initCharts()`，`renderDashboard()` 里调 `renderCharts()`；切页、切主题、容器变宽都重画。
-
-**悬浮球**
-
-- `#fab` 在右下角，`#fab-ball` 悬停/点击展开 `#fab-panel`：本月预算剩余、进度条、已花/上限、N/Ctrl+K/Esc 快捷键。
-- 超支时剩余金额转红并加 `is-over`，进度条封顶 100%；鼠标移开 260ms 后收起，避免误触。
-- `onGlobalKeydown`：N 记一笔、Ctrl+K 聚焦搜索、Esc 关弹窗/面板；输入框里打字不抢键（`isTypingTarget`）。
-
-**分页与滚动加载**
-
-- `#page-size` 20/50/100/不分页，选择存 `localStorage["ai-accounting-page-size"]`；`renderRecords` 分页/不分页两个分支，分页渲染 `#record-pager`（共 N 笔 · 第 a–b 条 · x/y 页 + 页码按钮）。
-- 「不分页」先渲染 20 条，底部哨兵行用 IntersectionObserver 监听，滚到底自动追加 20 条，追加完显示「已经到底啦，共 N 笔」；`.content` 才是滚动容器，监听用 capture。
-- 搜索/新增账单后 `resetPaging()` 回第一页 —— 新账目按时间倒序排在第一行，停在旧页会以为没存上。
-
-**修掉的两个坑**
-
-- 1024px 下侧栏折叠后图表宽度停在 190px：`window.resize` 在回流前触发，改成 `ResizeObserver`（`watchChartResize()` + rAF 防抖）盯容器；容器宽 0（切走首页）时跳过 resize，避免 ECharts 把画布压成 0。
-- 空列表还显示「第 0–0 条 · 1/1 页」：`renderPager` 加 total=0 分支，只留「共 0 笔」。
-
-**自测**
-
-- `node --check static/script.js` 通过；Chrome headless + CDP 驱动 9 组脚本打真实页面（非 DOM 桩）。
-- 图表：饼 6 类（交通 443 / 餐饮 277.13 / 卫浴 100 / 购物 23 / 晚餐 12 / 早餐 9.9），折线 30 点合计 865.03，canvas 308×236，Toolbox saveAsImage 存在。
-- 分页：内存注入 45 条，默认 3 页、第 3 页 5 条、每页 50 变 1/1 页并落 localStorage、「不分页」20→40→45 无重复、哨兵文案正确。
-- 悬浮球：剩余 ¥2134.97、已花 ¥865.03 / ¥3000.00、fill 29%；超支 -¥365.03 红字；N/Esc/Ctrl+K 全通，搜索框内按 N 不弹窗。
-- 端到端：UI 存一笔 1.23（备注 SELFTEST-V063-…）→ 首行即新账、pager 14 笔、饼图餐饮 +1.23；`DELETE /api/records/91` 后回到 13 笔 / 865.03，一分不差。
-- 响应式 1280/1024/768/390 无横向溢出，图表宽度与容器一致；页面 0 报错（仅既有 favicon 404）。
-
-**遗留**：CSV 导出、PWA、软删除/借贷、桑基图/分享长图按蓝图 Step 6–10 继续。
+开发日志
+
+版本命名规则：
+格式：v[主版本].[次版本].[修订号]-[阶段标识]
+主版本：目前开发期为 0；比赛最终交卷时升级为 1。
+次版本：代表核心功能大迭代，固定两位数递增（01, 02...），绝不重置倒退。
+修订号：可选。代表在核心功能基础上的小补丁或细节优化（01, 02...）。
+阶段标识（三个全大写字母）：
+1. DEV（Development）：研发版。功能正在开发、联调中。
+2. TST（Testing）：测试版。功能开发完毕，正在集中测试找 Bug。
+3. REL（Release）：正式版。准备交卷或发布的最终稳定版本。
+
+打标原则：
+不按每次 Commit 打标，而是按“功能里程碑”打标。完成一个完整大功能后才打一次 Tag，并同步更新交接文档与日志。
+
+————————————————————————
+
+v0.01-DEV 2026-10-25 项目基建与基础 CRUD
+对应提交：54b13fc → da15180
+
+技术路径：
+1. 用 winget 安装 Python 3.12.10。项目根目录建 venv，安装 Flask 3.1.3，依赖锁进 requirements.txt。
+2. .gitignore 排除 venv/、__pycache__/、*.db、.env。环境、缓存、本地数据和密钥不进 Git。
+3. database.py 使用内置 sqlite3。提供 get_conn()、init_db()、add_record()、list_records() 四个函数。
+4. 启动时执行 CREATE TABLE IF NOT EXISTS records，建表幂等，重启不重复建表。
+5. 前端使用 templates/index.html、static/style.css、static/script.js，原生 JS，不引框架。表单 POST 成功后清空输入并刷新列表。
+6. 项目迁移到 D:\Project\AI-Accounting-Project，保留 .git 历史，重建 venv。
+
+验证：
+1. 杀进程再重启，GET /api/records 数据仍在，count 不变。
+2. 零新增依赖，requirements.txt 只有 flask>=3.0。
+
+————————————————————————
+
+v0.02-DEV 2026-10-25 文档与版本规范
+对应提交：docs: complete dev log, bug tracker, and prompt snapshots
+
+技术路径：
+1. 确立功能里程碑 Tag 策略。Tag 使用 git tag -a，带打标人和说明。
+2. 补齐 docs/prompts/ 三份 Prompt 快照。固定记录目标、原始 Prompt、AI 方案、验证记录、踩坑结论。
+3. 新增 docs/bugs-and-solutions.md，沉淀终端切盘、Git root-commit、Python 商店占位符三个问题。
+4. docs/dev-log.md 改为按里程碑分段，作为版本演进时间线。
+
+————————————————————————
+
+v0.03-DEV 2026-10-25 基础账本与账户余额
+对应提交：feat: support income/expense with account balances → docs: add v0.03 dev log and income-accounts prompt snapshot
+
+技术路径：
+1. records 用 ALTER TABLE ADD COLUMN 增加 account 和 type。带默认值加列，老数据不丢，迁移幂等。
+2. 补齐 DELETE /api/records/<id> 和 PUT /api/records/<id>。PUT 采用整条覆盖语义，避免漏传字段被静默清空。
+3. GET /api/records 显式 ORDER BY id DESC，把倒序写入接口契约。
+4. 新建 accounts(name 主键, balance)，预置现金、微信、支付宝、银行卡。写账目时账户不存在会自动落库。
+5. 增、改、删账目都在同一个 with conn: 事务里改记录和余额。修改时先撤销旧账，再记新账。
+6. GET /api/statistics 返回总收入、总支出、总余额。总余额取 SUM(accounts.balance)，允许手工修正余额。
+7. 余额口径选择如实记录历史，允许负余额。界面标红提示，不做静默归零。
+8. 前端引入 Bootstrap 5.3.3 CDN。增加统计卡片、表格、账户管理弹窗、账户筛选和收支分段按钮。
+
+决策：
+1. 负余额不归零。现金 -773.23 如实展示。
+2. 账户筛选只重拉列表，不动统计。
+
+————————————————————————
+
+v0.04-DEV 2026-10-26 PC 后台与分钟级时间
+对应提交：feat: support minute-level record time → docs: add v0.04 dev log and prompt snapshot
+
+技术路径：
+1. 老数据只有 YYYY-MM-DD。normalize_date() 只在读时补 00:00，库中物理值不动。
+2. 新数据写入 16 位 YYYY-MM-DD HH:MM。_parse_datetime() 接受多种常见格式，秒截断到分，空值取当前时间，非法格式返回 400。
+3. 前端使用 <input type="datetime-local">，默认值由服务端注入，避免时区导致空白。
+4. PC 后台改为左侧 220px 深色侧边栏加右侧主区。100vh 不出整页滚动条，只有 .content 滚动。
+5. 顶栏固定 64px。记账改为居中 Bootstrap Modal。弹窗关闭时统一复位表单。
+6. Bootstrap 改为本地引用，放在 static/vendor/，断网可运行。
+7. script.js 重写为“拉数据、渲染、事件委托”三段式。refresh() 用 Promise.all 拉统计、账户、记录。
+8. 编辑复用同一个弹窗，用 editingId 区分 POST 和 PUT。hidden.bs.modal 事件里复位状态。
+9. 表格行和账户行动态生成，用事件委托绑定，重渲染不丢监听。
+10. 日历不额外请求接口，直接复用列表数据按日期聚合。
+
+验证：
+1. Node 加 DOM 桩跑真实接口，34 条断言通过，alert 触发 0 次。
+2. Edge headless 复核真实页面，统计卡片、表格、资产页、日历均正常。
+
+————————————————————————
+
+v0.05-DEV 2026-10-26 二级分类与资产页
+对应提交：feat: support two-level categories and grouped accounts → docs: add v0.05 dev log and prompt snapshot
+
+技术路径：
+1. 新增 categories(id, name, parent_id) 自关联表。parent_id IS NULL 表示一级分类。
+2. 唯一索引建在 COALESCE(parent_id, 0) 上，保证同一父级下不重名，一级分类也能正确去重。
+3. records 增加可空 category_id，同时保留 category 文本列作为显示名。改名时两处同步，旧接口和导出不受影响。
+4. accounts 增加 group_name，默认“资金账户”。账户从一维列表变成“大类到账户”两层。余额仍按单账户记，大类金额前端求和。
+5. 升级只用 ALTER TABLE ADD COLUMN 和 CREATE TABLE IF NOT EXISTS，不重建表。DDL 和 DML 分两个 with conn:，避免 SQLite 隐式提交破坏事务预期。
+6. 启动时 _backfill_category_ids() 三步回填：登记文本分类为一级分类，按一级同名回填，再按任意层级同名兜底。
+7. 记账接口仍接受纯文本 category。未知分类自动建一级分类，旧页面不改也能继续记账。
+8. 新增分类接口：GET/POST /api/categories、PUT/DELETE /api/categories/<id>。
+9. 账户接口返回平铺列表和大类分组，支持新增、改余额或大类、删除。
+10. 删除带保护。分类下有子分类或有账目在用、账户下还有账目时返回 409 和中文原因，不做级联删除。
+11. GET /api/records 增加 category_id 和 parent_id 筛选。parent_id 同时命中该一级分类和它的二级分类。
+12. 前端一级分类下拉由分类表重建。有子分类时才显示二级下拉。提交时优先取二级 id，没有二级用一级 id。
+13. 账户下拉用 <optgroup> 按大类分组，选项文字带当前余额。
+14. 资产页按大类渲染账户卡片，点卡片选中并显示该账户专属流水。
+15. 快捷记账预选当前账户。弹窗关闭时复位锁定状态。
+16. 分类管理弹窗树形展示，可新增一级或二级分类。删除失败时直接显示后端原因。
+
+验证：
+1. 迁移 33 条断言、接口 47 条断言通过。
+2. 前端 42 条断言通过，alert 0 次。
+3. Edge headless 复核真实页面，账户卡片、日历、总余额均正常。
+
+————————————————————————
+
+v0.06-DEV 2026-10-26 转账、公式与 Toast
+
+技术路径：
+1. records 新增 formula、to_account、fee 三列。仍用 ALTER TABLE ADD COLUMN，老库升级不丢数据。
+2. type 扩展为 expense / income / transfer。转账分类固定为“转账”，category_id 置 NULL。
+3. 新增 _balance_effects()，把一笔账对余额的影响统一成“账户和变化量”列表。收入加金额，支出减金额，转账转出减金额加手续费，转入加金额。
+4. 删除旧的 _signed()。新增、编辑、删除都走同一份效果表。编辑时先按旧值撤销，再按新值施加。
+5. 校验集中到 _transfer_problem()。转出和转入不能同名，两个账户必须存在，余额不足拒绝。加 1e-9 容差避免浮点误差。
+6. 转账要求账户必须存在。避免手滑写错账户名时凭空建新账户，导致钱对不上。
+7. 余额不足只卡转账。支出仍允许负余额，延续 v0.03 的如实记录原则。
+8. 后端接收 formula、to_account、fee。转账时强制分类为“转账”，category_id 置空。
+9. GET /api/records?account= 同时匹配转出账户和转入账户。一笔转账在两个账户流水里都能看到。
+10. 删除账户的引用检查补上 to_account。
+11. _parse_formula() 只校验类型和长度，不解析算式。结果由前端算好再提交，避免两边算出不同结果。
+12. 前端金额框改为文本输入。输入带运算符时实时显示结果，算不出来红字提示。保存时提交结果金额和原公式。
+13. 计算用本地 math.js，不用 eval。alert() 全部换成全局 toast()，删除操作保留 confirm。
+14. 转账时隐藏分类，显示转入账户和手续费。列表显示“转出到转入”和转账徽章。转账不计入总收入总支出，但改变总余额和两个账户余额。
+
+验证：
+1. 后端自测 47/47 通过，覆盖转账主流程、非法请求、公式留存、编辑删除回滚、账户保护。
+2. 前端自检 52/52 通过，alert 0 次。
+3. Edge headless 复核真实页面，表格、账户卡片、日历、统计卡片均正常。
+
+————————————————————————
+
+v0.06.2-DEV 2026-10-27 三栏看板、详情弹窗、通知中心、视觉修复
+
+技术路径：
+1. 首页改三栏看板。中栏放主卡、预算环、近 7 天分组、全部账单。右栏放日历和当日明细。
+2. 顶栏用 grid 三段布局，搜索框居中。右侧放信封、主题切换、记一笔。
+3. 侧栏支持汉堡折叠，宽度 76px。小于 1200px 自动收起。用户手动选择存 localStorage。
+4. 主题变量拆成 :root 和 [data-theme="dark"] 两套。切换主题不闪。
+5. 图标按钮统一挂 Bootstrap tooltip，悬停 0.5 秒出现。
+6. 表格删除最后一列“编辑、删除”按钮列。整行可点击，支持键盘 Enter 和空格，打开详情弹窗。
+7. 详情弹窗支持 Esc 关闭，Enter 进入编辑。按钮和输入框自己的 Enter 不被抢。
+8. 表格设置最小宽度和响应式容器。1439px 隐藏账户列，1199px 隐藏备注列，金额始终可见。
+9. 热力图透明度封顶 0.35。删除深色底白字规则，结余固定深灰，收入绿，支出红。
+10. 通知中心后端新增 notifications 表，提供列表、创建、删除接口。空表时插入一条上线通知。
+11. 新增上传接口 POST /api/upload。支持常见图片格式，限制 5MB，uuid 重命名存 static/uploads/。
+12. 新增 /admin 发布台。支持标题计数、contenteditable 富文本、封面上传、发布时间可空、右侧列表删除。
+13. 前台信封打开右侧滑出面板。通知倒序、图文混排。富文本用 DOMParser 白名单清洗后插入。未读红点打开面板后写 localStorage 已读。
+14. 前端新增 recordRowHtml、accountRowHtml、listRowHtml，去掉操作列。行点击、键盘、最近记录用事件委托。
+15. 修复 refresh() 调用不存在的 loadStatistics() 导致首页渲染失败。改为拉账户、记录、日历记录后统一 renderDashboard()。
+
+验证：
+1. py_compile 和 node --check 通过。
+2. Edge headless 访问主要页面和接口均 200。
+3. 同源 iframe 模拟点击 19 条断言全 PASS，页面 0 报错。
+4. 接口自测完成通知创建、图片上传、访问图片、删除通知。
+
+遗留：
+1. ECharts 饼图和 30 天折线、悬浮球、分页、CSV 导出、PWA 尚未进入本版。
+2. style.css 仍有少量旧规则，已不再被 DOM 命中，暂不影响。
+
+————————————————————————
+
+v0.06.3-DEV 2026-10-27 ECharts 图表、预算悬浮球、账单分页与滚动加载
+
+技术路径：
+1. ECharts 下载到 static/vendor/echarts.min.js，本地引用，不走 CDN。
+2. 中栏预算卡下方增加图表面板，包含饼图和趋势图。副标题实时显示本月支出笔数和近 30 天合计。
+3. monthExpenseByCategory() 按分类汇总本月支出，超过 8 类时前 7 类加“其他”。
+4. dailyExpenseSeries(30) 用 shiftDateKey 补零，保证折线固定 30 个点。
+5. 饼图和折线图共用 Toolbox，支持保存图片和恢复。restore 事件回灌最新数据。
+6. 图表实例懒初始化。renderDashboard() 里调用 renderCharts()。切页、切主题、容器变宽都重画。
+7. 右下角悬浮球展开预算面板。显示本月预算剩余、进度条、已花和上限。超支时剩余金额转红，进度条封顶 100%。
+8. 全局快捷键：N 记一笔，Ctrl+K 聚焦搜索，Esc 关闭弹窗或面板。输入框内打字不抢键。
+9. 账单分页支持 20、50、100、不分页。选择存 localStorage。
+10. 分页模式渲染页码条，显示总笔数、当前区间和页码按钮。
+11. 不分页模式先渲染 20 条。底部哨兵用 IntersectionObserver 监听，滚到底追加 20 条。滚动容器是 .content，监听用 capture。
+12. 搜索或新增账单后 resetPaging() 回第一页。新账目按时间倒序在第一行，避免停在旧页以为没存上。
+13. 修复侧栏折叠后图表宽度不更新。window.resize 在回流前触发，改为 ResizeObserver 加 rAF 防抖。
+14. 容器宽度为 0 时跳过 resize，避免 ECharts 把画布压成 0。
+15. 修复空列表显示“第 0–0 条”。renderPager 增加 total=0 分支，只显示“共 0 笔”。
+
+验证：
+1. node --check 通过。
+2. Chrome headless 加 CDP 驱动 9 组脚本打真实页面。
+3. 饼图 6 类，折线 30 点，Toolbox 保存图片存在。
+4. 分页验证 45 条数据，默认 3 页，每页 50 变 1 页并写 localStorage。不分页从 20 到 40 到 45，无重复。
+5. 悬浮球预算剩余、已花、进度条、超支红字、快捷键均通过。
+6. 端到端新增一笔 1.23，首行即新账，饼图对应分类加 1.23。删除后数据和统计回到基线。
+7. 1280、1024、768、390 宽度无横向溢出。图表宽度与容器一致。页面 0 报错，仅既有 favicon 404。
+
+遗留：
+1. CSV 导出、PWA、软删除、借贷、桑基图、分享长图按蓝图 Step 6 到 10 继续。
+————————————————————————
+
+v0.06.3-DEV 2026-10-27 终极补丁：PWA、CSV 导出、极客交互与系统兜底
+
+技术路径：PWA 用根目录 manifest.json 和 service-worker.js，由 Flask 显式路由返回并声明 Service-Worker-Allowed，前端注册后导航请求走 network-first，静态资源走 stale-while-revalidate，接口与管理页不缓存；导出接口读取 sqlite3 记录后用 csv.writer 写流，首部拼接 \uFEFF BOM，前端 fetch 取 blob 触发下载，版本接口优先环境变量、否则读取 git describe，模块级缓存后注入侧栏与我的页。
+
+交互层用原生事件完成，全局 keydown 接管 Ctrl+K 与 N，账单列表代理 contextmenu 弹自绘菜单并按视口钳位，分类与账户引入本地 Sortable.js，排序结果写入新增的 sort_order 列，接口校验同一父级后按数组下标回写；兜底部分统一封装 fetch 用 AbortController 控制 10 秒超时，online/offline 驱动顶部红绿横幅，404 由 errorhandler 分流为 JSON 或独立模板。
+
+踩坑结论：Sortable 实例在列表重绘后必须 destroy 重建，Service Worker 注册不能挂在 window.load，CSV 的 mimetype 只写 text/csv 避免重复 charset，headless 合成拖拽不可靠，最终以接口幂等和 DOM 结构断言兜底。

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>404 · 这笔账好像记丢了 | AI记账管家</title>
+  <meta name="robots" content="noindex">
+  <link rel="icon" type="image/png" href="/static/icons/favicon.png">
+  <script>
+    // 和主站同一套主题偏好：先看用户选过的，再跟随系统
+    (function () {
+      try {
+        var saved = localStorage.getItem("ai-accounting-theme");
+        if (saved === "dark" || saved === "light") {
+          document.documentElement.setAttribute("data-theme", saved);
+          return;
+        }
+      } catch (error) { /* 隐私模式读不了 localStorage，忽略 */ }
+      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.setAttribute("data-theme", "dark");
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      --brand: #2563eb;
+      --brand-soft: #dbeafe;
+      --pos: #059669;
+      --warn: #d97706;
+      --page-bg: #f4f6fb;
+      --surface: #ffffff;
+      --surface-2: #f8fafc;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --line: #e2e8f0;
+      --shadow: 0 24px 60px -24px rgba(15, 23, 42, 0.35);
+    }
+
+    [data-theme="dark"] {
+      --brand: #3b82f6;
+      --brand-soft: rgba(59, 130, 246, 0.16);
+      --page-bg: #0b1220;
+      --surface: #111c30;
+      --surface-2: #0f1728;
+      --text-main: #e2e8f0;
+      --text-muted: #94a3b8;
+      --line: #1e293b;
+      --shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.65);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      color: var(--text-main);
+      background:
+        radial-gradient(1200px 600px at 12% -10%, var(--brand-soft), transparent 60%),
+        radial-gradient(900px 500px at 110% 110%, rgba(245, 158, 11, 0.12), transparent 55%),
+        var(--page-bg);
+      transition: background-color 0.25s ease, color 0.25s ease;
+    }
+
+    .lost-card {
+      position: relative;
+      width: min(560px, 100%);
+      padding: 44px 40px 36px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      text-align: center;
+      overflow: hidden;
+    }
+
+    /* 背景里一张若隐若现的「小票」，暗示这是一页账单 */
+    .lost-card::before {
+      content: "¥ · ¥ · ¥ · ¥ · ¥ · ¥ · ¥ · ¥ · ¥ · ¥ · ¥";
+      position: absolute;
+      inset: 18px -10% auto;
+      font-size: 13px;
+      letter-spacing: 6px;
+      color: var(--text-muted);
+      opacity: 0.12;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    .lost-code {
+      font-size: clamp(88px, 18vw, 132px);
+      line-height: 0.9;
+      font-weight: 800;
+      letter-spacing: -6px;
+      background: linear-gradient(135deg, var(--brand), #7c3aed 70%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      margin: 6px 0 2px;
+      user-select: none;
+    }
+
+    .lost-code small {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      margin-top: 12px;
+      color: var(--text-muted);
+      background: none;
+      -webkit-text-fill-color: var(--text-muted);
+    }
+
+    .lost-title {
+      margin: 18px 0 10px;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .lost-desc {
+      margin: 0 auto 26px;
+      max-width: 400px;
+      font-size: 14px;
+      line-height: 1.8;
+      color: var(--text-muted);
+    }
+
+    .lost-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: center;
+      margin-bottom: 26px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 11px 20px;
+      border-radius: 12px;
+      border: 1px solid transparent;
+      font-size: 14px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+    }
+
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+
+    .btn-primary {
+      background: var(--brand);
+      color: #fff;
+      box-shadow: 0 12px 24px -12px rgba(37, 99, 235, 0.75);
+    }
+
+    .btn-primary:hover { background: #1d4ed8; }
+
+    .btn-ghost {
+      background: transparent;
+      border-color: var(--line);
+      color: var(--text-main);
+    }
+
+    .btn-ghost:hover { background: var(--surface-2); }
+
+    .lost-tips {
+      display: grid;
+      gap: 6px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: var(--surface-2);
+      border: 1px dashed var(--line);
+      font-size: 12.5px;
+      color: var(--text-muted);
+      text-align: left;
+    }
+
+    .lost-tips b { color: var(--text-main); font-weight: 600; }
+
+    kbd {
+      display: inline-block;
+      min-width: 22px;
+      padding: 1px 6px;
+      margin: 0 2px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      border-bottom-width: 2px;
+      background: var(--surface);
+      color: var(--text-main);
+      font-family: inherit;
+      font-size: 11.5px;
+      text-align: center;
+    }
+
+    .lost-foot {
+      margin-top: 22px;
+      font-size: 12px;
+      color: var(--text-muted);
+      opacity: 0.8;
+    }
+
+    @media (max-width: 480px) {
+      .lost-card { padding: 34px 22px 28px; border-radius: 18px; }
+      .lost-actions { flex-direction: column; }
+      .btn { justify-content: center; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .btn, body { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <main class="lost-card" role="main">
+    <div class="lost-code" aria-hidden="true">
+      404
+      <small>PAGE NOT FOUND</small>
+    </div>
+
+    <h1 class="lost-title">哎呀，这笔账好像记丢了……</h1>
+    <p class="lost-desc">
+      你要找的页面可能被挪走了、改了名字，或者压根就没存在过。<br>
+      别慌，账本还在，钱一分没少。
+    </p>
+
+    <div class="lost-actions">
+      <a class="btn btn-primary" href="/">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 10.5 12 3l9 7.5"></path>
+          <path d="M5 9.5V21h14V9.5"></path>
+        </svg>
+        返回首页
+      </a>
+      <a class="btn btn-ghost" href="/?action=new">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"></path>
+        </svg>
+        去记一笔
+      </a>
+    </div>
+
+    <div class="lost-tips">
+      <span><b>小提示</b>：首页按 <kbd>N</kbd> 随时记一笔，<kbd>Ctrl</kbd> + <kbd>K</kbd> 直接搜账单。</span>
+      <span>如果是从收藏夹点进来的，链接可能过期了，回首页重新找一下就好。</span>
+    </div>
+
+    <p class="lost-foot">AI记账管家 · 每一笔都算数</p>
+  </main>
+
+  <script>
+    // 键盘也能走：Enter 回首页，N 去记账（和主站快捷键保持一致）
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        window.location.href = "/";
+      } else if (event.key === "n" || event.key === "N") {
+        window.location.href = "/?action=new";
+      }
+    });
+  </script>
+</body>
+</html>

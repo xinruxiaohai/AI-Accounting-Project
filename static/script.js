@@ -449,8 +449,33 @@ function bindEscClose(modalElement, instance) {
 
 /* ==================== 请求封装 ==================== */
 
+// 10 秒还没回来就当超时，给用户一个明确提示，而不是让按钮一直转圈
+const REQUEST_TIMEOUT_MS = 10000;
+
 async function api(path, options) {
-  const response = await fetch(path, options);
+  const controller = new AbortController();
+  const timer = window.setTimeout(function () {
+    controller.abort();
+  }, REQUEST_TIMEOUT_MS);
+
+  let response;
+  try {
+    response = await fetch(
+      path,
+      Object.assign({}, options, { signal: controller.signal })
+    );
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error("请求超时（10 秒），请检查网络后重试");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("网络连接失败，请确认后端服务已启动");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+
   let data = null;
   try {
     data = await response.json();
@@ -789,13 +814,22 @@ function renderCategoryTree() {
 
   state.categories.forEach(function (top) {
     const item = document.createElement("li");
+    item.setAttribute("data-category-id", String(top.id));
     item.innerHTML =
       categoryRowHtml(top, counts, true) +
       (top.children.length
-        ? '<ul class="category-sub">' +
+        ? '<ul class="category-sub" data-parent-id="' +
+          top.id +
+          '">' +
           top.children
             .map(function (child) {
-              return "<li>" + categoryRowHtml(child, counts, false) + "</li>";
+              return (
+                '<li data-category-id="' +
+                child.id +
+                '">' +
+                categoryRowHtml(child, counts, false) +
+                "</li>"
+              );
             })
             .join("") +
           "</ul>"
@@ -805,7 +839,12 @@ function renderCategoryTree() {
 
   if (!state.categories.length) {
     list.innerHTML = '<li class="empty-cell">还没有分类</li>';
+    return;
   }
+
+  // 一级分类树与每个二级分组都是独立拖拽区，顺序只在自己内部调换
+  list.setAttribute("data-parent-id", "");
+  initCategorySortable();
 }
 
 function categoryRowHtml(category, counts, isTop) {
@@ -813,6 +852,7 @@ function categoryRowHtml(category, counts, isTop) {
   const tag = used ? '<span class="tag-count">' + used + " 笔</span>" : "";
   return (
     '<div class="category-row">' +
+    '<span class="drag-handle" title="按住拖动排序" aria-hidden="true">⋮⋮</span>' +
     '<span class="category-name">' +
     escapeHtml(category.name) +
     "</span>" +
@@ -823,6 +863,133 @@ function categoryRowHtml(category, counts, isTop) {
     '">删除</button>' +
     "</div>"
   );
+}
+
+/* ---------- 拖拽排序（Sortable） ---------- */
+
+// key -> Sortable 实例：重绘列表前先销毁旧的，否则同一节点会叠出一堆监听
+const sortableInstances = {};
+
+function mountSortable(key, element, options) {
+  if (sortableInstances[key]) {
+    sortableInstances[key].destroy();
+    delete sortableInstances[key];
+  }
+  if (!element || typeof Sortable === "undefined") {
+    return;
+  }
+  sortableInstances[key] = new Sortable(element, options);
+}
+
+/** 分类拖完立即写回后端；失败就重新加载，把 DOM 拉回真实顺序 */
+function saveCategoryOrder(container, parentId) {
+  const ids = Array.prototype.slice
+    .call(container.querySelectorAll(":scope > li[data-category-id]"))
+    .map(function (item) {
+      return Number(item.getAttribute("data-category-id"));
+    });
+  api(
+    "/api/categories/order",
+    jsonOptions("PUT", { ids: ids, parent_id: parentId || null })
+  )
+    .then(function () {
+      toast("分类顺序已保存", "success");
+    })
+    .catch(function (error) {
+      toast(error.message, "error");
+    })
+    .then(function () {
+      return loadCategories();
+    });
+}
+
+function initCategorySortable() {
+  const list = $("category-tree");
+  if (!list) {
+    return;
+  }
+
+  mountSortable("categories-top", list, {
+    handle: ".drag-handle",
+    animation: 150,
+    ghostClass: "sortable-ghost",
+    chosenClass: "sortable-chosen",
+    onEnd: function (event) {
+      saveCategoryOrder(event.to, null);
+    },
+  });
+
+  Array.prototype.forEach.call(
+    list.querySelectorAll("ul.category-sub"),
+    function (subList) {
+      const parentId = Number(subList.getAttribute("data-parent-id"));
+      mountSortable("categories-" + parentId, subList, {
+        handle: ".drag-handle",
+        animation: 150,
+        ghostClass: "sortable-ghost",
+        chosenClass: "sortable-chosen",
+        onEnd: function (event) {
+          saveCategoryOrder(event.to, parentId);
+        },
+      });
+    }
+  );
+}
+
+/* ---------- 账户弹窗里的排序列表 ---------- */
+
+function renderAccountSortList() {
+  const list = $("account-sort-list");
+  if (!list) {
+    return;
+  }
+
+  if (!state.accounts.length) {
+    list.innerHTML = '<li class="empty-cell">还没有账户</li>';
+    return;
+  }
+
+  list.innerHTML = state.accounts
+    .map(function (account) {
+      return (
+        '<li class="account-sort-item" data-account-name="' +
+        escapeHtml(account.name) +
+        '">' +
+        '<span class="drag-handle" title="按住拖动排序" aria-hidden="true">⋮⋮</span>' +
+        '<span class="account-sort-name">' +
+        escapeHtml(account.name) +
+        "</span>" +
+        '<span class="account-sort-group">' +
+        escapeHtml(account.group_name || "资金账户") +
+        "</span>" +
+        "</li>"
+      );
+    })
+    .join("");
+
+  mountSortable("account-sort", list, {
+    handle: ".drag-handle",
+    animation: 150,
+    ghostClass: "sortable-ghost",
+    chosenClass: "sortable-chosen",
+    onEnd: function (event) {
+      const names = Array.prototype.slice
+        .call(event.to.querySelectorAll(":scope > li[data-account-name]"))
+        .map(function (item) {
+          return item.getAttribute("data-account-name");
+        });
+      api("/api/accounts/order", jsonOptions("PUT", { names: names }))
+        .then(function () {
+          toast("账户顺序已保存", "success");
+        })
+        .catch(function (error) {
+          toast(error.message, "error");
+        })
+        .then(function () {
+          return refresh();
+        });
+    },
+  });
 }
 
 /* ==================== 账户 ==================== */
@@ -960,6 +1127,7 @@ async function loadAccounts() {
 
     fillAccountSelects();
     renderAccountGroups();
+    renderAccountSortList();
 
     // 选中的账户被删掉了，详情区要退回未选中状态
     if (state.detailAccount) {
@@ -1675,7 +1843,9 @@ function recordRowHtml(record) {
     '<td class="text-end col-amount">' +
     amountCellHtml(record) +
     "</td>" +
-    '<td class="note-cell">' +
+    '<td class="note-cell" title="' +
+    (record.note ? escapeHtml(record.note) : "") +
+    '">' +
     (record.note ? escapeHtml(record.note) : "-") +
     "</td>" +
     "</tr>"
@@ -1972,7 +2142,9 @@ function accountRowHtml(record) {
     '<td class="text-end col-amount">' +
     amountCellHtml(record) +
     "</td>" +
-    '<td class="note-cell">' +
+    '<td class="note-cell" title="' +
+    (record.note ? escapeHtml(record.note) : "") +
+    '">' +
     (record.note ? escapeHtml(record.note) : "-") +
     "</td>" +
     "</tr>"
@@ -2139,7 +2311,9 @@ function listRowHtml(record) {
     '<td class="text-end col-amount">' +
     amountCellHtml(record) +
     "</td>" +
-    '<td class="note-cell">' +
+    '<td class="note-cell" title="' +
+    (record.note ? escapeHtml(record.note) : "") +
+    '">' +
     (record.note ? escapeHtml(record.note) : "-") +
     "</td>"
   );
@@ -3223,8 +3397,11 @@ function onGlobalKeydown(event) {
     return;
   }
 
-  if (event.key === "Escape" && $("fab")) {
-    closeFab();
+  if (event.key === "Escape") {
+    closeCtxMenu();
+    if ($("fab")) {
+      closeFab();
+    }
   }
 
   if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
@@ -3573,6 +3750,55 @@ function bindEvents() {
     }
   });
 
+  // 右键菜单只绑主账单表；账户流水与当日明细保留浏览器默认菜单
+  if ($("record-list")) {
+    $("record-list").addEventListener("contextmenu", function (event) {
+      const row = event.target.closest("tr[data-id]");
+      if (!row) {
+        return;
+      }
+      event.preventDefault();
+      openCtxMenu(event, recordById(Number(row.getAttribute("data-id"))));
+    });
+  }
+  if ($("ctx-menu")) {
+    $("ctx-menu").addEventListener("click", onCtxMenuClick);
+    $("ctx-menu").addEventListener("keydown", function (event) {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
+        return;
+      }
+      event.preventDefault();
+      const items = Array.prototype.slice.call(
+        $("ctx-menu").querySelectorAll(".ctx-item")
+      );
+      const index = items.indexOf(document.activeElement);
+      const next =
+        event.key === "ArrowDown"
+          ? (index + 1) % items.length
+          : (index - 1 + items.length) % items.length;
+      items[next].focus();
+    });
+  }
+  // 点菜单外任意处 / 滚动页面 / 窗口失焦都收掉右键菜单
+  document.addEventListener("click", function (event) {
+    const menu = $("ctx-menu");
+    if (menu && menu.classList.contains("is-open") && !event.target.closest("#ctx-menu")) {
+      closeCtxMenu();
+    }
+  });
+  window.addEventListener("scroll", closeCtxMenu, true);
+  window.addEventListener("blur", closeCtxMenu);
+
+  // 导出 CSV：顶栏与「我的」页两个入口共用一套下载逻辑
+  ["export-btn", "export-btn-profile"].forEach(function (id) {
+    const button = $(id);
+    if (button) {
+      button.addEventListener("click", function () {
+        exportCsv(button);
+      });
+    }
+  });
+
   // 近 7 天卡片列表同样点一条弹详情
   if ($("recent-groups")) {
     $("recent-groups").addEventListener("click", onRecentClick);
@@ -3639,8 +3865,9 @@ function bindEvents() {
     openRecordModal({ account: state.detailAccount });
   });
 
-  // 新增账户
+  // 新增账户：先把「已有账户」排序列表按最新顺序重画，再开弹窗
   $("open-account-btn").addEventListener("click", function () {
+    renderAccountSortList();
     if (accountModal) {
       accountModal.show();
     }
@@ -3756,6 +3983,234 @@ function bindEvents() {
   );
 }
 
+/* ==================== 版本 / 导出 / 网络 / 右键菜单（v0.06.3 终极补丁） ==================== */
+
+let ctxRecordId = null;
+let netBannerTimer = 0;
+
+async function loadVersion() {
+  try {
+    const data = await api("/api/version");
+    const version = String((data && data.version) || "").trim();
+    if (!version) {
+      return;
+    }
+    if ($("sidebar-version")) {
+      $("sidebar-version").textContent = version + " · 开发中";
+    }
+    if ($("profile-version")) {
+      $("profile-version").textContent = version;
+    }
+  } catch (error) {
+    // 版本号读不到不影响任何功能，模板里的静态文字就是兜底
+  }
+}
+
+/** 导出走 fetch + blob：接口报错时弹 Toast，而不是把整页导航到一段 JSON */
+async function exportCsv(button) {
+  const target = button || $("export-btn");
+  if (target && target.disabled) {
+    return;
+  }
+  if (target) {
+    target.disabled = true;
+  }
+  try {
+    const response = await fetch("/api/export");
+    if (!response.ok) {
+      throw new Error("导出失败（HTTP " + response.status + "）");
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = "AI记账管家-账单-" + stamp + ".csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(function () {
+      URL.revokeObjectURL(url);
+    }, 4000);
+    toast("CSV 已开始下载（带 BOM，Excel 打开不乱码）", "success");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    if (target) {
+      target.disabled = false;
+    }
+  }
+}
+
+function showNetBanner(offline) {
+  const banner = $("net-banner");
+  if (!banner) {
+    return;
+  }
+  window.clearTimeout(netBannerTimer);
+  banner.classList.remove("is-visible", "is-offline", "is-online");
+  banner.classList.add(offline ? "is-offline" : "is-online");
+  banner.textContent = offline
+    ? "网络已断开，看板数据暂时不会更新"
+    : "网络已恢复，数据可以继续同步了";
+  // 先撤掉 is-visible 再强制回流，断网→恢复这类连续切换才会重新播动画
+  void banner.offsetWidth;
+  banner.classList.add("is-visible");
+  if (!offline) {
+    netBannerTimer = window.setTimeout(function () {
+      banner.classList.remove("is-visible");
+    }, 2500);
+  }
+}
+
+function watchNetwork() {
+  window.addEventListener("offline", function () {
+    showNetBanner(true);
+  });
+  window.addEventListener("online", function () {
+    showNetBanner(false);
+  });
+  if (!navigator.onLine) {
+    showNetBanner(true);
+  }
+}
+
+function recordById(recordId) {
+  return (state.allRecords || []).find(function (record) {
+    return record.id === recordId;
+  });
+}
+
+function openCtxMenu(event, record) {
+  const menu = $("ctx-menu");
+  if (!menu || !record) {
+    return;
+  }
+  ctxRecordId = record.id;
+  menu.classList.add("is-open");
+  // 先量尺寸再定位：贴边弹出时整块翻到鼠标左侧/上方，不会被视口裁掉
+  const rect = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth - rect.width - 12);
+  const y = Math.min(event.clientY, window.innerHeight - rect.height - 12);
+  menu.style.left = Math.max(12, x) + "px";
+  menu.style.top = Math.max(12, y) + "px";
+
+  const first = menu.querySelector(".ctx-item");
+  if (first) {
+    first.focus({ preventScroll: true });
+  }
+}
+
+function closeCtxMenu() {
+  const menu = $("ctx-menu");
+  if (menu) {
+    menu.classList.remove("is-open");
+  }
+  ctxRecordId = null;
+}
+
+function recordPlainText(record) {
+  const typeLabel = TYPE_LABELS[record.type] || record.type;
+  const category = record.parent_category
+    ? record.parent_category + " / " + record.category
+    : record.category;
+  const amount = "¥" + Math.abs(Number(record.amount)).toFixed(2);
+  const lines = [displayDate(record.date) + " · " + typeLabel];
+  if (record.type === "transfer") {
+    lines.push("转账：" + record.account + " → " + (record.to_account || ""));
+    if (Number(record.fee)) {
+      lines.push("手续费：¥" + Number(record.fee).toFixed(2));
+    }
+  } else {
+    lines.push("分类：" + category);
+    lines.push("账户：" + record.account);
+  }
+  lines.push((record.type === "income" ? "+" : "-") + amount);
+  if (record.note) {
+    lines.push("备注：" + record.note);
+  }
+  return lines.join("\n");
+}
+
+function copyRecordText(record) {
+  const text = recordPlainText(record);
+  const done = function () {
+    toast("账单已复制到剪贴板", "success");
+  };
+  const fallback = function () {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (error) {
+      ok = false;
+    }
+    area.remove();
+    if (ok) {
+      done();
+    } else {
+      toast("复制失败，浏览器不允许访问剪贴板", "error");
+    }
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
+function onCtxMenuClick(event) {
+  const item = event.target.closest("[data-ctx-action]");
+  if (!item || !ctxRecordId) {
+    return;
+  }
+  const record = recordById(ctxRecordId);
+  const action = item.getAttribute("data-ctx-action");
+  closeCtxMenu();
+
+  if (!record) {
+    toast("这条账单已经不在了，刷新看看", "error");
+    return;
+  }
+  if (action === "edit") {
+    openRecordModal({ record: record });
+  } else if (action === "copy") {
+    copyRecordText(record);
+  } else if (action === "delete") {
+    removeRecord(record.id);
+  }
+}
+
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+  // file:// 打开时注册必然失败；只有 http(s) 才具备离线能力
+  if (location.protocol !== "http:" && location.protocol !== "https:") {
+    return;
+  }
+  const start = function () {
+    navigator.serviceWorker
+      .register("/service-worker.js", { scope: "/" })
+      .catch(function () {
+        // 离线缓存没装上不影响在线使用，静默处理
+      });
+  };
+  // init 里拉首屏数据可能比 load 事件还慢，此时再等 load 就永远等不到了
+  if (document.readyState === "complete") {
+    start();
+  } else {
+    window.addEventListener("load", start);
+  }
+}
+
 /* ==================== 启动 ==================== */
 
 async function init() {
@@ -3798,10 +4253,21 @@ async function init() {
     toast(error.message, "error");
   }
 
+  // 版本号 / 断网横幅 / Service Worker 都是「有就用」的能力，失败不能拦住看板
+  loadVersion().catch(function () {});
+  watchNetwork();
+  registerServiceWorker();
+
   // 通知失败不该拦住整个看板，单独兜底
   loadNotifications().catch(function () {});
 
   switchPage("home");
+
+  // manifest 快捷方式与 404 页的「去记一笔」都靠这个参数直达记账弹窗
+  if (new URLSearchParams(window.location.search).get("action") === "new") {
+    openRecordModal();
+    window.history.replaceState(null, "", window.location.pathname);
+  }
 }
 
 document.addEventListener("DOMContentLoaded", init);

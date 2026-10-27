@@ -1,8 +1,11 @@
+import csv
 import datetime
+import io
 import os
+import subprocess
 import uuid
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 import database
 
@@ -534,6 +537,150 @@ def upload_image():
 def admin():
     """开发者发布端：填标题 + 富文本 + 配图，发布后立刻出现在前台信封里。"""
     return render_template("admin.html", notifications=database.list_notifications())
+
+
+# ---------------- PWA：清单 / Service Worker / 图标 ----------------
+
+@app.route("/manifest.json")
+def serve_manifest():
+    """manifest 放根目录，作用域覆盖整站；用 Flask 发是为了带上正确的 mimetype。"""
+    return send_from_directory(BASE_DIR, "manifest.json", mimetype="application/manifest+json")
+
+
+@app.route("/service-worker.js")
+def serve_service_worker():
+    """SW 必须能从根路径访问，才能控制 / 与所有子路径。"""
+    response = send_from_directory(BASE_DIR, "service-worker.js", mimetype="text/javascript")
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
+
+@app.route("/favicon.ico")
+def serve_favicon():
+    """浏览器默认会抓 /favicon.ico；直接发我们的 PNG 图标，省掉一条 404。"""
+    return send_from_directory(
+        os.path.join(BASE_DIR, "static", "icons"), "favicon.png", mimetype="image/png"
+    )
+
+
+# ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
+
+APP_VERSION_FALLBACK = "v0.06.3-DEV"
+_version_cache = None
+
+
+def detect_version():
+    """返回当前版本号，比如 v0.06.3-DEV。
+
+    优先 APP_VERSION（部署时钉死），否则读 Git Tag；
+    Git 不可用（比如拷到 U 盘里演示）时回落到内置版本号。
+    结果只算一次：侧栏每次刷新都会调这个接口，没必要反复起子进程。
+    """
+    global _version_cache
+    if _version_cache is not None:
+        return _version_cache
+
+    version = (os.environ.get("APP_VERSION") or "").strip()
+    if not version:
+        try:
+            result = subprocess.run(
+                ["git", "describe", "--tags", "--abbrev=0"],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0:
+                version = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            version = ""
+    _version_cache = version or APP_VERSION_FALLBACK
+    return _version_cache
+
+
+@app.route("/api/version")
+def api_version():
+    return jsonify(version=detect_version())
+
+
+# ---------------- 导出 CSV（带 BOM，Excel 打开不乱码） ----------------
+
+TYPE_LABELS = {"expense": "支出", "income": "收入", "transfer": "转账"}
+
+
+@app.route("/api/export")
+def export_records():
+    """把全部账目导成 CSV。开头的 \\ufeff 是给 Excel 认 UTF-8 用的 BOM。"""
+    buffer = io.StringIO()
+    buffer.write("\ufeff")
+    writer = csv.writer(buffer)
+    writer.writerow(["日期", "类型", "分类", "账户", "转入账户", "金额", "手续费", "公式", "备注"])
+
+    for record in database.list_records():
+        writer.writerow(
+            [
+                record["date"],
+                TYPE_LABELS.get(record["type"], record["type"]),
+                record["category"],
+                record["account"],
+                record.get("to_account", ""),
+                "%.2f" % round(record["amount"], 2),
+                "%.2f" % round(record.get("fee", 0), 2),
+                record.get("formula", ""),
+                record.get("note", ""),
+            ]
+        )
+
+    filename = "ai-accounting-%s.csv" % datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+    )
+
+
+# ---------------- 拖拽排序：分类 / 账户 ----------------
+
+@app.route("/api/categories/order", methods=["PUT"])
+def reorder_categories():
+    """body: {"ids": [3, 1, 2], "parent_id": null} —— 只重排同一父级下的兄弟分类。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    parent_id = data.get("parent_id")
+    if parent_id is not None and (
+        isinstance(parent_id, bool) or not isinstance(parent_id, int)
+    ):
+        return jsonify(error="parent_id 必须是整数或 null"), 400
+
+    error = database.reorder_categories(data.get("ids"), parent_id)
+    if error is not None:
+        return jsonify(error=error), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/accounts/order", methods=["PUT"])
+def reorder_accounts():
+    """body: {"names": ["微信", "支付宝", ...]} —— 账户是全量顺序，可跨大类拖。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    error = database.reorder_accounts(data.get("names"))
+    if error is not None:
+        return jsonify(error=error), 400
+    return jsonify(ok=True)
+
+
+# ---------------- 404：接口给 JSON，页面给有人情味的 404.html ----------------
+
+@app.errorhandler(404)
+def not_found(_error):
+    if request.path.startswith("/api/"):
+        return jsonify(error="接口不存在：%s" % request.path), 404
+    return render_template("404.html"), 404
 
 
 if __name__ == "__main__":
