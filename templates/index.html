@@ -481,28 +481,55 @@
             </button>
             <p class="export-hint">导出不影响账本数据，随时可以再导一次。</p>
           </div>
-        </div>
 
-        <!-- ============ 通讯录（v0.07） ============ -->
+        <!-- ============ 通讯录：收缩成与「我的账本」同尺寸的小卡片，内容进弹窗 ============ -->
         <div class="panel contacts-panel" id="contacts-panel">
-          <div class="panel-head">
-            <span class="panel-title">通讯录</span>
-            <div class="contacts-tools">
-              <button class="btn btn-light btn-sm" type="button" id="toggle-contacts-btn">查看通讯录</button>
-              <button class="btn btn-primary btn-sm" type="button" id="add-contact-btn">+ 新增联系人</button>
-            </div>
+          <div class="export-head">
+            <h3>通讯录</h3>
+            <span class="export-badge">借贷必备</span>
           </div>
           <p class="contacts-hint">记下常来往的人，借贷时直接选；点联系人可看你们之间的每一笔账。</p>
-          <div class="contacts-body d-none" id="contacts-body">
-            <div class="contacts-layout">
-              <div class="contacts-side">
-                <div class="contacts-list" id="contacts-list"></div>
+          <div class="profile-actions">
+            <button class="btn btn-light btn-sm" type="button" id="toggle-contacts-btn" data-bs-toggle="modal" data-bs-target="#contacts-modal">查看通讯录</button>
+            <button class="btn btn-primary btn-sm" type="button" id="add-contact-btn">+ 新增</button>
+          </div>
+        </div>
+
+        <!-- ============ 回收站：v0.09 骨架，先占位 ============ -->
+        <div class="panel trash-card" id="trash-card">
+          <div class="export-head">
+            <h3>回收站</h3>
+            <span class="export-badge trash-badge">v0.09</span>
+          </div>
+          <p class="trash-hint">删除的账单会先进回收站，支持恢复与彻底删除；这里会显示最近删除的条目。</p>
+          <div class="profile-actions">
+            <button class="btn btn-light btn-sm" type="button" disabled>即将上线</button>
+          </div>
+        </div>
+        </div>
+      </section>
+
+      <!-- ============ 通讯录弹窗（v0.09：原先占据「我的」页大块区域，现收进弹窗） ============ -->
+      <div class="modal fade contacts-modal" id="contacts-modal" tabindex="-1" aria-labelledby="contacts-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="contacts-modal-title">通讯录</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <div class="contacts-body" id="contacts-body">
+                <div class="contacts-layout">
+                  <div class="contacts-side">
+                    <div class="contacts-list" id="contacts-list"></div>
+                  </div>
+                  <div class="contact-detail" id="contact-detail"></div>
+                </div>
               </div>
-              <div class="contact-detail" id="contact-detail"></div>
             </div>
           </div>
         </div>
-      </section>
+      </div>
 
     </div>
   </div>

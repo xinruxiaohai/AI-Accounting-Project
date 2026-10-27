@@ -4401,25 +4401,10 @@ function bindEvents() {
     true
   );
 
-  // 通讯录：展开 / 收起、新增、选中联系人、详情卡里的编辑与删除
-  const toggleContacts = $("toggle-contacts-btn");
-  if (toggleContacts) {
-    toggleContacts.addEventListener("click", function () {
-      const body = $("contacts-body");
-      const collapsed = body.classList.toggle("d-none");
-      toggleContacts.textContent = collapsed ? "查看通讯录" : "收起通讯录";
-      if (!collapsed && !state.contacts.length) {
-        loadContacts();
-      }
-    });
-  }
+  // 通讯录：v0.09 起按钮走 data-bs-toggle 打开弹窗，内容在 #contacts-modal 内
   const addContact = $("add-contact-btn");
   if (addContact) {
     addContact.addEventListener("click", function () {
-      $("contacts-body").classList.remove("d-none");
-      if (toggleContacts) {
-        toggleContacts.textContent = "收起通讯录";
-      }
       openContactModal(null);
     });
   }
