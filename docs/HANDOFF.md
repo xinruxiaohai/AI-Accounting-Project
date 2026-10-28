@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.09-DEV（UI 宏观骨架重构：全站 5:5、侧栏缩窄、我的页四卡统一，待肉眼确认后进 Step2）
-当前进度：Step1 已完成——分块布局左右改 5:5、侧栏宽度 176px、窄窗单列堆叠；「我的」页通讯录收成与「我的账本」同尺寸小卡片并改为弹窗展开，新增回收站占位卡，四卡等高等宽。Step2 资产页大重构等用户确认骨架后再动。
+当前版本：v0.09.1-DEV（资产页史诗重构 + 回收站实装 + 日历/预算细节，已自测封版）
+当前进度：v0.09 骨架 5:5 与侧栏 176px 已落地；资产页完成净资产渐变卡（总资产/总负债）、借入/借出/待报销/已报销四小卡、账户大类分组与点击后按日期分组流水（含当日收支小计）；「我的」页回收站接软删除后端，弹窗支持恢复与彻底删除，通讯录改为弹窗；预算改 Bootstrap 弹窗，日历七列等分、今天淡蓝高亮、深色模式红绿提亮。下一步进入 v0.10。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -52,12 +52,14 @@ categories: id, name, parent_id (二级分类)。
 /api/upload (POST)
 /api/records/ai (POST) AI 意图分流：record / debt / add_contact / unknown。
 PUT /api/records/<id>/reimbursement 报销开关（只改报销字段，不动余额与统计）。
+GET /api/records/trash 回收站列表；PUT /api/records/<id>/restore 恢复；DELETE /api/records/<id>/purge 彻底删除（DELETE /api/records/<id> 现为软删除，余额同步回滚）。
 
 六、下一步行动计划
-当前目标：v0.09-DEV 分两步走，Step1 宏观骨架已完成（全局 5:5、侧栏 176px、我的页四卡统一、单列降级），等用户肉眼确认后进 Step2。
+当前目标：v0.09.1-DEV 已完成（资产页重构、回收站、日历与预算细节），进入 v0.10 功能深化。
 执行步骤：
-1. Step2 资产页大重构：账户卡片、账户流水与统计区按新 5:5 骨架重排，再谈细节密度。
-2. 回收站：启用 records.deleted_at 软删除，列表默认过滤，回收站页支持恢复与彻底删除。
-3. 报销进阶：部分报销进度、按报销人筛选账单、报销记录导出。
-4. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV 标签。
+1. 报销进阶：部分报销进度、按报销人筛选账单、报销记录导出。
+2. 数据安全：一键备份 / 恢复（SQLite 导出导入），导出 CSV 增加报销字段。
+3. 报表页：月度/年度趋势与分类占比图表，替代纯文字统计。
+4. 移动端细节与可访问性（焦点顺序、对比度、触控热区）。
+5. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV / v0.09.1-DEV 标签。
 备注：.env 换 Key 后必须彻底结束旧 Flask 进程再启动，否则旧进程仍持有旧密钥返回 401。

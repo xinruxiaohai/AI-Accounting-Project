@@ -436,11 +436,39 @@ def update_record_reimbursement(record_id):
 
 @app.route("/api/records/<int:record_id>", methods=["DELETE"])
 def remove_record(record_id):
-    """删除一条账目并回滚余额。id 不存在时返回 404，而不是假装成功。"""
-    deleted = database.delete_record(record_id)
+    """删除一条账目：移进回收站并回滚余额，id 不存在时返回 404。"""
+    deleted = database.soft_delete_record(record_id)
     if not deleted:
         return jsonify(error="记录不存在"), 404
-    return jsonify(deleted=record_id)
+    return jsonify(deleted=record_id, trashed=True)
+
+
+# ---------------- 回收站（v0.09） ----------------
+
+@app.route("/api/records/trash", methods=["GET"])
+def list_trash():
+    """回收站：deleted_at 不为空的账目。"""
+    records = database.list_deleted_records()
+    return jsonify(count=len(records), records=records)
+
+
+@app.route("/api/records/<int:record_id>/restore", methods=["PUT"])
+def restore_record(record_id):
+    """从回收站恢复一条账目，余额影响重新套上。"""
+    restored = database.restore_record(record_id)
+    if not restored:
+        return jsonify(error="回收站里没有这条记录"), 404
+    record = database.get_record(record_id)
+    return jsonify(record=record)
+
+
+@app.route("/api/records/<int:record_id>/purge", methods=["DELETE"])
+def purge_record(record_id):
+    """彻底删除：只允许删回收站里的账目。"""
+    purged = database.purge_record(record_id)
+    if not purged:
+        return jsonify(error="回收站里没有这条记录"), 404
+    return jsonify(purged=record_id)
 
 
 # ---------------- 分类接口 ----------------

@@ -996,7 +996,7 @@ _RECORD_SELECT = (
     "SELECT r.id, r.amount, r.category, r.category_id, r.note, r.date, "
     "       r.account, r.type, r.formula, r.to_account, r.fee, "
     "       r.is_reimbursable, r.reimbursement_contact_id, r.reimbursed_amount, "
-    "       r.total_reimbursement, "
+    "       r.total_reimbursement, r.deleted_at, "
     "       p.name AS category_parent, ct.name AS reimbursement_contact_name "
     "  FROM records r "
     "  LEFT JOIN categories c ON c.id = r.category_id "
@@ -1120,6 +1120,88 @@ def set_record_reimbursement(
                 (contact_id, paid, total, record_id),
             )
             return True, None
+    finally:
+        conn.close()
+
+
+def list_deleted_records():
+    """回收站列表：deleted_at 不为空的账目，最近删除的排前面。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            _RECORD_SELECT
+            + " WHERE r.deleted_at IS NOT NULL ORDER BY r.deleted_at DESC, r.id DESC"
+        ).fetchall()
+        records = [dict(row) for row in rows]
+        for record in records:
+            record["date"] = normalize_date(record["date"])
+        return records
+    finally:
+        conn.close()
+
+
+def soft_delete_record(record_id):
+    """移到回收站：写 deleted_at 并回滚余额，账目本身保留。删到了返回 True。"""
+    conn = get_conn()
+    try:
+        with conn:
+            old = conn.execute(
+                "SELECT account, amount, type, to_account, fee FROM records "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (record_id,),
+            ).fetchone()
+            if old is None:
+                return False
+            conn.execute(
+                "UPDATE records SET deleted_at = ? WHERE id = ?",
+                (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), record_id),
+            )
+            _apply_effects(
+                conn,
+                _reverse_effects(
+                    _balance_effects(
+                        old["type"], old["account"], old["to_account"], old["amount"], old["fee"]
+                    )
+                ),
+            )
+            return True
+    finally:
+        conn.close()
+
+
+def restore_record(record_id):
+    """从回收站恢复：清掉 deleted_at 并把余额影响重新套上。恢复到返回 True。"""
+    conn = get_conn()
+    try:
+        with conn:
+            old = conn.execute(
+                "SELECT account, amount, type, to_account, fee FROM records "
+                "WHERE id = ? AND deleted_at IS NOT NULL",
+                (record_id,),
+            ).fetchone()
+            if old is None:
+                return False
+            conn.execute("UPDATE records SET deleted_at = NULL WHERE id = ?", (record_id,))
+            _apply_effects(
+                conn,
+                _balance_effects(
+                    old["type"], old["account"], old["to_account"], old["amount"], old["fee"]
+                ),
+            )
+            return True
+    finally:
+        conn.close()
+
+
+def purge_record(record_id):
+    """彻底删除：只允许删回收站里的账目，不再动余额。删到了返回 True。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM records WHERE id = ? AND deleted_at IS NOT NULL", (record_id,)
+            )
+            return cur.rowcount > 0
     finally:
         conn.close()
 

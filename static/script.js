@@ -507,6 +507,8 @@ const state = {
   detailAccount: "",
   detailRecords: [],
   reimbSummary: null,
+  debtSummary: null,
+  trashRecords: [],
   editingId: null,
   presetAccount: "",
   // 日历：模式、当前年月、选中的某一天、日历专用的全量账单（不受账户筛选影响）
@@ -2186,7 +2188,29 @@ function renderAccountRecords() {
     return;
   }
 
-  tbody.innerHTML = state.detailRecords.map(accountRowHtml).join("");
+  // v0.09.1：按日期分组，每组先出一行「日期 + 当日收/支小计」，再跟当天的明细
+  const groups = new Map();
+  state.detailRecords.forEach(function (record) {
+    const key = dateKeyOf(record);
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(record);
+  });
+
+  let html = "";
+  groups.forEach(function (records, key) {
+    const day = summarize(records);
+    html +=
+      '<tr class="day-head"><td colspan="5">' +
+      '<div class="day-head-inner">' +
+      '<span class="day-head-date">' + escapeHtml(key) + "</span>" +
+      '<span class="day-head-sub">收 <b class="plus">' + money(day.income) + "</b> · 支 " +
+      '<b class="minus">' + money(day.expense) + "</b> · 共 " + records.length + " 笔</span>" +
+      "</div></td></tr>";
+    html += records.map(accountRowHtml).join("");
+  });
+  tbody.innerHTML = html;
 }
 
 async function loadRecords() {
@@ -2426,8 +2450,15 @@ function paintHeat(cell, net, peak) {
     return;
   }
   cell.classList.add("has-heat");
-  cell.style.backgroundColor =
-    "rgba(" + tone.rgb.join(", ") + ", " + tone.alpha.toFixed(3) + ")";
+  // 深色主题：红绿换成更亮的一档，并略提透明度，避免在深底上发灰看不清
+  const dark = document.documentElement.getAttribute("data-theme") === "dark";
+  const rgb = dark
+    ? net > 0
+      ? [16, 185, 129]
+      : [248, 113, 113]
+    : tone.rgb;
+  const alpha = dark ? Math.min(0.62, tone.alpha * 1.45) : tone.alpha;
+  cell.style.backgroundColor = "rgba(" + rgb.join(", ") + ", " + alpha.toFixed(3) + ")";
 }
 
 /** 日格里的 收 / 支 / 结 三行（中屏只留结余、极小屏只留底色，由 CSS 控制） */
@@ -3379,18 +3410,20 @@ function closeRecordDetail() {
 
 /** Bootstrap 在弹窗开/关动画进行中会忽略 hide()；保存后立刻关闭时补一次重试 */
 function hideRecordDetail() {
-  if (!recordDetailModal) {
+  hideModalSafe(recordDetailModal, $("record-detail-modal"));
+}
+
+/** Bootstrap 动画进行中 hide() 会被忽略；补一次延时 hide 兜底（弹窗内的保存按钮常被连点） */
+function hideModalSafe(instance, element) {
+  if (!instance || !element) {
     return;
   }
-  recordDetailModal.hide();
-  const element = $("record-detail-modal");
-  if (element) {
-    window.setTimeout(function () {
-      if (element.classList.contains("show")) {
-        recordDetailModal.hide();
-      }
-    }, 400);
-  }
+  instance.hide();
+  window.setTimeout(function () {
+    if (element.classList.contains("show")) {
+      instance.hide();
+    }
+  }, 400);
 }
 
 /** Enter / 点「编辑」：关掉详情，直接进记账弹窗的编辑态 */
@@ -3665,18 +3698,42 @@ function onSearchInput() {
 /* ==================== 预算 ==================== */
 
 function editBudget() {
-  const input = window.prompt("设置本月预算上限（元）", String(cents(state.budget)));
-  if (input === null) {
+  if (!budgetModal) {
     return;
   }
-  const value = Number(String(input).trim());
+  const input = $("budget-input");
+  if (input) {
+    input.value = String(cents(state.budget));
+    input.classList.remove("is-invalid");
+  }
+  budgetModal.show();
+  window.setTimeout(function () {
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }, 200);
+}
+
+/** 预算弹窗「保存」：校验大于 0 的数字，写 localStorage 并重绘预算/悬浮球 */
+function saveBudget() {
+  const input = $("budget-input");
+  if (!input) {
+    return;
+  }
+  const value = Number(String(input.value).trim());
   if (!Number.isFinite(value) || value <= 0) {
+    input.classList.add("is-invalid");
     toast("预算要填一个大于 0 的数字", "error");
+    input.focus();
     return;
   }
   state.budget = cents(value);
   localStorage.setItem(LS_BUDGET, String(state.budget));
+  input.classList.remove("is-invalid");
   renderBudget();
+  renderFab();
+  hideModalSafe(budgetModal, $("budget-modal"));
   toast("本月预算已改为 " + money(state.budget), "success");
 }
 
@@ -4023,10 +4080,12 @@ async function refresh() {
     loadCalendarRecords(),
     loadContacts(),
     loadReimbSummary(),
+    loadDebtSummary(),
   ]);
   await refreshDetail();
   renderDashboard();
   renderReimbCards();
+  renderAssetsHero();
 }
 
 /* ==================== 事件绑定 ==================== */
@@ -4216,6 +4275,39 @@ function bindEvents() {
   }
   if ($("reimb-save-btn")) {
     $("reimb-save-btn").addEventListener("click", saveReimb);
+  }
+
+  // 预算弹窗：保存按钮 + 输入框 Enter 提交（Esc 由 bindEscClose 处理）
+  if ($("budget-save-btn")) {
+    $("budget-save-btn").addEventListener("click", saveBudget);
+  }
+  if ($("budget-input")) {
+    $("budget-input").addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        saveBudget();
+      }
+    });
+  }
+
+  // 回收站：点卡片开弹窗时拉一次列表；恢复 / 彻底删除都在列表内委托
+  if ($("open-trash-btn")) {
+    $("open-trash-btn").addEventListener("click", function () {
+      loadTrash();
+    });
+  }
+  if ($("trash-list")) {
+    $("trash-list").addEventListener("click", function (event) {
+      const restoreBtn = event.target.closest("[data-restore]");
+      if (restoreBtn) {
+        restoreTrashRecord(Number(restoreBtn.getAttribute("data-restore")));
+        return;
+      }
+      const purgeBtn = event.target.closest("[data-purge]");
+      if (purgeBtn) {
+        purgeTrashRecord(Number(purgeBtn.getAttribute("data-purge")));
+      }
+    });
   }
 
   // 近 7 天卡片列表同样点一条弹详情
@@ -4604,6 +4696,143 @@ async function loadReimbSummary() {
   }
 }
 
+/* ==================== 资产页：净资产 / 借入借出（v0.09.1） ==================== */
+
+/** 未结清借贷汇总：borrow=我欠别人的，lend=别人欠我的 */
+async function loadDebtSummary() {
+  try {
+    const data = await api("/api/debts?status=unpaid");
+    let borrow = 0;
+    let lend = 0;
+    (data.debts || []).forEach(function (debt) {
+      const amount = Number(debt.amount || 0);
+      if (debt.type === "borrow") {
+        borrow += amount;
+      } else {
+        lend += amount;
+      }
+    });
+    state.debtSummary = { borrow: cents(borrow), lend: cents(lend) };
+  } catch (error) {
+    state.debtSummary = null;
+  }
+}
+
+/** 顶部净资产卡：总资产=正余额账户+待收借出；总负债=负余额账户+待还借入 */
+function renderAssetsHero() {
+  let assets = 0;
+  let liabilities = 0;
+  (state.accounts || []).forEach(function (account) {
+    const balance = Number(account.balance || 0);
+    if (balance >= 0) {
+      assets += balance;
+    } else {
+      liabilities += -balance;
+    }
+  });
+  const borrow = state.debtSummary ? state.debtSummary.borrow : 0;
+  const lend = state.debtSummary ? state.debtSummary.lend : 0;
+  assets += lend;
+  liabilities += borrow;
+
+  if ($("asset-net")) {
+    $("asset-net").textContent = money(cents(assets - liabilities));
+  }
+  if ($("asset-total")) {
+    $("asset-total").textContent = money(cents(assets));
+  }
+  if ($("asset-liability")) {
+    $("asset-liability").textContent = money(cents(liabilities));
+  }
+  if ($("asset-borrow")) {
+    $("asset-borrow").textContent = money(cents(borrow));
+  }
+  if ($("asset-lend")) {
+    $("asset-lend").textContent = money(cents(lend));
+  }
+}
+
+/* ==================== 回收站（v0.09.1） ==================== */
+
+let trashModal = null;
+let budgetModal = null;
+
+async function loadTrash() {
+  const box = $("trash-list");
+  if (!box) {
+    return;
+  }
+  try {
+    const data = await api("/api/records/trash");
+    state.trashRecords = data.records || [];
+  } catch (error) {
+    state.trashRecords = [];
+    toast(error.message, "error");
+  }
+  renderTrash();
+}
+
+function renderTrash() {
+  const box = $("trash-list");
+  if (!box) {
+    return;
+  }
+  const records = state.trashRecords || [];
+  if (!records.length) {
+    box.innerHTML = '<p class="trash-empty">回收站是空的，删除的账单会出现在这里。</p>';
+    return;
+  }
+  box.innerHTML = records
+    .map(function (record) {
+      const typeLabel = record.type === "income" ? "收入" : record.type === "transfer" ? "转账" : "支出";
+      return (
+        '<div class="trash-row">' +
+        '<div class="trash-main">' +
+        '<div class="trash-title">' +
+        escapeHtml(categoryLabel(record)) +
+        '<span class="text-muted">' + typeLabel + " · " + money(record.amount) + "</span>" +
+        "</div>" +
+        '<div class="trash-meta">' +
+        escapeHtml(displayDate(record.date)) +
+        " · " + escapeHtml(record.account || "-") +
+        " · 删除于 " + escapeHtml(record.deleted_at || "-") +
+        "</div>" +
+        "</div>" +
+        '<div class="trash-actions">' +
+        '<button class="btn btn-sm btn-light" type="button" data-restore="' + record.id + '">恢复</button>' +
+        '<button class="btn btn-sm btn-outline-danger" type="button" data-purge="' + record.id + '">彻底删除</button>' +
+        "</div>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+async function restoreTrashRecord(id) {
+  try {
+    await api("/api/records/" + id + "/restore", { method: "PUT" });
+    toast("已恢复到账单列表", "success");
+    await loadTrash();
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function purgeTrashRecord(id) {
+  if (!window.confirm("彻底删除后无法恢复，确定吗？")) {
+    return;
+  }
+  try {
+    await api("/api/records/" + id + "/purge", { method: "DELETE" });
+    toast("已彻底删除", "success");
+    await loadTrash();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+
 /** 详情弹窗里的报销区：只有支出账目出现，开关开启后才展开字段 */
 function renderReimbBlock(record) {
   const block = $("reimb-block");
@@ -4971,6 +5200,8 @@ async function init() {
   const categoryElement = $("category-modal");
   const detailElement = $("record-detail-modal");
   const aiElement = $("ai-modal");
+  const trashElement = $("trash-modal");
+  const budgetElement = $("budget-modal");
   if (window.bootstrap) {
     recordModal = new window.bootstrap.Modal(modalElement);
     accountModal = new window.bootstrap.Modal(accountElement);
@@ -4981,6 +5212,12 @@ async function init() {
     if (aiElement) {
       aiModal = new window.bootstrap.Modal(aiElement);
     }
+    if (trashElement) {
+      trashModal = new window.bootstrap.Modal(trashElement);
+    }
+    if (budgetElement) {
+      budgetModal = new window.bootstrap.Modal(budgetElement);
+    }
     bindEscClose(modalElement, recordModal);
     bindEscClose(accountElement, accountModal);
     bindEscClose(categoryElement, categoryModal);
@@ -4989,6 +5226,12 @@ async function init() {
     }
     if (aiElement && aiModal) {
       bindEscClose(aiElement, aiModal);
+    }
+    if (trashElement && trashModal) {
+      bindEscClose(trashElement, trashModal);
+    }
+    if (budgetElement && budgetModal) {
+      bindEscClose(budgetElement, budgetModal);
     }
   }
 

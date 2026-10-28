@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=0.09.1">
 </head>
 <body>
 
@@ -85,7 +85,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.07.2-DEV · 开发中</div>
+      <div class="sidebar-version" id="sidebar-version">v0.09.1-DEV · 开发中</div>
     </div>
   </aside>
 
@@ -386,21 +386,41 @@
       <!-- ============ 资产 ============ -->
       <section class="page" id="page-assets">
 
-        <!-- v0.09 报销：待报销 / 已报销 汇总 -->
-        <div class="reimb-cards">
-          <div class="reimb-card">
-            <span class="reimb-card-label">待报销</span>
-            <strong class="reimb-card-value" id="reimb-pending">¥0.00</strong>
-            <span class="reimb-card-hint">别人还没还我的</span>
-          </div>
-          <div class="reimb-card is-done">
-            <span class="reimb-card-label">已报销</span>
-            <strong class="reimb-card-value" id="reimb-done">¥0.00</strong>
-            <span class="reimb-card-hint">已经收回的</span>
+        <!-- v0.09.1：顶部净资产渐变卡 -->
+        <div class="assets-hero">
+          <span class="assets-hero-label">总净资产</span>
+          <strong class="assets-hero-value" id="asset-net">¥0.00</strong>
+          <div class="assets-hero-sub">
+            <span>总资产<strong id="asset-total">¥0.00</strong></span>
+            <span>总负债<strong id="asset-liability">¥0.00</strong></span>
           </div>
         </div>
 
-        <!-- 上：按大类分组的账户卡片 -->
+        <!-- v0.09.1：借入 / 借出 / 待报销 / 已报销 四张统计小卡 -->
+        <div class="asset-mini-grid">
+          <div class="asset-mini">
+            <span class="asset-mini-label">借入（待还）</span>
+            <strong class="asset-mini-value is-minus" id="asset-borrow">¥0.00</strong>
+            <span class="asset-mini-hint">我欠别人的</span>
+          </div>
+          <div class="asset-mini">
+            <span class="asset-mini-label">借出（待收）</span>
+            <strong class="asset-mini-value is-plus" id="asset-lend">¥0.00</strong>
+            <span class="asset-mini-hint">别人欠我的</span>
+          </div>
+          <div class="asset-mini">
+            <span class="asset-mini-label">待报销</span>
+            <strong class="asset-mini-value" id="reimb-pending">¥0.00</strong>
+            <span class="asset-mini-hint">垫付还没收回</span>
+          </div>
+          <div class="asset-mini">
+            <span class="asset-mini-label">已报销</span>
+            <strong class="asset-mini-value" id="reimb-done">¥0.00</strong>
+            <span class="asset-mini-hint">已经收回的</span>
+          </div>
+        </div>
+
+        <!-- 按大类分组的账户卡片 -->
         <div class="panel">
           <div class="panel-head">
             <span class="panel-title">我的账户</span>
@@ -415,7 +435,7 @@
           </div>
         </div>
 
-        <!-- 下：选中账户的专属流水 -->
+        <!-- 选中账户的流水：按日期分组，带当日收支小计 -->
         <div class="panel">
           <div class="panel-head">
             <span class="panel-title" id="detail-title">账户流水</span>
@@ -503,13 +523,53 @@
           </div>
           <p class="trash-hint">删除的账单会先进回收站，支持恢复与彻底删除；这里会显示最近删除的条目。</p>
           <div class="profile-actions">
-            <button class="btn btn-light btn-sm" type="button" disabled>即将上线</button>
+            <button class="btn btn-light btn-sm" type="button" id="open-trash-btn" data-bs-toggle="modal" data-bs-target="#trash-modal">查看回收站</button>
           </div>
         </div>
         </div>
       </section>
 
-      <!-- ============ 通讯录弹窗（v0.09：原先占据「我的」页大块区域，现收进弹窗） ============ -->
+      <!-- ============ 回收站弹窗（v0.09.1） ============ -->
+      <div class="modal fade" id="trash-modal" tabindex="-1" aria-labelledby="trash-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="trash-modal-title">回收站</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="trash-meta mb-3">删除的账单会保留在这里，恢复后余额与统计会一起复原。</p>
+              <div class="trash-list" id="trash-list">
+                <p class="trash-empty">正在加载…</p>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">关闭</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 预算弹窗（v0.09.1：取代 window.prompt） ============ -->
+      <div class="modal fade budget-modal" id="budget-modal" tabindex="-1" aria-labelledby="budget-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="budget-modal-title">设置本月预算</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <label class="form-label" for="budget-input">预算上限（元）</label>
+              <input class="form-control" id="budget-input" type="number" min="1" step="0.01" inputmode="decimal">
+              <p class="budget-hint mt-2">只影响本机的预算提示，不会写入账本数据。</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+              <button class="btn btn-primary" type="button" id="budget-save-btn">保存</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="modal fade contacts-modal" id="contacts-modal" tabindex="-1" aria-labelledby="contacts-modal-title" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
@@ -927,7 +987,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js"></script>
+<script src="/static/script.js?v=0.09.1"></script>
 
 </body>
 </html>
