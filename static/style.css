@@ -5831,3 +5831,334 @@ body {
     transform: translate(-78px, -40px) scale(1);
   }
 }
+
+/* ==================================================================
+ * v0.10.2 真实浏览器布局抢救（资产页撑满 / 图表 280 / 悬浮球圆形展开）
+ * ================================================================== */
+
+/* ---------- 1. 资产页：整页固定高度，左右两栏各自撑满 ---------- */
+#page-assets.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#page-assets .assets-split {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  align-items: stretch;
+}
+
+#page-assets .assets-left {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#page-assets .assets-left .accounts-panel .account-groups {
+  max-height: none;
+  overflow: visible;
+}
+
+#page-assets .assets-right {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#page-assets .assets-right .bill-feed-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+
+#page-assets .assets-right .feed-empty {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---------- 2. 首页图表：固定 280px，不再被外层压缩 ---------- */
+#page-home .chart-box {
+  min-height: 310px;
+}
+
+#page-home .chart-canvas {
+  height: 280px !important;
+}
+
+/* ---------- 3. 悬浮球：半径 118 的左上四分之一圆弧展开 ---------- */
+/* 基准位置：.fab-action 为 46px，left/top:6px，正好与 58px 主球同心 */
+.fab-menu.is-open .fab-action[data-fab-action="record"] {
+  transform: translate(-118px, 0) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="ai"] {
+  transform: translate(-59px, -102px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="shot"] {
+  transform: translate(0, -118px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="help"] {
+  transform: translate(-102px, -59px) scale(1);
+}
+
+@media (max-width: 1023.98px) {
+  #page-assets .assets-split {
+    height: auto;
+  }
+
+  #page-assets .assets-left,
+  #page-assets .assets-right {
+    height: auto;
+    overflow: visible;
+  }
+
+  #page-assets .assets-right .bill-feed-scroll {
+    max-height: calc(100vh - 240px);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="record"] {
+    transform: translate(-104px, 0) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="ai"] {
+    transform: translate(-52px, -90px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="shot"] {
+    transform: translate(0, -104px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="help"] {
+    transform: translate(-90px, -52px) scale(1);
+  }
+
+  #page-home .chart-canvas {
+    height: 240px !important;
+  }
+
+  #page-home .chart-box {
+    min-height: 270px;
+  }
+}
+
+@media (max-width: 575.98px) {
+  .fab-menu.is-open .fab-action[data-fab-action="record"] {
+    transform: translate(-92px, 0) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="ai"] {
+    transform: translate(-46px, -80px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="shot"] {
+    transform: translate(0, -92px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="help"] {
+    transform: translate(-80px, -46px) scale(1);
+  }
+}
+
+/* ==================================================================
+ * v0.10.2 补充：首页中栏 / 右栏各自独立滚动
+ * 1) 卡片不再随栏高 flex 收缩（收缩后内容会溢出到下一张卡上，日历被日明细盖住）
+ * 2) 卡片内部一律不自己滚，滚动交给外层栏容器统一接管
+ * ================================================================== */
+#page-home .dash-center > .panel,
+#page-home .dash-rail > .panel {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
+#page-home .recent-groups {
+  max-height: none;
+  overflow: visible;
+}
+
+#page-home .bill-feed,
+#page-home .bill-feed-scroll {
+  max-height: none;
+  overflow: visible;
+}
+
+#page-home .calendar-panel,
+#page-home .day-panel {
+  overflow: visible;
+}
+
+/* ==================================================================
+ * v0.10.2 补充 2：首页预算卡改标准左右两栏（左圆环固定宽垂直居中，右侧三行撑满）
+ * ================================================================== */
+#page-home .budget-card {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 18px;
+  padding: 14px 18px;
+}
+
+#page-home .budget-left {
+  flex: 0 0 96px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#page-home .budget-ring-wrap {
+  width: 96px;
+  height: 96px;
+  position: relative;
+}
+
+.budget-ring-wrap .budget-ring-text strong {
+  font-size: 19px;
+}
+
+#page-home .budget-right {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 1px 0;
+}
+
+.budget-right .budget-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+}
+
+.budget-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.budget-main {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+.budget-main strong {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-slash {
+  color: var(--text-dim);
+  margin: 0 1px;
+}
+
+.budget-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.budget-sub strong {
+  font-weight: 600;
+  color: var(--text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.budget-right .budget-bar {
+  height: 8px;
+  margin: 0;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+@media (max-width: 575.98px) {
+  #page-home .budget-card {
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .budget-left {
+    flex: 0 0 auto;
+  }
+
+  .budget-right {
+    align-self: stretch;
+  }
+}
+
+
+/* ==================================================================
+ * v0.10.2 补充 3：资产页左栏高度链与「我的账户」内部独立滚动
+ * 结构：#page-assets > .assets-split > .assets-left（flex 列）
+ *        ├ .assets-hero / .asset-stats      flex-shrink: 0
+ *        └ .accounts-panel（flex:1 min-height:0 flex 列）
+ *             ├ .panel-head                flex-shrink: 0
+ *             └ .account-groups            flex:1 + overflow-y: auto（真正滚动层）
+ * ================================================================== */
+
+#page-assets .assets-left {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+#page-assets .assets-left > .assets-hero,
+#page-assets .assets-left > .asset-stats {
+  flex: 0 0 auto;
+}
+
+#page-assets .assets-left > .accounts-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#page-assets .assets-left .accounts-panel > .panel-head {
+  flex-shrink: 0;
+}
+
+#page-assets .assets-left .accounts-panel > .account-groups {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 1023.98px) {
+  #page-assets .assets-left {
+    height: auto;
+    overflow: visible;
+  }
+
+  #page-assets .assets-left > .accounts-panel {
+    flex: 0 0 auto;
+  }
+
+  #page-assets .assets-left .accounts-panel > .account-groups {
+    max-height: 60vh;
+  }
+}

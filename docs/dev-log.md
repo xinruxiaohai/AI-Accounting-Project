@@ -282,3 +282,22 @@ v0.10.1-DEV 2026-10-28 视觉与布局六项补丁
 本补丁只修验收中暴露的前端细节，不动业务逻辑。日期字段原先用原生 date/datetime-local，占位符固定英文 yyyy/mm/日，用户端与 /admin 发布时间都无法直观回显；改为「可见 text 输入框（占位 年 / 月 / 日）+ 全尺寸透明原生选择器覆盖层」，原生 change 时把值写回文本框并触发 input 事件，重置按钮同时清空两层，管理后台编辑回填也同步。资产页右侧大面积留白源于 .assets-split 的 align-items:start，改为 stretch 并让右栏 flex 撑满，空账户时也保留 220px 空态高度；首页图表被 #page-home 覆盖压到 188px，补容器 min-height 240px、画布 210px；悬浮球四向坐标原先带正 X 位移，1440 宽下 AI 截图与帮助图标越出右边界，全部改为向左上方展开并同步窄屏断点；侧栏 Tooltip 的 trigger 含 focus，点击后会被重新唤起，改为 nav 仅 hover 触发、点击时 hide() 并 blur()；账户名补 ellipsis 与块级宽度，余额 flex:0 0 auto 不再被挤。
 
 踩坑与验证：原生 date 输入框在浅色主题下文字颜色继承主题变量，视觉上容易误判为「没回显」，实际值是正常的，换成人眼可见的文本框后问题彻底消失。无头浏览器断言：图表盒 249px / 画布 210px 且底部未被切、资产页左右均 817px 等高、空账户仍留 220px 空态、FAB 四图标右边界 1280-1374 全部小于视口、Tooltip 悬停出现且点击后 0 残留、长账户名省略号且与金额仍留 10px 间距、账单页选 2026-10-01 后文本框回显且 billsFilter.dateFrom 同步、重置两层皆空、/admin 选 2026-11-05 10:30 后文本框回显为「2026-11-05 10:30」，浅色与深色主题下日期文字颜色都跟随 --text-main，页面无 JS 报错。
+
+v0.10.2-DEV 2026-10-28 真实浏览器布局抢救：资产页高度链 / 图表 280px / 悬浮球圆弧
+
+本补丁针对用户在真实浏览器强刷后仍看到的三处观感问题，只动 layout 不动业务。资产页原来只靠 .assets-split 的 align-items:stretch 撑高，实际上外层没有高度约束，左右两栏按内容高度渲染，右栏流水少或账户为空时下方漏出一大片灰底；改为 #page-assets.active 自身 display:flex、flex-direction:column、overflow:hidden，.assets-split flex:1 1 auto + height:100% + min-height:0，左右两栏各自 height:100% + overflow-y:auto，右栏 panel 再套一层 flex column 让 .bill-feed-scroll 用 flex:1 吃掉头部以外的全部高度，空态也 flex 撑满，整页高度链才算闭环。
+
+首页 ECharts 之前只补了 min-height 240 / 画布 210，真实浏览器里仍显得扁且图例挤在一起；这次直接给 #page-home .chart-canvas 锁 height:280px !important、外层 .chart-box min-height:310px，窄屏降为 240 / 270，并把 scheduleChartResize 的节流改为 setTimeout 100ms、initCharts 末尾补一次延迟 resize，等 CSS 高度落定后再让 ECharts 量容器，画布不再按旧尺寸绘制导致折线下半截被裁。
+
+悬浮球原先四个方向各自手写位移，数值过近导致图标叠在一起；改成标准圆弧算法：以主球圆心为中心、半径 118px 取 180° / 150° / 120° / 90° 四个角度（record -118,0 / help -102,-59 / ai -59,-102 / shot 0,-118），相邻中心距 61px，1024px 与 576px 断点分别缩到半径 104 / 92，保证窄屏也不重叠、不出视口。
+
+踩坑与验证：v0.10.2 的媒体查询一度把 #page-assets.active 在 1023px 以下改回 display:block，导致单列时高度链断裂，回退必须只保留给 .assets-split；圆弧展开是否重叠要用图标中心距而不是肉眼估。用真实 Chrome（headless=new）在 1440x1000 / 1920x1080 / 1366x768 / 900x1000 四档拉缩断言：资产页 split 高度与可用高度一致、左右栏等高、右栏流水与空态均撑满且无灰带；画布 280（900 宽 240）上下未裁切、图例不重叠；FAB 图标中心距 61px、右边界全部小于视口，悬停 0.5 秒 tooltip 正常，页面无 JS 报错。
+
+
+补充修复（同日）：首页中栏 / 右栏此前虽然写了 overflow-y:auto，但栏内的卡片是 flex 子项、默认 flex-shrink:1，会被固定高度的栏压缩到 327px / 158px，内容从卡片盒子里溢出来压住下一张卡——日历网格底部被「账单明细」盖住、近 7 天账单也只在自己内部滚。修复给 `.dash-center > .panel` / `.dash-rail > .panel` 加 `flex: 0 0 auto`，卡片按自身内容自然撑开，滚动全部交给中栏 / 右栏两个外层容器；同时删掉 `.recent-groups` 的 max-height:460 与 `#page-home .bill-feed` 的内部滚动，让外层统一接管。1440 / 1920 / 1366 / 900 四档实测：中栏 scrollHeight 2833、右栏 1963，各自 scrollTop 可独立到 333 / 222，整页 window.scrollY 恒为 0，日历卡底边 <= 日明细顶边（不遮挡），近 7 天内部不再出现滚动条。
+
+
+补充修复 2（同日）：首页「本月预算」卡片重写为左右两栏。左栏固定 96px、只放环形进度（19px 百分比 + 「已用」）并垂直居中；右栏 flex:1，三段式纵向排布——顶部「本月预算」+ 右对齐「改预算」、中间「已花 ¥xxx / 预算 ¥xxx」、底部「日均 / 剩余日均额度」+ 8px 长条进度条，进度条贴底且撑满右栏宽度。原先卡片在 1280px 以下被旧媒体查询强制竖排、圆环与文字上下堆叠造成大面积留白；现在明确 flex-direction:row，仅 576px 以下才堆叠。四档视口实测卡片高 131px（原 141px）、圆环上下留白各 17/18px（等于内边距，无多余空白）、右栏与圆环等高、三行间距各 5px、进度条宽 = 右栏宽。
+
+
+补充修复 3（同日）：资产页左栏滚动层错位。原先 `overflow-y:auto` 加在 `.assets-left`（整列）上，账户一多就是整列一起滚、净资产卡和统计卡被顶走，面板本身也没有真正受限高度。改为标准高度链：`#page-assets .assets-left` 用 `display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden`；`.assets-hero`/`.asset-stats` 设 `flex:0 0 auto` 不被压缩；`.accounts-panel` 设 `flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden`；真正滚动的是内部 `.account-groups`（`flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain`），`.panel-head` 固定不滚。1440/1920/1366/1200 四档实测：账户列表 scrollHeight 1513、可视 491/571/259/391，滚动位移 1022/942/1254/1122，左栏自身滚动位移恒为 0，净资产卡 150px、统计卡 157px 始终不被压，滚动到底部最后一个账户完整可见；<1024 单列时回退为页面滚动 + 列表 60vh 上限。

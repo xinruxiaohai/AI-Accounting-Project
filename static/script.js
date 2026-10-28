@@ -1648,7 +1648,7 @@ function scheduleChartResize() {
     if (trendChart) {
       trendChart.resize();
     }
-  }, 120);
+  }, 100);
 }
 
 function initCharts() {
@@ -1675,6 +1675,10 @@ function initCharts() {
     });
   }
   watchChartResize();
+  // v0.10.2：图表容器 CSS 高度落定后再量一次，避免首屏按旧高度渲染
+  window.setTimeout(function () {
+    resizeCharts();
+  }, 100);
   return true;
 }
 

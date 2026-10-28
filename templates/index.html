@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.10.1">
+  <link rel="stylesheet" href="/static/style.css?v=0.10.2">
 </head>
 <body>
 
@@ -183,7 +183,7 @@
               </div>
             </div>
 
-            <!-- 预算卡：环形进度 + 日均 + 剩余日均额度 -->
+            <!-- 预算卡：左圆弧进度（固定宽、垂直居中）+ 右三行信息，整体紧凑无冗余留白 -->
             <div class="panel budget-card">
               <div class="budget-left">
                 <div class="budget-ring-wrap">
@@ -201,21 +201,22 @@
               </div>
               <div class="budget-right">
                 <div class="budget-head">
-                  <span class="panel-title">本月预算</span>
+                  <span class="budget-title">本月预算</span>
                   <button class="btn btn-sm btn-outline-secondary" type="button" id="budget-edit-btn">改预算</button>
                 </div>
-                <div class="budget-line">
+                <div class="budget-main">
                   <span class="budget-label">已花</span>
                   <strong id="budget-spent">¥0.00</strong>
-                  <span class="budget-label">/ 预算</span>
+                  <span class="budget-slash">/</span>
+                  <span class="budget-label">预算</span>
                   <strong id="budget-limit">¥0.00</strong>
                 </div>
-                <div class="budget-line budget-line-sub">
+                <div class="budget-sub">
                   <span class="budget-label">日均</span>
-                  <span id="budget-daily">¥0.00</span>
+                  <strong id="budget-daily">¥0.00</strong>
                   <span class="budget-divider"></span>
                   <span class="budget-label">剩余日均额度</span>
-                  <span id="budget-left">¥0.00</span>
+                  <strong id="budget-left">¥0.00</strong>
                 </div>
                 <div class="budget-bar">
                   <div class="budget-bar-fill" id="budget-bar-fill"></div>
@@ -223,7 +224,7 @@
               </div>
             </div>
 
-            <!-- 数据可视化：本月支出分类饼图 + 近 30 天支出折线（ECharts 本地引入） -->
+<!-- 数据可视化：本月支出分类饼图 + 近 30 天支出折线（ECharts 本地引入） -->
             <div class="panel charts-panel">
               <div class="panel-head">
                 <span class="panel-title">数据可视化</span>
@@ -1107,7 +1108,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.10.1"></script>
+<script src="/static/script.js?v=0.10.2"></script>
 
 </body>
 </html>
