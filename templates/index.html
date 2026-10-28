@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.10.0">
+  <link rel="stylesheet" href="/static/style.css?v=0.10.1">
 </head>
 <body>
 
@@ -480,8 +480,14 @@
                 <select class="form-select form-select-sm" id="bills-account" aria-label="账户">
                   <option value="">全部账户</option>
                 </select>
-                <input class="form-control form-control-sm" id="bills-date-from" type="date" aria-label="开始日期">
-                <input class="form-control form-control-sm" id="bills-date-to" type="date" aria-label="结束日期">
+                <label class="date-field">
+                  <input class="form-control form-control-sm" id="bills-date-from" type="text" placeholder="年 / 月 / 日" autocomplete="off" readonly aria-label="开始日期">
+                  <input class="date-native" type="date" aria-hidden="true" tabindex="-1" data-date-for="bills-date-from">
+                </label>
+                <label class="date-field">
+                  <input class="form-control form-control-sm" id="bills-date-to" type="text" placeholder="年 / 月 / 日" autocomplete="off" readonly aria-label="结束日期">
+                  <input class="date-native" type="date" aria-hidden="true" tabindex="-1" data-date-for="bills-date-to">
+                </label>
                 <input class="form-control form-control-sm" id="bills-amount-min" type="number" step="0.01"
                        placeholder="金额 ≥" aria-label="最小金额">
                 <input class="form-control form-control-sm" id="bills-amount-max" type="number" step="0.01"
@@ -1101,7 +1107,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.10.0"></script>
+<script src="/static/script.js?v=0.10.1"></script>
 
 </body>
 </html>

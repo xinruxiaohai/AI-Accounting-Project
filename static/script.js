@@ -4270,11 +4270,34 @@ function initTooltips() {
       return;
     }
     // 契约要求：悬停 0.5s 才出现，移开很快就收
+    // 侧栏导航只用 hover 触发：focus 触发会在点击后重新弹出，造成 Tooltip 残留
+    const isNav = element.classList.contains("nav-item");
     new bootstrap.Tooltip(element, {
       delay: { show: 500, hide: 80 },
-      trigger: "hover focus",
+      trigger: isNav ? "hover" : "hover focus",
     });
   });
+}
+
+/* v0.10.1：可见文本框 + 全尺寸原生日期选择器覆盖层，保证中文占位与选择回显 */
+function initDateFields() {
+  document.querySelectorAll(".date-native[data-date-for]").forEach(function (native) {
+    const target = $(native.getAttribute("data-date-for"));
+    if (!target) {
+      return;
+    }
+    native.addEventListener("change", function () {
+      target.value = native.value || "";
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  });
+}
+
+function clearNativeDateFor(id) {
+  const native = document.querySelector('.date-native[data-date-for="' + id + '"]');
+  if (native) {
+    native.value = "";
+  }
 }
 
 function notifyComingSoon(name) {
@@ -5724,6 +5747,7 @@ async function init() {
 
   bindEvents();
   initTooltips();
+  initDateFields();
 
   try {
     await loadCategories();
@@ -5810,7 +5834,14 @@ function hideNavTooltips() {
   document.querySelectorAll('.nav-item[data-bs-toggle="tooltip"]').forEach(function (element) {
     const instance = window.bootstrap && bootstrap.Tooltip.getInstance(element);
     if (instance) {
-      instance.hide();
+      try {
+        instance.hide();
+      } catch (error) {
+        // 实例状态未就绪时忽略，避免点击侧栏报错
+      }
+    }
+    if (typeof element.blur === "function") {
+      element.blur();
     }
   });
 }
@@ -6600,6 +6631,8 @@ function resetBillsFilterInputs() {
   setBillsInputValue("bills-date-to", "");
   setBillsInputValue("bills-amount-min", "");
   setBillsInputValue("bills-amount-max", "");
+  clearNativeDateFor("bills-date-from");
+  clearNativeDateFor("bills-date-to");
 }
 
 function readBillsFilterFromInputs() {

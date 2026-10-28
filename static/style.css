@@ -5654,3 +5654,180 @@ body {
     transform: translate(86px, -16px) scale(1);
   }
 }
+/* ==================================================================
+ * v0.10.1 补丁：日期选择器 / 资产页留白 / 图表高度 / 悬浮球越界 /
+ *               侧栏 Tooltip 残留 / 长账户名挤压
+ * ================================================================== */
+
+/* ---------- 1. 日期字段：中文占位文本框 + 原生选择器覆盖层 ---------- */
+.date-field {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.date-field > .form-control {
+  width: 100%;
+  cursor: pointer;
+  padding-right: 32px;
+  color: var(--text-main);
+  background: var(--surface-1);
+}
+
+.date-field > .form-control::placeholder {
+  color: var(--text-dim);
+}
+
+.date-field .date-native {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  z-index: 2;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.date-field::after {
+  content: "";
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  pointer-events: none;
+  background-color: var(--text-dim);
+  -webkit-mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M8 3v4M16 3v4M3 11h18'/%3E%3C/svg%3E") no-repeat center / contain;
+  mask: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='5' width='18' height='16' rx='2'/%3E%3Cpath d='M8 3v4M16 3v4M3 11h18'/%3E%3C/svg%3E") no-repeat center / contain;
+  z-index: 3;
+}
+
+/* ---------- 2. 资产页左右两栏撑满高度，右侧不再留白 ---------- */
+.assets-split {
+  align-items: stretch;
+}
+
+.assets-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.assets-right {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.assets-right .bill-feed-scroll {
+  flex: 1 1 auto;
+  max-height: none;
+}
+
+.assets-right .feed-empty {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- 3. 首页图表容器最小高度，避免被压缩切断 ---------- */
+#page-home .chart-box {
+  min-height: 240px;
+}
+
+#page-home .chart-canvas {
+  height: 210px;
+}
+
+/* ---------- 4. 悬浮球四向展开全部向左/向上，绝不越出视口 ---------- */
+.fab-menu.is-open .fab-action[data-fab-action="record"] {
+  transform: translate(-96px, -18px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="ai"] {
+  transform: translate(-70px, -88px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="shot"] {
+  transform: translate(-18px, -112px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="help"] {
+  transform: translate(-112px, -56px) scale(1);
+}
+
+.fab-action[data-fab-action="help"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+/* ---------- 5. 长账户名省略号，绝不挤压右侧金额 ---------- */
+.account-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.account-row-name {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-row-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-row-balance {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+@media (max-width: 1023.98px) {
+  .fab-menu.is-open .fab-action[data-fab-action="record"] {
+    transform: translate(-80px, -16px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="ai"] {
+    transform: translate(-58px, -78px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="shot"] {
+    transform: translate(-16px, -96px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="help"] {
+    transform: translate(-92px, -48px) scale(1);
+  }
+}
+
+@media (max-width: 575.98px) {
+  .fab-menu.is-open .fab-action[data-fab-action="record"] {
+    transform: translate(-66px, -24px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="ai"] {
+    transform: translate(-48px, -76px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="shot"] {
+    transform: translate(-14px, -92px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="help"] {
+    transform: translate(-78px, -40px) scale(1);
+  }
+}

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=0.10.1">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -368,7 +368,10 @@
 
           <div class="mb-3">
             <label class="admin-label" for="notice-date">发布时间（留空 = 现在）</label>
-            <input id="notice-date" class="form-control" type="datetime-local">
+            <label class="date-field">
+              <input id="notice-date" class="form-control" type="text" placeholder="年 / 月 / 日 时:分" autocomplete="off" readonly>
+              <input class="date-native" type="datetime-local" aria-hidden="true" tabindex="-1" data-date-for="notice-date">
+            </label>
           </div>
 
           <div class="d-flex align-items-center gap-3">
@@ -552,7 +555,7 @@
         $("notice-title").value = "";
         $("title-count").textContent = "0";
         editor.innerHTML = "";
-        $("notice-date").value = "";
+        setNoticeDateValue("");
         state.imageUrl = "";
         $("cover-preview").textContent = "未选择";
         $("cover-input").value = "";
@@ -574,11 +577,27 @@
         }
         $("cover-input").value = "";
         var dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
-        $("notice-date").value = dateText ? dateText.replace(" ", "T") : "";
+        setNoticeDateValue(dateText);
         $("publish-btn").textContent = "保存修改";
         $("cancel-edit-btn").classList.remove("d-none");
         window.scrollTo({ top: 0, behavior: "smooth" });
         toast("已载入通知 #" + item.id + "，改完点「保存修改」");
+      }
+
+      function setNoticeDateValue(value) {
+        var display = value ? String(value).slice(0, 16).replace("T", " ") : "";
+        $("notice-date").value = display;
+        var native = document.querySelector('.date-native[data-date-for="notice-date"]');
+        if (native) {
+          native.value = display ? display.replace(" ", "T") : "";
+        }
+      }
+
+      var noticeDateNative = document.querySelector('.date-native[data-date-for="notice-date"]');
+      if (noticeDateNative) {
+        noticeDateNative.addEventListener("change", function () {
+          setNoticeDateValue(noticeDateNative.value);
+        });
       }
 
       $("cancel-edit-btn").addEventListener("click", function () {
@@ -602,7 +621,7 @@
         }
 
         var payload = { title: title, content: content, image_url: state.imageUrl || "" };
-        var dateValue = $("notice-date").value;
+        var dateValue = $("notice-date").value.trim();
         if (dateValue) {
           payload.publish_date = dateValue.replace("T", " ") + ":00";
         }
