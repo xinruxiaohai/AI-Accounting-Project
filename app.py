@@ -1,10 +1,19 @@
 import datetime
 import io
+import json
 import os
 import subprocess
 import uuid
 
-from flask import Flask, Response, jsonify, render_template, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template,
+    request,
+    send_from_directory,
+    stream_with_context,
+)
 
 import ai_service
 import database
@@ -230,27 +239,23 @@ def _find_or_create_contact(name):
     return contact, True, None
 
 
-@app.route("/api/records/ai", methods=["POST"])
-def create_record_by_ai():
-    """一句话先交给 AI 判断意图（记账 / 借贷 / 加联系人），再按 action 分流写库。
+# AI 各意图落库成功后的提示语，SSE 的 done 事件与前端 Toast 共用同一套说法
+AI_ACTION_MESSAGES = {
+    "record": "记账成功",
+    "debt": "借贷已记录",
+    "add_contact": "联系人已添加",
+}
 
-    模型只负责理解与抽字段，金额/类型/日期到本地还会再校验一遍；写库分别复用
-    database.add_record / create_debt / create_contact，余额联动与手工操作一致。
+
+def _apply_ai_intent(parsed, text):
+    """把 AI 解析出的意图真正落库，返回 (响应体 dict, HTTP 状态码)。
+
+    /api/records/ai 与 /api/records/ai/stream 共用这一份写库逻辑：
+    分类补建、联系人查找/创建、余额联动、失败回滚全部只写一遍，
+    保证普通接口与 SSE 流式接口落库行为完全一致。
+    unknown 由调用方处理（普通接口返回 400，SSE 推 status=unknown），这里不该收到。
     """
-    data = request.get_json(silent=True) or {}
-    text = data.get("text")
-    if not isinstance(text, str) or not text.strip():
-        return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
-
-    try:
-        parsed = ai_service.parse_intent(text)
-    except ai_service.AIServiceError as exc:
-        # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
-        return jsonify(error=str(exc)), 502
-
-    action = parsed["action"]
-    if action == "unknown":
-        return jsonify(error="AI 无法理解您的指令"), 400
+    action = parsed.get("action")
 
     if action == "record":
         category = parsed.get("category") or "其他"
@@ -263,6 +268,46 @@ def create_record_by_ai():
             except database.RecordError:
                 category_id = None
 
+        # 代买 / 垫付（v0.10）：
+        # - 支出 + 有报销人姓名：一并写报销字段（is_reimbursable=1、报销人、应报金额=账目金额）
+        # - 支出 + 没提报销人：按普通记录入库（DB is_reimbursable 保持 0），只在响应里带
+        #   is_reimbursable=true，让前端提示用户补报销人后再走 PUT /reimbursement 设置
+        # - 收入 / 转账不参与报销：set_record_reimbursement 也只允许支出账目
+        add_extra = {}
+        reimbursement = None
+        created_contact = None
+        if parsed.get("is_reimbursable") and record_type == "expense":
+            contact_name = parsed.get("contact_name") or ""
+            if contact_name:
+                contact, created, error_message = _find_or_create_contact(contact_name)
+                if error_message is not None:
+                    return {"error": error_message}, 400
+                if created:
+                    created_contact = contact
+                add_extra = {
+                    "is_reimbursable": 1,
+                    "reimbursement_contact_id": contact["id"],
+                    "reimbursed_amount": 0,
+                    "total_reimbursement": parsed["amount"],
+                }
+                reimbursement = {
+                    "is_reimbursable": True,
+                    "contact_id": contact["id"],
+                    "contact_name": contact["name"],
+                    "total_reimbursement": parsed["amount"],
+                    "reimbursed_amount": 0,
+                }
+            else:
+                reimbursement = {
+                    "is_reimbursable": True,
+                    "contact_id": None,
+                    "contact_name": "",
+                    "total_reimbursement": parsed["amount"],
+                    "reimbursed_amount": 0,
+                    # pending_contact=true：这笔账已经记下，但还没指定报销人，前端可提示补录
+                    "pending_contact": True,
+                }
+
         new_id, error_message = database.add_record(
             parsed["amount"],
             category,
@@ -274,22 +319,29 @@ def create_record_by_ai():
             "",
             parsed.get("to_account", ""),
             parsed.get("fee", 0),
+            **add_extra,
         )
         if error_message is not None:
-            return jsonify(error=error_message), 400
+            # 报销人是为了这笔账临时建的，账没写成就不该留下空联系人
+            if created_contact is not None:
+                database.delete_contact(created_contact["id"])
+            return {"error": error_message}, 400
 
-        return jsonify(
-            id=new_id,
-            source="ai",
-            action="record",
-            text=text.strip(),
-            record={key: value for key, value in parsed.items() if key != "action"},
-        ), 201
+        body = {
+            "id": new_id,
+            "source": "ai",
+            "action": "record",
+            "text": text.strip(),
+            "record": {key: value for key, value in parsed.items() if key != "action"},
+        }
+        if reimbursement is not None:
+            body["reimbursement"] = reimbursement
+        return body, 201
 
     if action == "debt":
         contact, created, error_message = _find_or_create_contact(parsed["contact_name"])
         if error_message is not None:
-            return jsonify(error=error_message), 400
+            return {"error": error_message}, 400
 
         debt, error_message = database.create_debt(
             contact["id"],
@@ -303,31 +355,194 @@ def create_record_by_ai():
             # 联系人是为了这笔借贷临时建的，借贷没写成就不该留下空联系人
             if created:
                 database.delete_contact(contact["id"])
-            return jsonify(error=error_message), 400
+            return {"error": error_message}, 400
 
-        return jsonify(
-            id=debt["id"],
-            source="ai",
-            action="debt",
-            text=text.strip(),
-            contact=contact,
-            debt=debt,
-        ), 201
+        return {
+            "id": debt["id"],
+            "source": "ai",
+            "action": "debt",
+            "text": text.strip(),
+            "contact": contact,
+            "debt": debt,
+        }, 201
 
-    # action == "add_contact"
-    contact, error_message = database.create_contact(
-        parsed["name"], parsed["identity"], parsed["phone"], parsed["wechat"]
+    if action == "add_contact":
+        contact, error_message = database.create_contact(
+            parsed["name"], parsed["identity"], parsed["phone"], parsed["wechat"]
+        )
+        if error_message is not None:
+            status = 409 if "已存在" in error_message else 400
+            return {"error": error_message}, status
+        return {
+            "id": contact["id"],
+            "source": "ai",
+            "action": "add_contact",
+            "text": text.strip(),
+            "contact": contact,
+        }, 201
+
+    # 理论上到不了这里；真到了就按听不懂处理，不猜
+    return {"error": "AI 无法理解您的指令"}, 400
+
+
+@app.route("/api/records/ai", methods=["POST"])
+def create_record_by_ai():
+    """一句话先交给 AI 判断意图（记账 / 借贷 / 加联系人），再按 action 分流写库。
+
+    模型只负责理解与抽字段，金额/类型/日期到本地还会再校验一遍；写库统一走
+    _apply_ai_intent，和流式接口 /api/records/ai/stream 用的是同一份逻辑。
+    """
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
+
+    try:
+        parsed = ai_service.parse_intent(text)
+    except ai_service.AIServiceError as exc:
+        # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
+        return jsonify(error=str(exc)), 502
+
+    if parsed["action"] == "unknown":
+        return jsonify(error="AI 无法理解您的指令"), 400
+
+    body, status = _apply_ai_intent(parsed, text)
+    return jsonify(body), status
+
+
+@app.route("/api/records/ai/stream", methods=["POST"])
+def create_record_by_ai_stream():
+    """SSE 版的一句话记账：分阶段推流，最后把真实落库结果放进 done 事件。
+
+    和 /api/records/ai 的区别只有「推流提示 + 不再用 HTTP 400 表示听不懂」：
+    - unknown 也回 200，推 {"status":"unknown"} 事件
+    - 任何异常都推 {"status":"error"} 事件，绝不让流断在半路
+    - 写库仍走 _apply_ai_intent，落库字段与普通接口一致
+    """
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
+
+    def event(payload):
+        # SSE 规定每条事件以空行结束；ensure_ascii=False 让中文在 curl 里可读
+        return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"
+
+    def generate():
+        try:
+            yield event({"status": "thinking", "msg": "正在理解您的指令..."})
+
+            try:
+                parsed = ai_service.parse_intent(text)
+            except ai_service.AIServiceError as exc:
+                yield event({"status": "error", "action": "unknown", "msg": str(exc), "message": str(exc)})
+                return
+
+            action = parsed["action"]
+            if action == "unknown":
+                # SSE 已经 200 了，听不懂用事件表达，不用 HTTP 400；
+                # 同时带 action="unknown" / message，方便前端和 error 事件同一套分支处理
+                yield event({
+                    "status": "unknown",
+                    "action": "unknown",
+                    "msg": "AI 无法理解您的指令",
+                    "message": "AI 无法理解您的指令",
+                })
+                return
+
+            # 字段在 parse_intent 里已经本地校验过，这里的分阶段提示对应真实处理顺序：
+            # 金额/分类在 _apply_ai_intent 里补建分类时用到，saving 之后才真正写库
+            yield event({"status": "extracting_amount", "msg": "正在识别金额..."})
+            yield event({"status": "resolving_category", "msg": "正在匹配分类..."})
+            yield event({"status": "saving", "msg": "正在保存账目..."})
+
+            body, status_code = _apply_ai_intent(parsed, text)
+            if status_code >= 400:
+                message = body.get("error", "保存失败")
+                yield event({"status": "error", "msg": message, "message": message})
+                return
+
+            yield event(
+                {
+                    "status": "done",
+                    "action": action,
+                    "message": AI_ACTION_MESSAGES.get(action, "处理完成"),
+                    "payload": body,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - 流一旦开始就不能崩，兜底转成 error 事件
+            yield event({"status": "error", "msg": str(exc), "message": str(exc)})
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
     )
+
+
+# ---------------- AI 反馈与记忆库（v0.10） ----------------
+# 用户发现 AI 解析错了就记一条反馈，后续可以拿来改 Prompt / 攒样本；
+# 页面上的「标记已处理」把 status 从 pending 改成 processed，列表默认看全部。
+
+
+@app.route("/api/feedback", methods=["POST"])
+def create_feedback():
+    """记录一条 AI 反馈：raw_text 必填，parsed / corrected 可传对象或 JSON 字符串。
+
+    source 用来区分来源（如 admin / 记账页），不认识的值按普通文本存；
+    返回 201 {id}，方便前端拿到新建记录的 id。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    raw_text = data.get("raw_text")
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        return jsonify(error="raw_text 必须是非空字符串"), 400
+
+    try:
+        feedback = database.add_feedback(
+            raw_text,
+            parsed_json=data.get("parsed", data.get("parsed_json")),
+            corrected_json=data.get("corrected", data.get("corrected_json")),
+            source=data.get("source"),
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(id=feedback["id"]), 201
+
+
+@app.route("/api/feedback", methods=["GET"])
+def list_feedback():
+    """反馈列表，支持 ?status=pending / processed 筛选；返回 {items, total}。"""
+    status = (request.args.get("status") or "").strip()
+    if status and status not in database.FEEDBACK_STATUSES:
+        return jsonify(error="status 只能是 pending / processed"), 400
+    items = database.list_feedback(status or None)
+    return jsonify(items=items, total=len(items))
+
+
+@app.route("/api/feedback/<int:feedback_id>", methods=["PUT"])
+def update_feedback(feedback_id):
+    """更新反馈状态（body：{"status": "processed"}），成功返回更新后的整条记录。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    status = data.get("status")
+    if not isinstance(status, str) or not status.strip():
+        return jsonify(error="status 必须是非空字符串"), 400
+
+    feedback, error_message = database.update_feedback_status(feedback_id, status)
     if error_message is not None:
-        status = 409 if "已存在" in error_message else 400
-        return jsonify(error=error_message), status
-    return jsonify(
-        id=contact["id"],
-        source="ai",
-        action="add_contact",
-        text=text.strip(),
-        contact=contact,
-    ), 201
+        return jsonify(error=error_message), 400
+    if feedback is None:
+        return jsonify(error="反馈不存在"), 404
+    return jsonify(feedback)
 
 
 @app.route("/api/records", methods=["GET"])

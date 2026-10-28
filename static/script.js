@@ -20,6 +20,7 @@
 const PAGE_TITLES = {
   home: "首页",
   assets: "资产",
+  bills: "账单",
   profile: "我的",
 };
 
@@ -2017,51 +2018,96 @@ function feedRowHtml(record, snapshots, options) {
 function feedGroupsHtml(records, snapshots, options) {
   options = options || {};
   if (!records.length) {
-    return '<div class="feed-empty">' + escapeHtml(options.empty || "还没有记录") + "</div>";
+    return feedEmptyHtml(options.emptyHint || "这里还没有账单");
   }
   const monthTotals = new Map();
-  (options.totalRecords || records).forEach(function (record) {
-    const key = dateKeyOf(record).slice(0, 7);
-    if (!monthTotals.has(key)) {
-      monthTotals.set(key, []);
-    }
-    monthTotals.get(key).push(record);
-  });
   const dayTotals = new Map();
+  const yearTotals = new Map();
   records.forEach(function (record) {
     const key = dateKeyOf(record);
-    if (!dayTotals.has(key)) {
-      dayTotals.set(key, []);
-    }
-    dayTotals.get(key).push(record);
+    const monthKey = key.slice(0, 7);
+    const yearKey = key.slice(0, 4);
+    const amount = Number(record.amount || 0);
+    [
+      [monthTotals, monthKey],
+      [dayTotals, key],
+      [yearTotals, yearKey],
+    ].forEach(function (pair) {
+      const bucket = pair[0].get(pair[1]) || { income: 0, expense: 0, count: 0 };
+      bucket.count += 1;
+      if (record.type === "income") {
+        bucket.income += amount;
+      } else if (record.type === "expense") {
+        bucket.expense += amount;
+      }
+      pair[0].set(pair[1], bucket);
+    });
   });
 
   let html = "";
-  let monthKey = "";
-  let dayKey = "";
+  let currentYear = "";
+  let currentMonth = "";
+  let currentDay = "";
+  let yearCollapsed = false;
+  let monthCollapsed = false;
+  let dayCollapsed = false;
+
   records.forEach(function (record) {
     const key = dateKeyOf(record);
-    const keyMonth = key.slice(0, 7);
-    if (keyMonth !== monthKey) {
-      monthKey = keyMonth;
-      dayKey = "";
-      const parts = monthKey.split("-");
-      const monthSum = summarize(monthTotals.get(monthKey) || []);
+    const yearKey = key.slice(0, 4);
+    const monthKey = key.slice(0, 7);
+
+    if (yearKey !== currentYear) {
+      currentYear = yearKey;
+      currentMonth = "";
+      currentDay = "";
+      yearCollapsed = isCollapsed(LS_FEED_COLLAPSE, "year:" + yearKey);
+      const totals = yearTotals.get(yearKey) || { income: 0, expense: 0, count: 0 };
       html +=
-        '<div class="feed-month"><span>' + parts[0] + "年" + Number(parts[1]) + "月</span>" +
-        '<span class="feed-month-sub">支 ' + money(monthSum.expense) +
-        " · 收 " + money(monthSum.income) + "</span></div>";
+        '<div class="feed-year' + (yearCollapsed ? " is-collapsed" : "") +
+        '" data-collapse="year" data-collapse-key="year:' + yearKey + '" role="button" tabindex="0">' +
+        '<span class="feed-year-main">' + escapeHtml(yearKey) + " 年</span>" +
+        '<span class="feed-year-sub">' + totals.count + " 笔 · 收 " + money(totals.income) +
+        " · 支 " + money(totals.expense) + "</span></div>";
     }
-    if (key !== dayKey) {
-      dayKey = key;
-      const daySum = summarize(dayTotals.get(key) || []);
+    if (yearCollapsed) {
+      return;
+    }
+
+    if (monthKey !== currentMonth) {
+      currentMonth = monthKey;
+      currentDay = "";
+      monthCollapsed = isCollapsed(LS_FEED_COLLAPSE, "month:" + monthKey);
+      const totals = monthTotals.get(monthKey) || { income: 0, expense: 0, count: 0 };
       html +=
-        '<div class="feed-day"><span class="feed-day-date">' + Number(key.slice(8)) + "日</span>" +
-        '<span class="feed-day-sub">收 ' + money(daySum.income) +
-        " · 支 " + money(daySum.expense) + "</span></div>";
+        '<div class="feed-month' + (monthCollapsed ? " is-collapsed" : "") +
+        '" data-collapse="month" data-collapse-key="month:' + monthKey + '" role="button" tabindex="0">' +
+        "<span>" + escapeHtml(yearKey) + "年" + Number(monthKey.slice(5, 7)) + "月</span>" +
+        '<span class="feed-month-sub">收 ' + money(totals.income) + " · 支 " + money(totals.expense) +
+        "</span></div>";
     }
+    if (monthCollapsed) {
+      return;
+    }
+
+    if (key !== currentDay) {
+      currentDay = key;
+      dayCollapsed = isCollapsed(LS_FEED_COLLAPSE, "day:" + key);
+      const totals = dayTotals.get(key) || { income: 0, expense: 0, count: 0 };
+      html +=
+        '<div class="feed-day' + (dayCollapsed ? " is-collapsed" : "") +
+        '" data-collapse="day" data-collapse-key="day:' + key + '" role="button" tabindex="0">' +
+        "<span>" + Number(key.slice(8, 10)) + "日</span>" +
+        '<span class="feed-day-sub">' + totals.count + " 笔 · 收 " + money(totals.income) +
+        " · 支 " + money(totals.expense) + "</span></div>";
+    }
+    if (dayCollapsed) {
+      return;
+    }
+
     html += feedRowHtml(record, snapshots, options);
   });
+
   return html;
 }
 
@@ -3588,11 +3634,15 @@ function hideModalSafe(instance, element) {
     return;
   }
   instance.hide();
-  window.setTimeout(function () {
-    if (element.classList.contains("show")) {
-      instance.hide();
+  let tries = 0;
+  const timer = window.setInterval(function () {
+    tries += 1;
+    if (!element.classList.contains("show") || tries > 15) {
+      window.clearInterval(timer);
+      return;
     }
-  }, 400);
+    instance.hide();
+  }, 200);
 }
 
 /** Enter / 点「编辑」：关掉详情，直接进记账弹窗的编辑态 */
@@ -3774,6 +3824,10 @@ function switchPage(page) {
   document.querySelectorAll(".page").forEach(function (section) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
+
+  if (target === "bills") {
+    renderBillsPage();
+  }
 
   // 首页从隐藏变回可见时 ECharts 需要重新量一次容器宽度
   if (target === "home") {
@@ -3973,6 +4027,10 @@ function handleFabAction(action) {
   }
   if (action === "ai") {
     openAiModal();
+    return;
+  }
+  if (action === "help") {
+    openHelpModal();
     return;
   }
   if (action === "shot") {
@@ -4265,11 +4323,15 @@ async function refresh() {
   renderDashboard();
   renderReimbCards();
   renderAssetsHero();
+  if ($("page-bills") && $("page-bills").classList.contains("active")) {
+    renderBillsPage();
+  }
 }
 
 /* ==================== 事件绑定 ==================== */
 
 function bindEvents() {
+  bindV010Events();
   // 顶部按钮
   $("add-record-btn").addEventListener("click", function () {
     openRecordModal({});
@@ -4279,6 +4341,9 @@ function bindEvents() {
   document.querySelectorAll(".nav-item").forEach(function (item) {
     item.addEventListener("click", function (event) {
       event.preventDefault();
+      if (typeof hideNavTooltips === "function") {
+        hideNavTooltips();
+      }
       switchPage(item.getAttribute("data-page"));
     });
   });
@@ -4843,49 +4908,26 @@ function setAiSending(sending) {
   }
 }
 
-/** 发送一句话：后端按 action 分流，这里按 action 弹精准 Toast 并刷新看板 */
+/** 发送一句话（v0.10）：先极速本地拦截，否则关弹窗、走 SSE 气泡 */
 async function sendAiQuick() {
   const input = $("ai-input");
   if (!input) {
     return;
   }
-  const text = input.value.trim();
+  const text = String(input.value || "").trim();
   if (!text) {
-    toast("先输入一句话，比如「昨天买咖啡 25」", "error");
-    input.focus();
     return;
   }
-  if ($("ai-send-btn") && $("ai-send-btn").disabled) {
+  const quick = aiQuickCommand(text);
+  input.value = "";
+  if (aiModal) {
+    hideModalSafe(aiModal, $("ai-modal"));
+  }
+  if (quick) {
+    runFastRecord(quick);
     return;
   }
-
-  setAiSending(true);
-  try {
-    const data = await api("/api/records/ai", jsonOptions("POST", { text: text }));
-    const action = (data && data.action) || "record";
-    if (action === "debt") {
-      toast("借贷已记录", "success");
-    } else if (action === "add_contact") {
-      toast("联系人已添加", "success");
-    } else {
-      toast("记账成功", "success");
-    }
-    input.value = "";
-    if (aiModal) {
-      aiModal.hide();
-    }
-    await refresh();
-  } catch (error) {
-    // unknown：保留用户原文，方便直接改一改再发
-    if (error.message === "AI 无法理解您的指令") {
-      toast("AI 无法理解您的指令，换个说法试试", "error");
-      input.focus();
-    } else {
-      toast(error.message, "error");
-    }
-  } finally {
-    setAiSending(false);
-  }
+  runAiStream(text);
 }
 
 /* ==================== 报销（v0.09） ==================== */
@@ -5708,3 +5750,1017 @@ async function init() {
 }
 
 document.addEventListener("DOMContentLoaded", init);
+
+/* ==================== v0.10-DEV：账单页 / 三级折叠 / 全局气泡 / 帮助 ==================== */
+// 说明：本段由 D:\Project\temp\v010.js 追加，配合 patch_v010_js1.py 的结构性替换。
+// 负责新「账单」页、账单流年/月/日三级折叠、AI 全局气泡（SSE 流式 + 极速本地拦截）、帮助弹窗。
+
+const LS_FEED_COLLAPSE = "ai-accounting-feed-collapse-v1";
+const LS_BILLS_TREE = "ai-accounting-bills-tree-v1";
+const LS_BILLS_MONTH = "ai-accounting-bills-month-v1";
+const BUBBLE_FADE_MS = 3000;
+
+let billsFilter = {
+  year: "",
+  month: "",
+  search: "",
+  type: "",
+  account: "",
+  dateFrom: "",
+  dateTo: "",
+  amountMin: "",
+  amountMax: "",
+};
+
+/* ---------- 折叠状态（localStorage） ---------- */
+
+function readCollapseMap(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "{}") || {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeCollapseMap(key, map) {
+  try {
+    localStorage.setItem(key, JSON.stringify(map));
+  } catch (error) {
+    // 隐私模式写不进去就算了，折叠状态不是关键数据
+  }
+}
+
+function isCollapsed(key, itemKey) {
+  return Boolean(readCollapseMap(key)[itemKey]);
+}
+
+function toggleCollapseState(key, itemKey) {
+  const map = readCollapseMap(key);
+  if (map[itemKey]) {
+    delete map[itemKey];
+  } else {
+    map[itemKey] = 1;
+  }
+  writeCollapseMap(key, map);
+}
+
+/* ---------- 侧栏 Tooltip 残留清理（v0.10 修复） ---------- */
+
+function hideNavTooltips() {
+  document.querySelectorAll('.nav-item[data-bs-toggle="tooltip"]').forEach(function (element) {
+    const instance = window.bootstrap && bootstrap.Tooltip.getInstance(element);
+    if (instance) {
+      instance.hide();
+    }
+  });
+}
+
+/* ---------- 账单页：数据与渲染 ---------- */
+
+function billsTypeLabel(type) {
+  if (type === "income") {
+    return "收入";
+  }
+  if (type === "transfer") {
+    return "转账";
+  }
+  return "支出";
+}
+
+function billsAmountHtml(record) {
+  if (record.type === "income") {
+    return '<span class="amt-income">+' + money(record.amount) + "</span>";
+  }
+  if (record.type === "transfer") {
+    return '<span class="amt-neutral">' + money(record.amount) + "</span>";
+  }
+  return '<span class="amt-expense">-' + money(record.amount) + "</span>";
+}
+
+function billsFilterRecords() {
+  const records = state.allRecords || [];
+  return records.filter(function (record) {
+    const key = dateKeyOf(record);
+    if (billsFilter.year && key.slice(0, 4) !== billsFilter.year) {
+      return false;
+    }
+    if (billsFilter.month && key.slice(0, 7) !== billsFilter.month) {
+      return false;
+    }
+    if (billsFilter.type && record.type !== billsFilter.type) {
+      return false;
+    }
+    if (billsFilter.account && record.account !== billsFilter.account) {
+      return false;
+    }
+    if (billsFilter.dateFrom && key < billsFilter.dateFrom) {
+      return false;
+    }
+    if (billsFilter.dateTo && key > billsFilter.dateTo) {
+      return false;
+    }
+    const amount = Number(record.amount || 0);
+    if (billsFilter.amountMin !== "" && amount < Number(billsFilter.amountMin)) {
+      return false;
+    }
+    if (billsFilter.amountMax !== "" && amount > Number(billsFilter.amountMax)) {
+      return false;
+    }
+    if (billsFilter.search) {
+      const needle = billsFilter.search.toLowerCase();
+      const text = [
+        record.note,
+        categoryLabel(record.category),
+        record.account,
+        record.to_account,
+        String(record.amount),
+      ]
+        .join(" ")
+        .toLowerCase();
+      if (text.indexOf(needle) === -1) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function renderBillsSummary(list) {
+  const element = $("bills-summary");
+  if (!element) {
+    return;
+  }
+  const summary = summarize(list);
+  element.innerHTML =
+    "共 <b>" +
+    list.length +
+    "</b> 笔 · 收 " +
+    '<span class="amt-income">' +
+    money(summary.income) +
+    "</span> · 支 " +
+    '<span class="amt-expense">' +
+    money(summary.expense) +
+    "</span> · 净 " +
+    money(summary.net);
+}
+
+function buildBillsTree() {
+  const container = $("bills-tree");
+  if (!container) {
+    return;
+  }
+  const records = state.allRecords || [];
+  const byYear = new Map();
+  records.forEach(function (record) {
+    const key = dateKeyOf(record);
+    const yearKey = key.slice(0, 4);
+    const monthKey = key.slice(0, 7);
+    if (!byYear.has(yearKey)) {
+      byYear.set(yearKey, { months: new Map(), income: 0, expense: 0 });
+    }
+    const year = byYear.get(yearKey);
+    if (!year.months.has(monthKey)) {
+      year.months.set(monthKey, { income: 0, expense: 0, count: 0 });
+    }
+    const month = year.months.get(monthKey);
+    const amount = Number(record.amount || 0);
+    month.count += 1;
+    year.count = (year.count || 0) + 1;
+    if (record.type === "income") {
+      month.income += amount;
+      year.income += amount;
+    } else if (record.type === "expense") {
+      month.expense += amount;
+      year.expense += amount;
+    }
+  });
+
+  const years = Array.from(byYear.keys()).sort().reverse();
+  const emptyActive = !billsFilter.year && !billsFilter.month;
+  let html = '<button class="bills-tree-all' + (emptyActive ? " is-active" : "") + '" data-bills-all="1">全部账单</button>';
+
+  years.forEach(function (yearKey) {
+    const year = byYear.get(yearKey);
+    const yearKeyOfCollapse = "year:" + yearKey;
+    const collapsed = isCollapsed(LS_BILLS_TREE, yearKeyOfCollapse);
+    html +=
+      '<div class="bills-tree-year">' +
+      '<button class="bills-tree-year-head' +
+      (collapsed ? " is-collapsed" : "") +
+      '" data-bills-year="' +
+      yearKey +
+      '">' +
+      '<span class="bills-tree-caret">' +
+      (collapsed ? "+" : "−") +
+      "</span>" +
+      "<span>" +
+      yearKey +
+      " 年</span>" +
+      '<span class="bills-tree-year-sum">' +
+      year.count +
+      " 笔</span></button>";
+    if (!collapsed) {
+      const months = Array.from(year.months.keys()).sort().reverse();
+      html += '<div class="bills-tree-months">';
+      months.forEach(function (monthKey) {
+        const month = year.months.get(monthKey);
+        const active = billsFilter.month === monthKey;
+        html +=
+          '<button class="bills-tree-month' +
+          (active ? " is-active" : "") +
+          '" data-bills-month="' +
+          monthKey +
+          '" data-bills-year-of="' +
+          yearKey +
+          '">' +
+          "<span>" +
+          Number(monthKey.slice(5, 7)) +
+          " 月</span>" +
+          '<span class="bills-tree-month-sub">收 ' +
+          money(month.income) +
+          " · 支 " +
+          money(month.expense) +
+          "</span></button>";
+      });
+      html += "</div>";
+    }
+    html += "</div>";
+  });
+
+  container.innerHTML = html;
+}
+
+function renderBillsTable() {
+  const tbody = $("bills-tbody");
+  if (!tbody) {
+    return;
+  }
+  const list = billsFilterRecords();
+  renderBillsSummary(list);
+  if (!list.length) {
+    tbody.innerHTML = '<tr class="bills-empty-row"><td colspan="8">没有符合条件的账单</td></tr>';
+    return;
+  }
+  const snapshots = balanceSnapshots(state.allRecords || []);
+  let html = "";
+  let currentMonth = "";
+  list.forEach(function (record) {
+    const key = dateKeyOf(record);
+    const monthKey = key.slice(0, 7);
+    if (monthKey !== currentMonth) {
+      currentMonth = monthKey;
+      const monthRecords = list.filter(function (item) {
+        return dateKeyOf(item).slice(0, 7) === monthKey;
+      });
+      const summary = summarize(monthRecords);
+      const collapsed = isCollapsed(LS_BILLS_MONTH, monthKey);
+      html +=
+        '<tr class="bills-row-month' +
+        (collapsed ? " is-collapsed" : "") +
+        '" data-bills-month-toggle="' +
+        monthKey +
+        '"><td colspan="8">' +
+        '<span class="bills-month-caret">' +
+        (collapsed ? "+" : "−") +
+        "</span>" +
+        "<span>" +
+        monthKey.slice(0, 4) +
+        "年" +
+        Number(monthKey.slice(5, 7)) +
+        "月</span>" +
+        '<span class="bills-month-sub">' +
+        monthRecords.length +
+        " 笔 · 收 " +
+        money(summary.income) +
+        " · 支 " +
+        money(summary.expense) +
+        "</span></td></tr>";
+      if (collapsed) {
+        return;
+      }
+    }
+    if (isCollapsed(LS_BILLS_MONTH, monthKey)) {
+      return;
+    }
+    const balance = snapshots[record.id];
+    html +=
+      '<tr data-record-id="' +
+      record.id +
+      '">' +
+      "<td>" +
+      escapeHtml(key) +
+      "</td>" +
+      "<td>" +
+      escapeHtml(timeOf(record)) +
+      "</td>" +
+      "<td><span class=\"bills-type bills-type-" +
+      escapeHtml(record.type || "expense") +
+      '">' +
+      billsTypeLabel(record.type) +
+      "</span></td>" +
+      "<td>" +
+      escapeHtml(categoryLabel(record.category)) +
+      "</td>" +
+      "<td>" +
+      escapeHtml(record.account || "") +
+      "</td>" +
+      '<td class="bills-amount">' +
+      billsAmountHtml(record) +
+      "</td>" +
+      '<td class="bills-balance">' +
+      (balance === undefined ? "—" : money(balance)) +
+      "</td>" +
+      "<td>" +
+      escapeHtml(record.note || "") +
+      "</td></tr>";
+  });
+  tbody.innerHTML = html;
+}
+
+function renderBillsPage() {
+  const container = $("bills-account");
+  if (container && state.accounts && container.options.length === 0) {
+    let options = '<option value="">全部账户</option>';
+    state.accounts.forEach(function (account) {
+      options += '<option value="' + escapeHtml(account.name) + '">' + escapeHtml(account.name) + "</option>";
+    });
+    container.innerHTML = options;
+  }
+  buildBillsTree();
+  renderBillsTable();
+}
+
+/* ---------- 账单流三级折叠 ---------- */
+
+function toggleFeedCollapseFromEvent(event) {
+  const header = event.target.closest ? event.target.closest("[data-collapse]") : null;
+  if (!header) {
+    return;
+  }
+  const feed = header.closest(".bill-feed");
+  if (!feed) {
+    return;
+  }
+  toggleCollapseState(LS_FEED_COLLAPSE, header.getAttribute("data-collapse-key"));
+  if (feed.id === "record-list") {
+    renderRecords();
+  } else if (feed.id === "account-records") {
+    renderAccountRecords();
+  } else if (feed.id === "day-records") {
+    renderDayRecords();
+  }
+}
+
+/* ---------- 帮助弹窗 ---------- */
+
+let helpModal = null;
+
+function openHelpModal() {
+  const element = $("help-modal");
+  if (!element) {
+    return;
+  }
+  if (!helpModal && window.bootstrap) {
+    helpModal = new window.bootstrap.Modal(element);
+    bindEscClose(element, helpModal);
+  }
+  if (helpModal) {
+    helpModal.show();
+  }
+}
+
+/* ---------- 全局气泡系统 ---------- */
+
+let bubbleSerial = 0;
+const activeBubbles = new Map();
+
+const BUBBLE_TITLES = {
+  record: "极速记账",
+  ai: "AI 正在处理",
+  fast: "极速记账",
+  error: "处理失败",
+};
+
+function bubbleIconSvg(kind) {
+  if (kind === "record" || kind === "fast") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l4-1 9-9-3-3-9 9-1 4z"/><path d="M13 7l3 3"/></svg>';
+  }
+  if (kind === "error") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>';
+  }
+  if (kind === "help") {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 114 2c-.8.7-1.5 1.1-1.5 2.2"/><path d="M12 17h.01"/></svg>';
+  }
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.7L18.5 9l-4.7 1.8L12 15.5l-1.8-4.7L5.5 9l4.7-1.3L12 3z"/><path d="M18 16l.8 2.2L21 19l-2.2.8L18 22l-.8-2.2L15 19l2.2-.8L18 16z"/></svg>';
+}
+
+function createBubble(kind) {
+  const stack = $("bubble-stack");
+  if (!stack) {
+    return null;
+  }
+  if (activeBubbles.size >= 4) {
+    const oldest = Array.from(activeBubbles.values())[0];
+    removeBubble(oldest, true);
+  }
+  bubbleSerial += 1;
+  const element = document.createElement("div");
+  element.className = "bubble is-in";
+  element.dataset.bubbleId = String(bubbleSerial);
+  element.innerHTML =
+    '<div class="bubble-icon">' +
+    bubbleIconSvg(kind) +
+    "</div>" +
+    '<div class="bubble-main"><div class="bubble-title">' +
+    (BUBBLE_TITLES[kind] || "处理中") +
+    '</div><div class="bubble-msg"></div></div>' +
+    '<div class="bubble-progress"></div>';
+  stack.prepend(element);
+  const bubble = {
+    id: bubbleSerial,
+    element: element,
+    kind: kind,
+    ready: false,
+    typingTimer: null,
+    countdownTimer: null,
+    fadeTimer: null,
+  };
+  activeBubbles.set(bubble.id, bubble);
+  return bubble;
+}
+
+function removeBubble(bubble, immediate) {
+  if (!bubble || bubble.removed) {
+    return;
+  }
+  bubble.removed = true;
+  if (bubble.typingTimer) {
+    window.clearInterval(bubble.typingTimer);
+    bubble.typingTimer = null;
+  }
+  if (bubble.countdownTimer) {
+    window.clearTimeout(bubble.countdownTimer);
+    bubble.countdownTimer = null;
+  }
+  activeBubbles.delete(bubble.id);
+  if (immediate) {
+    bubble.element.remove();
+    return;
+  }
+  bubble.element.classList.add("is-out");
+  window.setTimeout(function () {
+    bubble.element.remove();
+  }, 340);
+}
+
+function bubbleWriteText(bubble, text, thinking) {
+  if (!bubble || bubble.removed) {
+    return;
+  }
+  const messageElement = bubble.element.querySelector(".bubble-msg");
+  if (!messageElement) {
+    return;
+  }
+  if (bubble.typingTimer) {
+    window.clearInterval(bubble.typingTimer);
+    bubble.typingTimer = null;
+  }
+  const fullText = String(text || "");
+  messageElement.classList.toggle("is-thinking", Boolean(thinking));
+  messageElement.innerHTML = '<span class="bubble-typed"></span>';
+  const typed = messageElement.querySelector(".bubble-typed");
+  if (thinking) {
+    const dots = document.createElement("span");
+    dots.className = "bubble-dots";
+    dots.innerHTML = "<i></i><i></i><i></i>";
+    messageElement.insertBefore(dots, typed);
+  }
+  let index = 0;
+  bubble.typingTimer = window.setInterval(function () {
+    index += 1;
+    typed.textContent = fullText.slice(0, index);
+    if (index >= fullText.length) {
+      window.clearInterval(bubble.typingTimer);
+      bubble.typingTimer = null;
+      messageElement.classList.remove("is-thinking");
+    }
+  }, 16);
+}
+
+function bubbleStatus(bubble, text) {
+  bubbleWriteText(bubble, text, true);
+}
+
+function bubbleFinish(bubble, config) {
+  config = config || {};
+  if (!bubble || bubble.removed) {
+    return;
+  }
+  const element = bubble.element;
+  const titleElement = element.querySelector(".bubble-title");
+  if (titleElement && config.title) {
+    titleElement.textContent = config.title;
+  }
+  if (config.error) {
+    element.classList.add("is-error");
+  } else {
+    element.classList.add("is-done");
+  }
+  bubbleWriteText(bubble, config.message || "", false);
+  if (config.recordId) {
+    element.dataset.recordId = String(config.recordId);
+    element.classList.add("is-clickable");
+  }
+  bubble.ready = true;
+  bubbleStartCountdown(bubble, BUBBLE_FADE_MS);
+}
+
+function bubbleStartCountdown(bubble, delay) {
+  if (!bubble || bubble.removed || !bubble.ready) {
+    return;
+  }
+  if (bubble.countdownTimer) {
+    window.clearTimeout(bubble.countdownTimer);
+  }
+  const progress = bubble.element.querySelector(".bubble-progress");
+  if (progress) {
+    progress.classList.remove("is-paused");
+    progress.style.animationDuration = (delay || BUBBLE_FADE_MS) + "ms";
+  }
+  bubble.countdownTimer = window.setTimeout(function () {
+    bubble.countdownTimer = null;
+    removeBubble(bubble, false);
+  }, delay || BUBBLE_FADE_MS);
+}
+
+function pauseBubbleCountdowns() {
+  activeBubbles.forEach(function (bubble) {
+    if (bubble.countdownTimer) {
+      window.clearTimeout(bubble.countdownTimer);
+      bubble.countdownTimer = null;
+    }
+    const progress = bubble.element.querySelector(".bubble-progress");
+    if (progress) {
+      progress.classList.add("is-paused");
+    }
+  });
+}
+
+function resumeBubbleCountdowns() {
+  activeBubbles.forEach(function (bubble) {
+    if (bubble.ready && !bubble.countdownTimer && !bubble.removed) {
+      bubbleStartCountdown(bubble, 1600);
+    }
+  });
+}
+
+/* ---------- AI 极速本地拦截 ---------- */
+
+function localDateISO(offsetDays) {
+  const date = new Date();
+  date.setDate(date.getDate() + (offsetDays || 0));
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return year + "-" + month + "-" + day;
+}
+
+/**
+ * v0.10：AI 输入框前置正则拦截。
+ * 「午饭30」「昨天打车30元」这类一句话直接走 POST /api/records，
+ * 避免为一个简单记账再走一次大模型。
+ */
+function aiQuickCommand(text) {
+  const raw = String(text || "").trim();
+  if (!raw || raw.length > 40) {
+    return null;
+  }
+  if (/借|还|报销|代买|转账|联系人|添加|删除|查询|修改|多少/.test(raw)) {
+    return null;
+  }
+  const match = raw.match(
+    /^(今天|昨天|前天)?\s*(?:我)?\s*(?:花|花了|消费|买了|付了|付|收|收了|赚了|入账)?\s*([\u4e00-\u9fa5]{1,8})?\s*(\d+(?:\.\d{1,2})?)\s*(?:元|块|块钱|人民币|rmb|¥|￥)?\s*$/i
+  );
+  if (!match) {
+    return null;
+  }
+  const dayWord = match[1] || "";
+  const categoryText = (match[2] || "").trim();
+  const amount = cents(match[3]);
+  if (!(amount > 0)) {
+    return null;
+  }
+  let account = "现金";
+  (state.accounts || []).forEach(function (item) {
+    const name = String(item.name || "");
+    // 纯数字账户名属于历史脏数据，不参与匹配，否则「餐饮30」会被账户「3」抢走
+    if (!name || /^\d+$/.test(name)) {
+      return;
+    }
+    if (raw.indexOf(name) !== -1 && name.length > account.length) {
+      account = name;
+    }
+  });
+  const isIncome = /^收|赚|工资|奖金|红包|退款|利息/.test(raw);
+  const dateOffset = dayWord === "昨天" ? -1 : dayWord === "前天" ? -2 : 0;
+  const category = categoryText || (isIncome ? "其他收入" : "其他支出");
+  return {
+    payload: {
+      amount: amount,
+      type: isIncome ? "income" : "expense",
+      account: account,
+      category: category,
+      date: localDateISO(dateOffset) + " 12:00",
+      note: raw,
+    },
+    label: "已记一笔「" + raw + "」",
+  };
+}
+
+async function runFastRecord(quick) {
+  const bubble = createBubble("fast");
+  if (!bubble) {
+    return;
+  }
+  bubbleStatus(bubble, "极速识别中…");
+  try {
+    const data = await api("/api/records", jsonOptions("POST", quick.payload));
+    bubbleFinish(bubble, {
+      title: "记账成功",
+      message: quick.label,
+      recordId: data && data.id,
+    });
+    refresh().catch(function () {});
+  } catch (error) {
+    bubbleFinish(bubble, { title: "记账失败", message: error.message || "请稍后再试", error: true });
+  }
+}
+
+/* ---------- AI 流式解析（SSE） ---------- */
+
+const AI_STATUS_TEXT = {
+  connecting: "正在连接 AI…",
+  thinking: "AI 正在思考…",
+  extracting_amount: "正在识别金额…",
+  extracting_type: "正在判断收支类型…",
+  extracting_category: "正在匹配分类…",
+  resolving_category: "正在匹配分类…",
+  extracting_account: "正在确认账户…",
+  extracting_date: "正在解析日期…",
+  extracting_contact: "正在识别联系人…",
+  writing: "正在写入账本…",
+  saving: "正在保存账目…",
+  done: "处理完成",
+};
+
+function aiStatusText(status, message) {
+  if (message) {
+    return message;
+  }
+  return AI_STATUS_TEXT[status] || "正在解析…";
+}
+
+function aiActionTitle(action) {
+  if (action === "debt") {
+    return "借贷已记录";
+  }
+  if (action === "add_contact") {
+    return "联系人已添加";
+  }
+  return "记账成功";
+}
+
+function aiResultRecordId(result) {
+  if (!result) {
+    return null;
+  }
+  if (result.payload && result.payload.id) {
+    return result.payload.id;
+  }
+  if (result.payload && result.payload.record && result.payload.record.id) {
+    return result.payload.record.id;
+  }
+  if (result.record && result.record.id) {
+    return result.record.id;
+  }
+  if (result.id) {
+    return result.id;
+  }
+  return null;
+}
+
+function restoreAiInput(text) {
+  const input = $("ai-input");
+  if (input) {
+    input.value = text;
+  }
+}
+
+async function runAiStream(text) {
+  const bubble = createBubble("ai");
+  if (!bubble) {
+    return;
+  }
+  bubbleStatus(bubble, "正在理解您的指令…");
+
+  let terminal = null;
+  try {
+    const response = await fetch("/api/records/ai/stream", jsonOptions("POST", { text: text }));
+    const contentType = String(response.headers.get("content-type") || "");
+    if (!response.ok || !response.body || contentType.indexOf("text/event-stream") === -1) {
+      throw new Error("stream-unsupported");
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let separator = buffer.indexOf("\n\n");
+      while (separator >= 0) {
+        const rawEvent = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        separator = buffer.indexOf("\n\n");
+        const dataLines = rawEvent
+          .split(/\r?\n/)
+          .filter(function (line) {
+            return line.indexOf("data:") === 0;
+          })
+          .map(function (line) {
+            return line.slice(5).trim();
+          });
+        if (!dataLines.length) {
+          continue;
+        }
+        let payload = null;
+        try {
+          payload = JSON.parse(dataLines.join("\n"));
+        } catch (error) {
+          continue;
+        }
+        if (!payload) {
+          continue;
+        }
+        const status = String(payload.status || "");
+        if (
+          status === "done" ||
+          status === "success" ||
+          status === "error" ||
+          status === "unknown" ||
+          payload.action === "unknown" ||
+          (payload.payload && payload.payload.action === "unknown")
+        ) {
+          terminal = payload;
+          continue;
+        }
+        bubbleStatus(bubble, aiStatusText(status, payload.msg || payload.message));
+      }
+    }
+  } catch (error) {
+    fallbackAiRequest(bubble, text);
+    return;
+  }
+
+  if (!terminal) {
+    fallbackAiRequest(bubble, text);
+    return;
+  }
+
+  const action = terminal.action || (terminal.payload && terminal.payload.action) || "record";
+  const failed =
+    terminal.status === "error" ||
+    terminal.status === "unknown" ||
+    Boolean(terminal.error) ||
+    action === "unknown";
+
+  if (failed) {
+    const unknown = action === "unknown" || terminal.status === "unknown";
+    bubbleFinish(bubble, {
+      title: unknown ? "AI 无法理解" : "AI 解析失败",
+      message: terminal.error || terminal.message || terminal.msg || (unknown ? "换一种说法再试试？" : "请稍后再试"),
+      error: true,
+    });
+    restoreAiInput(text);
+    window.setTimeout(function () {
+      openAiModal();
+    }, 300);
+    return;
+  }
+
+  bubbleFinish(bubble, {
+    title: aiActionTitle(action),
+    message: terminal.message || terminal.msg || "已写入账本",
+    recordId: action === "record" ? aiResultRecordId(terminal) : null,
+  });
+  refresh().catch(function () {});
+}
+
+async function fallbackAiRequest(bubble, text) {
+  if (!bubble || bubble.removed) {
+    return;
+  }
+  bubbleStatus(bubble, "流式接口不可用，改用普通解析…");
+  try {
+    const data = await api("/api/records/ai", jsonOptions("POST", { text: text }));
+    const action = data.action || "record";
+    const record = data.record || data;
+    bubbleFinish(bubble, {
+      title: aiActionTitle(action),
+      message: "已写入账本",
+      recordId: action === "record" ? (record && record.id) || data.id : null,
+    });
+    refresh().catch(function () {});
+  } catch (error) {
+    bubbleFinish(bubble, {
+      title: "AI 解析失败",
+      message: error.message || "请稍后再试",
+      error: true,
+    });
+    restoreAiInput(text);
+  }
+}
+
+/* ---------- v0.10 事件绑定 ---------- */
+
+function setBillsInputValue(id, value) {
+  const element = $(id);
+  if (element) {
+    element.value = value || "";
+  }
+}
+
+function resetBillsFilterInputs() {
+  setBillsInputValue("bills-search", "");
+  setBillsInputValue("bills-type", "");
+  setBillsInputValue("bills-account", "");
+  setBillsInputValue("bills-date-from", "");
+  setBillsInputValue("bills-date-to", "");
+  setBillsInputValue("bills-amount-min", "");
+  setBillsInputValue("bills-amount-max", "");
+}
+
+function readBillsFilterFromInputs() {
+  billsFilter.search = ($("bills-search") && $("bills-search").value.trim()) || "";
+  billsFilter.type = ($("bills-type") && $("bills-type").value) || "";
+  billsFilter.account = ($("bills-account") && $("bills-account").value) || "";
+  billsFilter.dateFrom = ($("bills-date-from") && $("bills-date-from").value) || "";
+  billsFilter.dateTo = ($("bills-date-to") && $("bills-date-to").value) || "";
+  billsFilter.amountMin = ($("bills-amount-min") && $("bills-amount-min").value) || "";
+  billsFilter.amountMax = ($("bills-amount-max") && $("bills-amount-max").value) || "";
+}
+
+function bindV010Events() {
+  // 账单页筛选器
+  const searchInput = $("bills-search");
+  if (searchInput) {
+    let searchTimer = null;
+    searchInput.addEventListener("input", function () {
+      if (searchTimer) {
+        window.clearTimeout(searchTimer);
+      }
+      searchTimer = window.setTimeout(function () {
+        searchTimer = null;
+        readBillsFilterFromInputs();
+        buildBillsTree();
+        renderBillsTable();
+      }, 180);
+    });
+  }
+  ["bills-type", "bills-account", "bills-date-from", "bills-date-to", "bills-amount-min", "bills-amount-max"].forEach(
+    function (id) {
+      const element = $(id);
+      if (element) {
+        element.addEventListener("change", function () {
+          readBillsFilterFromInputs();
+          buildBillsTree();
+          renderBillsTable();
+        });
+      }
+    }
+  );
+  const resetButton = $("bills-reset-btn");
+  if (resetButton) {
+    resetButton.addEventListener("click", function () {
+      billsFilter = {
+        year: "",
+        month: "",
+        search: "",
+        type: "",
+        account: "",
+        dateFrom: "",
+        dateTo: "",
+        amountMin: "",
+        amountMax: "",
+      };
+      resetBillsFilterInputs();
+      buildBillsTree();
+      renderBillsTable();
+    });
+  }
+
+  // 年月树
+  const tree = $("bills-tree");
+  if (tree) {
+    tree.addEventListener("click", function (event) {
+      const target = event.target;
+      if (!target.closest) {
+        return;
+      }
+      const allButton = target.closest("[data-bills-all]");
+      if (allButton) {
+        billsFilter.year = "";
+        billsFilter.month = "";
+        buildBillsTree();
+        renderBillsTable();
+        return;
+      }
+      const yearButton = target.closest("[data-bills-year]");
+      if (yearButton) {
+        toggleCollapseState(LS_BILLS_TREE, "year:" + yearButton.getAttribute("data-bills-year"));
+        buildBillsTree();
+        return;
+      }
+      const monthButton = target.closest("[data-bills-month]");
+      if (monthButton) {
+        const monthKey = monthButton.getAttribute("data-bills-month");
+        billsFilter.year = monthKey.slice(0, 4);
+        billsFilter.month = monthKey;
+        buildBillsTree();
+        renderBillsTable();
+      }
+    });
+  }
+
+  // 账单表格：月折叠 + 行点击进详情
+  const tableBody = $("bills-tbody");
+  if (tableBody) {
+    tableBody.addEventListener("click", function (event) {
+      const target = event.target;
+      if (!target.closest) {
+        return;
+      }
+      const monthRow = target.closest("[data-bills-month-toggle]");
+      if (monthRow) {
+        toggleCollapseState(LS_BILLS_MONTH, monthRow.getAttribute("data-bills-month-toggle"));
+        renderBillsTable();
+        return;
+      }
+      const row = target.closest("tr[data-record-id]");
+      if (row) {
+        openRecordDetail(Number(row.getAttribute("data-record-id")));
+      }
+    });
+  }
+
+  // 首页 / 资产页 / 日历账单流的三级折叠
+  document.addEventListener("click", function (event) {
+    toggleFeedCollapseFromEvent(event);
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && event.target && event.target.getAttribute && event.target.getAttribute("data-collapse")) {
+      toggleFeedCollapseFromEvent(event);
+    }
+  });
+
+  // 气泡：点击成功气泡打开详情；悬停暂停倒计时
+  const stack = $("bubble-stack");
+  if (stack) {
+    stack.addEventListener("click", function (event) {
+      const bubbleElement = event.target.closest ? event.target.closest(".bubble.is-clickable") : null;
+      if (!bubbleElement || !bubbleElement.dataset.recordId) {
+        return;
+      }
+      openRecordDetail(Number(bubbleElement.dataset.recordId));
+      const bubble = activeBubbles.get(Number(bubbleElement.dataset.bubbleId));
+      if (bubble) {
+        removeBubble(bubble, false);
+      }
+    });
+    stack.addEventListener("mouseenter", pauseBubbleCountdowns, true);
+    stack.addEventListener("mouseleave", resumeBubbleCountdowns, true);
+  }
+  window.addEventListener("blur", pauseBubbleCountdowns);
+
+  // 帮助弹窗：FAB 里已由 handleFabAction 分支打开；这里再兜一层 ? 快捷键
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "?") {
+      return;
+    }
+    if (typeof isTypingTarget === "function" && isTypingTarget(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    openHelpModal();
+  });
+}
+
+/* v0.10 收尾自检：确认新函数都挂到了全局，便于控制台排查 */
+window.__v010 = {
+  renderBillsPage: renderBillsPage,
+  openHelpModal: openHelpModal,
+  runAiStream: runAiStream,
+  aiQuickCommand: aiQuickCommand,
+};

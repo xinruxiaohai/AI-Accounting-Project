@@ -16,12 +16,15 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.09.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.10.0">
 </head>
 <body>
 
 <!-- Toast 轻提示容器：由 script.js 往里塞消息，不用 alert -->
 <div class="toast-stack" id="toast-stack"></div>
+
+<!-- v0.10：右下角全局气泡栈（AI 指令 / 极速记账的非阻塞反馈，从下往上排列） -->
+<div class="bubble-stack" id="bubble-stack" aria-live="polite" aria-label="AI 处理气泡"></div>
 
 <!-- 断网横幅：离线时红色常驻，恢复后绿色提示 2.5 秒自动收起 -->
 <div class="net-banner" id="net-banner" role="status" aria-live="polite"></div>
@@ -59,6 +62,12 @@
           <rect x="3" y="6.5" width="18" height="12" rx="2.5"></rect><path d="M3 10.5h18"></path><circle cx="16.5" cy="14.5" r="1.2"></circle>
         </svg>
         <span>资产</span>
+      </a>
+      <a class="nav-item" href="#" data-page="bills" data-bs-toggle="tooltip" data-bs-placement="right" title="账单：年月树 + 高级筛选">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="4" y="3.5" width="16" height="17" rx="2.4"></rect><path d="M8 8h8M8 12h8M8 16h5"></path>
+        </svg>
+        <span>账单</span>
       </a>
       <a class="nav-item" href="#" data-page="profile" data-bs-toggle="tooltip" data-bs-placement="right" title="我的">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -356,74 +365,72 @@
       <!-- ============ 资产 ============ -->
       <section class="page" id="page-assets">
 
-        <!-- v0.09.2：净资产卡收窄 + 右侧统计合并区；背景图目前存 localStorage，未来接云端 -->
-        <div class="assets-top">
-          <div class="assets-hero" id="assets-hero">
-            <button class="hero-icon-btn" type="button" id="hero-eye-btn" title="隐藏/显示金额" aria-label="隐藏或显示金额">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"></path>
-                <circle cx="12" cy="12" r="2.6"></circle>
-              </svg>
-            </button>
-            <button class="hero-icon-btn" type="button" id="hero-bg-btn" title="上传卡片背景图" aria-label="上传卡片背景图">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="16" rx="2.5"></rect>
-                <circle cx="9" cy="9.5" r="1.6"></circle>
-                <path d="m4 17 4.8-4.6a2 2 0 0 1 2.8.1L21 19"></path>
-              </svg>
-            </button>
-            <input type="file" id="hero-bg-file" accept="image/*" class="visually-hidden">
-            <span class="assets-hero-label">总净资产</span>
-            <strong class="assets-hero-value" id="asset-net">¥0.00</strong>
-            <div class="assets-hero-sub">
-              <span>总资产<strong id="asset-total">¥0.00</strong></span>
-              <span>总负债<strong id="asset-liability">¥0.00</strong></span>
-            </div>
-          </div>
-
-          <!-- v0.09.2：借入 / 借出 / 待报销 / 已报销 紧凑合并，点开看明细 -->
-          <div class="asset-stats" role="list">
-            <button class="asset-stat" type="button" data-stat="borrow" role="listitem">
-              <span class="asset-stat-label">借入（待还）</span>
-              <strong class="asset-stat-value amt-neutral" id="asset-borrow">¥0.00</strong>
-              <span class="asset-stat-hint">我欠别人的</span>
-            </button>
-            <button class="asset-stat" type="button" data-stat="lend" role="listitem">
-              <span class="asset-stat-label">借出（待收）</span>
-              <strong class="asset-stat-value amt-neutral" id="asset-lend">¥0.00</strong>
-              <span class="asset-stat-hint">别人欠我的</span>
-            </button>
-            <button class="asset-stat" type="button" data-stat="pending" role="listitem">
-              <span class="asset-stat-label">待报销</span>
-              <strong class="asset-stat-value amt-neutral" id="reimb-pending">¥0.00</strong>
-              <span class="asset-stat-hint">垫付还没收回</span>
-            </button>
-            <button class="asset-stat" type="button" data-stat="done" role="listitem">
-              <span class="asset-stat-label">已报销</span>
-              <strong class="asset-stat-value amt-neutral" id="reimb-done">¥0.00</strong>
-              <span class="asset-stat-hint">已经收回的</span>
-            </button>
-          </div>
-        </div>
-
-        <!-- v0.09.1：左右分块（左 4 成账户列表 / 右 6 成流水），<1024px 自动上下堆叠 -->
+        <!-- v0.10：左 4 右 6——左栏净资产卡 + 4 个统计卡 + 账户列表；右栏纯流水 -->
         <div class="assets-split">
 
-          <!-- 左：按大类分组的账户卡片 -->
-          <div class="panel assets-left">
-            <div class="panel-head">
-              <span class="panel-title">我的账户</span>
-              <div class="panel-tools">
-                <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
-                <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
+          <div class="assets-left">
+
+            <!-- 净资产卡：小眼睛隐藏金额，可上传自定义背景图（数据存 localStorage，未来接云端多端同步） -->
+            <div class="assets-hero" id="assets-hero">
+              <button class="hero-icon-btn" type="button" id="hero-eye-btn" title="隐藏/显示金额" aria-label="隐藏或显示金额">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z"></path>
+                  <circle cx="12" cy="12" r="2.6"></circle>
+                </svg>
+              </button>
+              <button class="hero-icon-btn" type="button" id="hero-bg-btn" title="上传卡片背景图" aria-label="上传卡片背景图">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="2.5"></rect>
+                  <circle cx="9" cy="9.5" r="1.6"></circle>
+                  <path d="m4 17 4.8-4.6a2 2 0 0 1 2.8.1L21 19"></path>
+                </svg>
+              </button>
+              <input type="file" id="hero-bg-file" accept="image/*" class="visually-hidden">
+              <span class="assets-hero-label">总净资产</span>
+              <strong class="assets-hero-value" id="asset-net">¥0.00</strong>
+              <!-- v0.10：总资产 / 总负债保留在 DOM 里给 renderAssetsHero 写入，视觉隐藏（去除灰色小字） -->
+              <div class="assets-hero-sub visually-hidden">
+                <span>总资产<strong id="asset-total">¥0.00</strong></span>
+                <span>总负债<strong id="asset-liability">¥0.00</strong></span>
               </div>
             </div>
-            <!-- v0.09.2：账户列表流（平台彩色圆标 + 名称 + 金额） -->
-            <div class="account-groups" id="account-groups">
-              <p class="feed-empty">正在加载账户…</p>
+
+            <!-- 借入 / 借出 / 待报销 / 已报销：紧凑合并，点开看明细 -->
+            <div class="asset-stats" role="list">
+              <button class="asset-stat" type="button" data-stat="borrow" role="listitem">
+                <span class="asset-stat-label">借入（待还）</span>
+                <strong class="asset-stat-value amt-neutral" id="asset-borrow">¥0.00</strong>
+              </button>
+              <button class="asset-stat" type="button" data-stat="lend" role="listitem">
+                <span class="asset-stat-label">借出（待收）</span>
+                <strong class="asset-stat-value amt-neutral" id="asset-lend">¥0.00</strong>
+              </button>
+              <button class="asset-stat" type="button" data-stat="pending" role="listitem">
+                <span class="asset-stat-label">待报销</span>
+                <strong class="asset-stat-value amt-neutral" id="reimb-pending">¥0.00</strong>
+              </button>
+              <button class="asset-stat" type="button" data-stat="done" role="listitem">
+                <span class="asset-stat-label">已报销</span>
+                <strong class="asset-stat-value amt-neutral" id="reimb-done">¥0.00</strong>
+              </button>
             </div>
+
+            <!-- 账户列表流：平台彩色圆标 + 名称 + 金额 -->
+            <div class="panel accounts-panel">
+              <div class="panel-head">
+                <span class="panel-title">我的账户</span>
+                <div class="panel-tools">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
+                  <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
+                </div>
+              </div>
+              <div class="account-groups" id="account-groups">
+                <p class="feed-empty">正在加载账户…</p>
+              </div>
+            </div>
+
           </div>
 
           <!-- 右：选中账户的流水，按日期分组，带当日收支小计 -->
@@ -441,6 +448,73 @@
 
         </div>
 
+      </section>
+
+      <!-- ============ 账单（v0.10 新增：左年月树 + 右高级筛选与大表格） ============ -->
+      <section class="page" id="page-bills">
+        <div class="bills-layout">
+
+          <!-- 左：年 / 月树状导航，带当月收支 -->
+          <aside class="panel bills-tree-panel">
+            <div class="panel-head">
+              <span class="panel-title">年月</span>
+              <span class="panel-sub" id="bills-tree-sum">共 0 笔</span>
+            </div>
+            <div class="bills-tree" id="bills-tree">
+              <p class="feed-empty">正在加载…</p>
+            </div>
+          </aside>
+
+          <!-- 右：高级筛选器 + 大表格 -->
+          <div class="bills-main">
+            <div class="panel bills-filter-panel">
+              <div class="bills-filters">
+                <input class="form-control form-control-sm" id="bills-search" type="search"
+                       placeholder="关键词：分类 / 备注 / 金额" autocomplete="off">
+                <select class="form-select form-select-sm" id="bills-type" aria-label="类型">
+                  <option value="">全部类型</option>
+                  <option value="expense">支出</option>
+                  <option value="income">收入</option>
+                  <option value="transfer">转账</option>
+                </select>
+                <select class="form-select form-select-sm" id="bills-account" aria-label="账户">
+                  <option value="">全部账户</option>
+                </select>
+                <input class="form-control form-control-sm" id="bills-date-from" type="date" aria-label="开始日期">
+                <input class="form-control form-control-sm" id="bills-date-to" type="date" aria-label="结束日期">
+                <input class="form-control form-control-sm" id="bills-amount-min" type="number" step="0.01"
+                       placeholder="金额 ≥" aria-label="最小金额">
+                <input class="form-control form-control-sm" id="bills-amount-max" type="number" step="0.01"
+                       placeholder="金额 ≤" aria-label="最大金额">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="bills-reset-btn">重置</button>
+              </div>
+              <div class="bills-summary" id="bills-summary">共 0 笔</div>
+            </div>
+
+            <div class="panel bills-table-panel">
+              <div class="table-responsive bills-table-wrap">
+                <table class="table bills-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" class="bills-col-date">日期</th>
+                      <th scope="col">时间</th>
+                      <th scope="col">类型</th>
+                      <th scope="col">分类</th>
+                      <th scope="col">账户</th>
+                      <th scope="col" class="text-end">金额</th>
+                      <th scope="col" class="text-end">余额</th>
+                      <th scope="col">备注</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bills-tbody">
+                    <tr><td colspan="8" class="empty-cell">正在加载…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+        </div>
       </section>
 
       <!-- ============ 我的 ============ -->
@@ -506,6 +580,38 @@
         </div>
         </div>
       </section>
+
+      <!-- ============ 帮助弹窗（v0.10：悬浮球问号入口） ============ -->
+      <div class="modal fade help-modal" id="help-modal" tabindex="-1" aria-labelledby="help-modal-title" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="help-modal-title">帮助与快捷键</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <h6 class="help-section-title">快捷键</h6>
+              <ul class="help-list">
+                <li><kbd>N</kbd> 快速记一笔</li>
+                <li><kbd>Ctrl</kbd> + <kbd>K</kbd> 聚焦全局搜索</li>
+                <li><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 在 AI 快记 / 气泡输入里发送</li>
+                <li><kbd>Esc</kbd> 关闭当前弹窗</li>
+                <li><kbd>?</kbd> 打开本帮助</li>
+              </ul>
+              <h6 class="help-section-title">功能速览</h6>
+              <ul class="help-list">
+                <li><strong>AI 快记</strong>：一句话记账、记借贷或加联系人；「帮同事代买咖啡 30」会自动挂到联系人名下待报销。</li>
+                <li><strong>悬浮球</strong>：点蓝色钢笔展开普通记账、AI 文本、AI 截图与帮助，3 秒无操作自动收回。</li>
+                <li><strong>账单流</strong>：点年 / 月 / 日表头可折叠，折叠状态会自动记住。</li>
+                <li><strong>资产页</strong>：小眼睛一键隐藏金额，点统计卡看明细，可上传自定义卡片背景图。</li>
+              </ul>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">知道了</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- ============ 回收站弹窗（v0.09.1） ============ -->
       <!-- v0.09.2：统计区明细弹窗（借入 / 借出 / 待报销 / 已报销） -->
@@ -917,7 +1023,7 @@
 </div>
 
 <div class="fab fab-menu" id="fab">
-  <!-- v0.09.2：钢笔主图标 + 向四周展开的三个快捷入口（hover 0.5s 出 Tooltip） -->
+  <!-- v0.10：蓝色钢笔主图标 + 四个快捷入口（普通记账 / AI 文本 / AI 截图占位 / 帮助；hover 0.5s 出 Tooltip） -->
   <div class="fab-actions" id="fab-actions" aria-hidden="true">
     <button class="fab-action" type="button" data-fab-action="record" data-tip="普通记账" aria-label="普通记账">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
@@ -939,6 +1045,14 @@
         <circle cx="8.5" cy="10" r="1.5"></circle>
         <path d="m5 17 4.4-4.2a2 2 0 0 1 2.7.1l2.4 2.3"></path>
         <path d="m14.5 14.5 1.6-1.5a2 2 0 0 1 2.7 0L21 15.5"></path>
+      </svg>
+    </button>
+    <button class="fab-action" type="button" data-fab-action="help" data-tip="帮助与快捷键" aria-label="帮助与快捷键">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"></circle>
+        <path d="M9.4 9.2a2.7 2.7 0 1 1 3.6 2.5c-.7.3-1 .9-1 1.6v.4"></path>
+        <path d="M12 17.2h.01"></path>
       </svg>
     </button>
     <input type="file" id="fab-shot-file" accept="image/*" class="visually-hidden">
@@ -987,7 +1101,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.09.2"></script>
+<script src="/static/script.js?v=0.10.0"></script>
 
 </body>
 </html>

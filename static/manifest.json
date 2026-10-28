@@ -7,8 +7,12 @@
   "dir": "ltr",
   "start_url": "/",
   "scope": "/",
-  "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "display": "window-controls-overlay",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
   "background_color": "#f4f6fb",
   "theme_color": "#2563eb",
   "icons": [
@@ -37,7 +41,12 @@
       "short_name": "记一笔",
       "description": "打开记账弹窗",
       "url": "/?action=new",
-      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/static/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

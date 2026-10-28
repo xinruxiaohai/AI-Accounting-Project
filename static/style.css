@@ -4835,3 +4835,822 @@ body {
     transform: translate(66px, -30px) scale(1);
   }
 }
+/* ==================================================================
+ * v0.10-DEV：终极全量重构
+ * 1) 全局滚动锁定：body 100vh 不滚，导航 / 中栏 / 右栏各自滚
+ * 2) PWA window-controls-overlay：titlebar 安全边距 + 拖拽区
+ * 3) 首页卡片整体缩 20%
+ * 4) 资产页左 4 右 6：左=净资产卡+4 统计卡+账户列表，右=纯流水
+ * 5) 新增「账单」页：年月树 + 高级筛选 + 大表格
+ * 6) 账单流年/月/日三级折叠（状态由 JS 存 localStorage）
+ * 7) 全局气泡系统（右下角，非阻塞）
+ * 8) 悬浮球四向入口 + 帮助弹窗
+ * ================================================================== */
+
+/* ---------- 1. 全局滚动锁定 ---------- */
+html,
+body {
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+.app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+.main {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 内容区本身不滚：每个 page 自己滚（首页例外，两栏各自滚） */
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.page {
+  display: none;
+  min-height: 0;
+}
+
+.page.active {
+  display: block;
+  height: 100%;
+  overflow-y: auto;
+  padding: 24px;
+  scrollbar-gutter: stable;
+}
+
+/* 首页：整页不滚，中栏 / 右栏各自滚 */
+#page-home {
+  padding: 24px;
+}
+
+#page-home.active {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#page-home .dash-grid {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+#page-home .dash-center,
+#page-home .dash-rail {
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 24px;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+/* 账单页自己管理内部滚动 */
+#page-bills {
+  padding: 24px;
+}
+
+#page-bills.active {
+  overflow: hidden;
+}
+
+/* 侧栏导航可滚（品牌区 / 底部固定） */
+.sidebar-nav {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* 自定义滚动条：细一点，深浅色都能看清 */
+.dash-center::-webkit-scrollbar,
+.dash-rail::-webkit-scrollbar,
+.bills-tree::-webkit-scrollbar,
+.bills-table-wrap::-webkit-scrollbar,
+.bill-feed-scroll::-webkit-scrollbar,
+.accounts-panel .account-groups::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dash-center::-webkit-scrollbar-thumb,
+.dash-rail::-webkit-scrollbar-thumb,
+.bills-tree::-webkit-scrollbar-thumb,
+.bills-table-wrap::-webkit-scrollbar-thumb,
+.bill-feed-scroll::-webkit-scrollbar-thumb,
+.accounts-panel .account-groups::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(100, 116, 139, 0.35);
+}
+
+/* ---------- 2. PWA window-controls-overlay 适配 ---------- */
+@media (display-mode: window-controls-overlay) {
+  .topbar {
+    /* 窗口控制按钮占掉的右侧区域让出来，避免按钮被系统按钮压住 */
+    padding-left: max(22px, env(titlebar-area-x, 0px));
+    padding-right: calc(
+      100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100%) + 16px
+    );
+    min-height: env(titlebar-area-height, var(--topbar-h));
+    -webkit-app-region: drag;
+  }
+
+  .topbar-title,
+  .topbar-search,
+  .topbar-actions,
+  .topbar button,
+  .topbar input,
+  .topbar select {
+    -webkit-app-region: no-drag;
+  }
+}
+
+/* ---------- 3. 首页卡片缩 20% ---------- */
+#page-home .dash-grid {
+  gap: 14px;
+}
+
+#page-home .dash-center,
+#page-home .dash-rail {
+  gap: 14px;
+}
+
+#page-home .panel {
+  padding: 17px 18px;
+}
+
+#page-home .hero-card {
+  padding: 19px 21px 18px;
+}
+
+#page-home .hero-main {
+  margin: 8px 0 9px;
+}
+
+#page-home .hero-number {
+  font-size: 42px;
+}
+
+#page-home .hero-currency {
+  font-size: 21px;
+}
+
+#page-home .hero-head,
+#page-home .hero-meta {
+  font-size: 12px;
+}
+
+#page-home .chart-canvas {
+  height: 188px;
+}
+
+#page-home .budget-card {
+  padding: 16px 18px;
+  gap: 18px;
+}
+
+#page-home .budget-ring-wrap {
+  width: 108px;
+  height: 108px;
+}
+
+#page-home .panel-head {
+  padding-bottom: 10px;
+}
+
+#page-home .feed-row {
+  padding: 8px 10px;
+}
+
+/* ---------- 4. 资产页：左 4 右 6 ---------- */
+.assets-split {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 0;
+}
+
+.assets-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.assets-left .assets-hero {
+  min-height: 150px;
+  padding: 18px 18px 16px;
+  border-radius: 16px;
+}
+
+.assets-left .assets-hero-value {
+  font-size: clamp(24px, 2.3vw, 30px);
+}
+
+.asset-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.asset-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+
+.asset-stat:hover {
+  border-color: var(--brand-blue);
+  box-shadow: 0 6px 18px rgba(37, 99, 235, 0.14);
+  transform: translateY(-1px);
+}
+
+.asset-stat-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.asset-stat-value {
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.accounts-panel {
+  min-height: 0;
+}
+
+.accounts-panel .account-groups {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.assets-right {
+  min-width: 0;
+}
+
+.assets-right .bill-feed-scroll {
+  max-height: calc(100vh - 210px);
+}
+
+@media (max-width: 1023.98px) {
+  .assets-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .accounts-panel .account-groups {
+    max-height: none;
+  }
+}
+
+/* ---------- 5. 账单页 ---------- */
+.bills-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 264px) minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+}
+
+.bills-tree-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 15px 12px 12px;
+}
+
+.bills-tree {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.bills-tree-year {
+  margin-bottom: 8px;
+}
+
+.bills-tree-year-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.bills-tree-year-head:hover {
+  background: var(--surface-2);
+}
+
+.bills-tree-year.is-collapsed .bills-tree-months {
+  display: none;
+}
+
+.bills-tree-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-main);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bills-tree-month:hover {
+  background: var(--surface-2);
+}
+
+.bills-tree-month.is-active {
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 var(--brand-blue);
+}
+
+[data-theme="dark"] .bills-tree-month.is-active {
+  background: rgba(37, 99, 235, 0.22);
+  color: #93c5fd;
+}
+
+.bills-tree-month-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bills-tree-month.is-active .bills-tree-month-sub {
+  color: #2563eb;
+}
+
+.bills-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bills-filter-panel {
+  padding: 14px 16px;
+}
+
+.bills-filters {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.4fr) repeat(2, minmax(110px, 0.8fr)) repeat(
+      4,
+      minmax(130px, 1fr)
+    );
+  gap: 8px;
+}
+
+.bills-summary {
+  margin-top: 9px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.bills-summary .plus {
+  color: var(--pos);
+}
+
+.bills-summary .minus {
+  color: var(--neg);
+}
+
+.bills-table-panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.bills-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.bills-table {
+  min-width: 760px;
+  margin-bottom: 0;
+  font-size: 13px;
+}
+
+.bills-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.bills-table tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-faint, var(--line));
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.bills-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+
+.bills-table .bills-col-date,
+.bills-table .bills-col-time {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.bills-table .bills-col-note {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+
+.bills-table .bills-col-amount,
+.bills-table .bills-col-balance {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bills-row-month td {
+  background: var(--surface-3);
+  font-weight: 700;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.bills-row-month .bills-month-caret {
+  display: inline-block;
+  width: 14px;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 1279.98px) {
+  .bills-filters {
+    grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+}
+
+@media (max-width: 1023.98px) {
+  .bills-layout {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+
+  .bills-tree-panel {
+    max-height: 240px;
+  }
+
+  .bills-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---------- 6. 账单流三级折叠 ---------- */
+.feed-year {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 12px 0 2px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.feed-year:hover {
+  background: var(--surface-2);
+}
+
+.feed-month,
+.feed-day {
+  cursor: pointer;
+  user-select: none;
+}
+
+.feed-month:hover,
+.feed-day:hover {
+  background: var(--surface-2);
+}
+
+.feed-caret {
+  display: inline-block;
+  width: 13px;
+  margin-right: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.feed-year-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 7. 全局气泡系统 ---------- */
+.bubble-stack {
+  position: fixed;
+  right: 22px;
+  bottom: 100px;
+  z-index: 1080;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+  width: 328px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+
+.bubble {
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--brand-blue);
+  border-radius: 13px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: auto;
+  transition: opacity 0.28s ease, transform 0.28s ease;
+}
+
+.bubble.is-in {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.bubble.is-out {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.bubble.is-done {
+  border-left-color: #10b981;
+}
+
+.bubble.is-error {
+  border-left-color: #ef4444;
+}
+
+.bubble.is-clickable {
+  cursor: pointer;
+}
+
+.bubble.is-clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.22);
+}
+
+.bubble-icon {
+  flex: 0 0 26px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--brand-blue);
+}
+
+.bubble-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.bubble.is-done .bubble-icon {
+  background: rgba(16, 185, 129, 0.14);
+  color: #059669;
+}
+
+.bubble.is-error .bubble-icon {
+  background: rgba(239, 68, 68, 0.14);
+  color: #dc2626;
+}
+
+.bubble-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.bubble-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.bubble-msg {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+.bubble-msg .bubble-typed::after {
+  content: "▍";
+  margin-left: 1px;
+  color: var(--brand-blue);
+  animation: bubble-caret 0.9s steps(1) infinite;
+}
+
+@keyframes bubble-caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.bubble-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.bubble-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--brand-blue);
+  animation: bubble-bounce 1.1s ease-in-out infinite;
+}
+
+.bubble-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.bubble-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes bubble-bounce {
+  0%,
+  70%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  35% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+.bubble-pause .bubble-progress {
+  animation-play-state: paused;
+}
+
+.bubble-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--brand-blue), #6366f1);
+  border-bottom-left-radius: 13px;
+  border-bottom-right-radius: 13px;
+  opacity: 0.55;
+  animation: bubble-progress 3s linear forwards;
+}
+
+@keyframes bubble-progress {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+[data-theme="dark"] .bubble {
+  background: #1b2536;
+  border-color: #2b3648;
+}
+
+/* ---------- 8. 悬浮球四向 + 帮助弹窗 ---------- */
+.fab-menu.is-open .fab-action[data-fab-action="record"] {
+  transform: translate(-92px, -20px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="ai"] {
+  transform: translate(-34px, -94px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="shot"] {
+  transform: translate(48px, -88px) scale(1);
+}
+
+.fab-menu.is-open .fab-action[data-fab-action="help"] {
+  transform: translate(100px, -18px) scale(1);
+}
+
+/* 边缘图标 tooltip 别飞出屏幕 */
+.fab-action[data-fab-action="help"]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.fab-action[data-fab-action="record"]::after {
+  left: 0;
+  transform: none;
+}
+
+.help-modal .modal-dialog {
+  max-width: 460px;
+}
+
+.help-section-title {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.help-list {
+  margin: 0 0 18px;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.95;
+  color: var(--text-muted);
+}
+
+.help-list kbd {
+  display: inline-block;
+  padding: 0 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-size: 11.5px;
+  font-family: inherit;
+}
+
+@media (max-width: 1023.98px) {
+  .fab-menu.is-open .fab-action[data-fab-action="record"] {
+    transform: translate(-80px, -18px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="ai"] {
+    transform: translate(-30px, -84px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="shot"] {
+    transform: translate(42px, -80px) scale(1);
+  }
+
+  .fab-menu.is-open .fab-action[data-fab-action="help"] {
+    transform: translate(86px, -16px) scale(1);
+  }
+}

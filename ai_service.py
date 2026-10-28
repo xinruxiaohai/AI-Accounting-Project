@@ -68,63 +68,86 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段键名固定为下面 13 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 "" 或 0：
-  action       字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"unknown"（听不懂）
-  amount       数字，金额，必须大于 0，不带货币符号
-  type         记账时只能是 "expense"/"income"/"transfer"；借贷时只能是 "lend"（我借出）/ "borrow"（我借入）
-  category     字符串，记账分类，如 餐饮、交通、购物、工资；不适用时填 ""
-  account      字符串，账户名；用户没提就填空字符串 ""
-  to_account   字符串，仅转账时填转入账户，其余填 ""
-  fee          数字，仅转账手续费，其余填 0
-  date         字符串，格式固定 "YYYY-MM-DD HH:MM"，24 小时制
-  note         字符串，一句话摘要，不超过 30 字
-  contact_name 字符串，借贷对象的姓名
-  identity     字符串，联系人身份/关系，如 亲戚、同学、同事
-  phone        字符串，联系人电话
-  wechat       字符串，联系人微信
-  name         字符串，添加联系人时的姓名
+- 字段键名固定为下面 14 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 ""、0 或 false：
+  action          字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"unknown"（听不懂）
+  amount          数字，金额，必须大于 0，不带货币符号
+  type            记账时只能是 "expense"/"income"/"transfer"；借贷时只能是 "lend"（我借出）/ "borrow"（我借入）
+  category        字符串，记账分类，如 餐饮、交通、购物、工资；不适用时填 ""
+  account         字符串，账户名；用户没提就填空字符串 ""
+  to_account      字符串，仅转账时填转入账户，其余填 ""
+  fee             数字，仅转账手续费，其余填 0
+  date            字符串，格式固定 "YYYY-MM-DD HH:MM"，24 小时制
+  note            字符串，一句话摘要，不超过 30 字
+  is_reimbursable 布尔值，仅记账时用：帮别人代买/给公司垫付、之后要报销时为 true；普通记账填 false
+  contact_name    字符串，借贷对象的姓名；记账且 is_reimbursable=true 时填报销人/垫付对象姓名，没有就填 ""
+  identity        字符串，联系人身份/关系，如 亲戚、同学、同事
+  phone           字符串，联系人电话
+  wechat          字符串，联系人微信
+  name            字符串，添加联系人时的姓名
+
+【金额提取强约束（历史踩坑最多，务必遵守）】
+- 金额只认「带货币单位」或明显在花钱语境里的数字：数字后面紧跟 元 / 块 / ￥ / ¥，或句子里有「花了、买了、付了、垫付、代买、报销、借、还」等动作时代表钱的那个数。
+- 绝不把人名、备注、时间、电话、编号里的数字当金额：
+  「测试乙41215 买了奶茶20元」→ amount 是 20，测试乙41215 是人名，原样保留，绝不拆成 6607712.5 之类；
+  「3月8日买花38元」→ amount 是 38，日期里的 3、8 不是金额；
+  「给小王转500」→ amount 是 500，小王不是数字。
+- 一句话里有多个数字时，取真正要记的那一笔金额；手续费单独填 fee。
+- 人名一律原样保留：不得删字、不得去掉「测试」等前缀、不得把名字里的数字挪进 amount。
 
 【意图判断】
-- action = "record"：用户在记一笔自己的收支或账户转账，例如「昨天打车30」「工资到账8000」。
+- action = "record"：用户在记一笔自己的收支、替别人代买/垫付，或账户转账，例如「昨天打车30」「工资到账8000」「帮同事代买咖啡30」。
 - action = "debt"：用户在和某个人发生借入/借出，例如「借给小王20元」「向小李借了100」。
 - action = "add_contact"：用户只想存一个联系人信息，例如「添加小王，他是亲戚，电话13800000000」。
 - action = "unknown"：闲聊、提问、没有金额也看不出记账/借贷/联系人意图，例如「今天天气不错」「你好」。
-- 一句话同时像记账又像借贷时，以「钱是否给了某个人」为准，选 debt。
+- 一句话同时像记账又像借贷时，以「钱是否借给了某个人、之后要还」为准，选 debt；代买/垫付之后要找对方或公司报销的，仍然选 record 并标 is_reimbursable。
 
 【record 规则】
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
 - 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
 - 时间：今天是 {today}（{weekday}），当前时间 {now}；「昨天/前天/上周五」换算成具体日期；没提时间用 {now}；只提日期时刻填 00:00。
+- 报销（代买/垫付）：用户替别人或公司花钱、之后要收回来时，is_reimbursable 填 true；
+  「帮小明买咖啡30」→ contact_name 是 "小明"；「帮同事代买咖啡30」「给公司垫付打车50 报销」没有具体姓名 → contact_name 留 "";
+  普通自己花钱记账 is_reimbursable 填 false、contact_name 留 ""。
+- 报销和借贷别混淆：之后对方要「还我」的是 debt；我先垫钱、走公司/个人报销流程的是 record + is_reimbursable。
 
 【debt 规则】
 - type：我借给别人 → "lend"；我向别人借 → "borrow"。
 - contact_name 必填，从原句提取人名；姓名必须原样保留、不得删字（如「借给小王20元」→ "小王"）。
-- identity/phone/wechat/name 留空。
+- identity/phone/wechat/name 留空；is_reimbursable 填 false。
 - account 是资金账户，没提填 ""（后端用默认账户）；date 规则同记账。
 
 【add_contact 规则】
 - name 必填；姓名必须原样保留、不得删字，也不要把「测试」这类前缀当废话删掉（如「添加测试阿星，他是同事」→ name 是 "测试阿星"）。
 - identity、phone、wechat 有就填，没有留空。
-- amount 填 0，type 留空字符串，category/account/date/note 等其余字段留空或按格式补 0。
+- amount 填 0，type 留空字符串，is_reimbursable 填 false，category/account/date/note 等其余字段留空或按格式补 0。
 
 【示例】
 用户：昨天打车花了30
-输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
 用户：工资到账 8000
-输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+
+用户：帮同事小明代买咖啡30
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "帮小明代买咖啡", "is_reimbursable": true, "contact_name": "小明", "identity": "", "phone": "", "wechat": "", "name": ""}}
+
+用户：给公司垫付打车50，记得报销
+输出：{{"action": "record", "amount": 50, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "垫付打车报销", "is_reimbursable": true, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+
+用户：测试乙41215 买了奶茶20元
+输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
 用户：借给小王20元
-输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "is_reimbursable": false, "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
 用户：向小李借了100
-输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "is_reimbursable": false, "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": ""}}
 
 用户：添加小王，他是亲戚，电话13800000000
-输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王"}}
+输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "is_reimbursable": false, "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王"}}
 
 用户：今天天气不错
-输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
 """
 
 
@@ -192,6 +215,25 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
+# 模型偶尔把布尔值写成中文/数字字符串，这里一并认，认不出的按 false 处理
+_TRUE_TOKENS = {"true", "1", "yes", "y", "是", "需要", "要", "报销"}
+_FALSE_TOKENS = {"false", "0", "no", "n", "否", "不需要", ""}
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """把模型返回的 is_reimbursable 统一成 Python bool（只认明确真值，其余为 false）。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    token = str(value).strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    return default
+
+
 def _normalize_date(value: Any, now: datetime) -> str:
     raw = _as_text(value)
     if not raw:
@@ -229,6 +271,9 @@ def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
         "fee": fee,
         "date": _normalize_date(payload.get("date"), now),
         "note": _as_text(payload.get("note"))[:50],
+        # 代买 / 垫付标记：只有 record 分支带这两个字段，其余分支后端不会读
+        "is_reimbursable": _as_bool(payload.get("is_reimbursable")),
+        "contact_name": _as_text(payload.get("contact_name"))[:50],
         "formula": "",
     }
 

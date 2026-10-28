@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.09.2-DEV（全站账单流去表格化 + 资产页/悬浮球重构 + 金额语义色，已自测封版）
-当前进度：v0.09.2 已完成四项底层与三项界面重构。全站金额按语义上色（收入绿、支出红、借贷/转账深灰）；首页账单、日历当日明细、资产页流水全部由 <table> 换成 App 列表流（月表头带当月收支汇总 → 日表头省略年份 → 行内左侧灰色时间、中间分类与备注、右侧金额与当时余额快照）；侧栏锁 140px 且导航文字不截断；资产页顶部净资产卡收窄到左 4 成并支持小眼睛隐藏金额、自选背景图（本地 localStorage 缓存，注释留云端同步 TODO），右侧统计四卡紧凑 2×2 并可点开明细弹窗，账户列表改彩色圆标列表流；右下角悬浮球改为蓝色钢笔，点击径向弹出普通记账 / AI 文本快记 / AI 截图识别三个分支，悬停 0.5s 出 Tooltip，3 秒无操作或再点钢笔自动收回；ECharts 增加 resize 防抖。AI 借贷余额联动经真实接口回归确认（借出减、借入加、删除回滚）。下一步进入 v0.10。
+当前版本：v0.10-DEV（AI 流式解析与反馈记忆库 + PWA 骨架 + 账单页 + 全局气泡系统，已自测封版）
+当前进度：v0.10 已完成五组重构。后端 AI 升级为意图路由 + 代买/报销场景（抽出 is_reimbursable 与 contact_name，报销自动关联联系人并记入待报销），新增 /api/records/ai/stream SSE 分阶段推送解析进度，新增 ai_feedback 表与 /api/feedback（错误文本 / AI 结果 / 用户纠正），/admin 增加「AI 反馈与记忆」Tab。全站骨架锁 100vh 内部各自滚动，manifest 改为 window-controls-overlay 并用 env(titlebar-area-*) 让 topbar 避开窗口控制按钮；首页卡片缩小 20%，资产页左 4 成（净资产卡 + 四统计卡）右 6 成纯流水；新增「账单」页：左侧年月树带当月收支，右侧关键词 / 类型 / 账户 / 日期区间 / 金额区间筛选与八列大表格。交互层：金额语义色全局生效（仅收支红绿，借贷转账深色），侧栏点击后强制收起残留 Tooltip，账单流支持年 / 月 / 日三级折叠（localStorage 记忆），资产统计四卡点击弹明细；悬浮球钢笔径向四分支（普通记账 / AI 文本快记 / AI 截图识别占位 / 帮助），3 秒无操作收回，帮助弹窗含快捷键与功能速览。AI 输入框前置正则极速拦截（如「午饭30」无账户自动补「现金」直接入库），其余指令立即关窗并在右下角弹出可并发气泡，走 SSE 打字机与思考动效，3 秒后淡出、悬停或失焦暂停倒计时，成功气泡点击直达详情。下一步进入 v0.11（报销进阶与报表）。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -43,6 +43,8 @@ accounts: name(PK), balance(唯一真相), group_name。
 
 categories: id, name, parent_id (二级分类)。
 
+ai_feedback: id, raw_text(用户原话), parsed(AI 解析 JSON), corrected(用户纠正 JSON), source, status(pending/processed), created_at。
+
 五、核心后端 API 速查
 /api/records (GET/POST/PUT/DELETE)
 /api/accounts (GET/POST/PUT/DELETE)
@@ -50,16 +52,19 @@ categories: id, name, parent_id (二级分类)。
 /api/statistics (GET)
 /api/notifications (GET/POST/PUT/DELETE)
 /api/upload (POST)
-/api/records/ai (POST) AI 意图分流：record / debt / add_contact / unknown。
+/api/records/ai (POST) AI 意图分流：record / debt / add_contact / unknown（兼容旧调用）。
+/api/records/ai/stream (POST) SSE 流式解析：thinking → extracting_amount → resolving_category → saving → done / unknown / error。
+/api/feedback (POST/GET) 与 PUT /api/feedback/<id> AI 反馈记忆：记录原始文本、解析结果、用户纠正，状态 pending / processed。
 PUT /api/records/<id>/reimbursement 报销开关（只改报销字段，不动余额与统计）。
 GET /api/records/trash 回收站列表；PUT /api/records/<id>/restore 恢复；DELETE /api/records/<id>/purge 彻底删除（DELETE /api/records/<id> 现为软删除，余额同步回滚）。
 
 六、下一步行动计划
-当前目标：v0.09.2-DEV 已完成（账单流去表格化、资产页与悬浮球重构、金额语义色与借贷余额回归），进入 v0.10 功能深化。
+当前目标：v0.10-DEV 已完成（AI 流式解析与报销入库、反馈记忆库、PWA 骨架、账单页、全局气泡与四向悬浮球），进入 v0.11 功能深化。
 执行步骤：
-1. 报销进阶：部分报销进度、按报销人筛选账单、报销记录导出。
-2. 数据安全：一键备份 / 恢复（SQLite 导出导入），导出 CSV 增加报销字段。
-3. 报表页：月度/年度趋势与分类占比图表，替代纯文字统计。
-4. 移动端细节与可访问性（焦点顺序、对比度、触控热区）。
-5. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV / v0.09.1-DEV / v0.09.2-DEV 标签。
+1. AI 截图识别：接入视觉模型把账单截图转成结构化记录，复用现有 SSE 气泡链路。
+2. 报销进阶：部分报销进度、按报销人筛选账单、报销记录导出；反馈数据用于纠正 Prompt。
+3. 数据安全：一键备份 / 恢复（SQLite 导出导入），导出 CSV 增加报销字段。
+4. 报表页：月度/年度趋势与分类占比图表，替代纯文字统计。
+5. 移动端细节与可访问性（焦点顺序、对比度、触控热区）。
+6. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV / v0.09.1-DEV / v0.09.2-DEV / v0.10-DEV 标签。
 备注：.env 换 Key 后必须彻底结束旧 Flask 进程再启动，否则旧进程仍持有旧密钥返回 401。

@@ -1,4 +1,5 @@
 import datetime
+import json
 import sqlite3
 from pathlib import Path
 
@@ -444,6 +445,29 @@ def init_db():
                 "CREATE INDEX IF NOT EXISTS idx_records_deleted ON records (deleted_at)"
             )
 
+            # AI 反馈记忆库（v0.10）：AI 解析失败 / 用户纠正的原始文本与结构化结果都留档，
+            # 后台「AI 反馈与记忆」Tab 里逐条看，标成 processed 表示这条已经消化进 Prompt 迭代。
+            # parsed_json / corrected_json 存 JSON 字符串（TEXT），status 只认 pending / processed。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_feedback (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    raw_text       TEXT    NOT NULL,
+                    parsed_json    TEXT,
+                    corrected_json TEXT,
+                    source         TEXT,
+                    status         TEXT    DEFAULT 'pending',
+                    created_at     TEXT    DEFAULT CURRENT_TIMESTAMP,
+                    updated_at     TEXT
+                )
+                """
+            )
+            # 后台默认按状态筛选 + 按时间倒序，状态索引让这个查询不必全表扫
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ai_feedback_status "
+                "ON ai_feedback (status)"
+            )
+
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
         with conn:
             _seed_categories(conn)
@@ -843,11 +867,18 @@ def add_record(
     formula="",
     to_account="",
     fee=0,
+    is_reimbursable=0,
+    reimbursement_contact_id=None,
+    reimbursed_amount=0,
+    total_reimbursement=0,
 ):
     """插入一笔账并联动余额，返回 (新 id, 错误信息)。
 
     写账目和改余额在同一个 conn、同一个事务里，要么都成功要么都回滚。
     转账会先校验两个账户和转出余额，校验不过抛 RecordError，整个事务回滚。
+
+    报销字段是 v0.10 新增的**可选**参数（默认全不报销），老调用方不传时行为完全不变；
+    AI 代买 / 垫付场景由 app.py 在写库时一并带进来，避免「先写普通记录再改报销」两步。
     """
     conn = get_conn()
     try:
@@ -861,8 +892,9 @@ def add_record(
                 """
                 INSERT INTO records
                        (amount, category, category_id, note, date, account, type,
-                        formula, to_account, fee)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        formula, to_account, fee, is_reimbursable,
+                        reimbursement_contact_id, reimbursed_amount, total_reimbursement)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     amount,
@@ -875,6 +907,10 @@ def add_record(
                     formula,
                     to_account,
                     fee,
+                    1 if is_reimbursable else 0,
+                    reimbursement_contact_id,
+                    round(float(reimbursed_amount), 2),
+                    round(float(total_reimbursement), 2),
                 ),
             )
             _apply_effects(
@@ -1698,5 +1734,120 @@ def delete_notification(notify_id):
         with conn:
             cursor = conn.execute("DELETE FROM notifications WHERE id = ?", (notify_id,))
         return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------- AI 反馈记忆库（v0.10） ----------------
+
+# 反馈状态只有两种：pending=待消化，processed=已经处理（比如已固化进 Prompt 或已人工纠正）
+FEEDBACK_STATUSES = ("pending", "processed")
+
+
+def _row_to_feedback(row):
+    return {
+        "id": row["id"],
+        "raw_text": row["raw_text"],
+        "parsed_json": row["parsed_json"],
+        "corrected_json": row["corrected_json"],
+        "source": row["source"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _dump_feedback_json(value):
+    """parsed / corrected 既允许存 JSON 字符串，也允许直接传 dict/list，统一序列化成文本。
+
+    None 和空字符串都落成 NULL，方便前端区分「这条没有解析结果」。
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def add_feedback(raw_text, parsed_json=None, corrected_json=None, source=None):
+    """记一条 AI 反馈，返回入库后的完整字典（含 id）。raw_text 为空直接抛 RecordError。"""
+    raw_text = (raw_text or "").strip()
+    if not raw_text:
+        raise RecordError("反馈原文不能为空")
+    if len(raw_text) > 2000:
+        raise RecordError("反馈原文最多 2000 个字符")
+
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO ai_feedback (raw_text, parsed_json, corrected_json, source) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    raw_text,
+                    _dump_feedback_json(parsed_json),
+                    _dump_feedback_json(corrected_json),
+                    (source or "").strip() or None,
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, raw_text, parsed_json, corrected_json, source, status, "
+            "       created_at, updated_at FROM ai_feedback WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_feedback(row)
+    finally:
+        conn.close()
+
+
+def list_feedback(status=None):
+    """列出反馈，新的在前；status 传 pending / processed 时按状态过滤。"""
+    sql = (
+        "SELECT id, raw_text, parsed_json, corrected_json, source, status, "
+        "       created_at, updated_at FROM ai_feedback"
+    )
+    params = ()
+    if status:
+        sql += " WHERE status = ?"
+        params = (status,)
+    sql += " ORDER BY id DESC"
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return [_row_to_feedback(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def update_feedback_status(feedback_id, status):
+    """改一条反馈的状态，返回 (改后的字典, 错误信息)。
+
+    状态只认 pending / processed；id 不存在返回 (None, None)，由 app.py 转 404。
+    """
+    status = (status or "").strip()
+    if status not in FEEDBACK_STATUSES:
+        return None, "status 只能是 pending / processed"
+
+    conn = get_conn()
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM ai_feedback WHERE id = ?", (feedback_id,)
+        ).fetchone()
+        if exists is None:
+            return None, None
+        with conn:
+            conn.execute(
+                "UPDATE ai_feedback SET status = ?, updated_at = datetime('now','localtime') "
+                "WHERE id = ?",
+                (status, feedback_id),
+            )
+        row = conn.execute(
+            "SELECT id, raw_text, parsed_json, corrected_json, source, status, "
+            "       created_at, updated_at FROM ai_feedback WHERE id = ?",
+            (feedback_id,),
+        ).fetchone()
+        return _row_to_feedback(row), None
     finally:
         conn.close()

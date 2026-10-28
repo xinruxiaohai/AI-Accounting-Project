@@ -213,6 +213,98 @@
     .admin-toast.is-error { background: #dc2626; }
     .admin-toast.is-show { opacity: 1; transform: translateY(0); }
     .admin-count { font-size: 12px; color: var(--text-dim); }
+    /* ---------- Tab 切换（v0.10：通知发布 / AI 反馈与记忆） ---------- */
+    .admin-tabs {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 20px;
+    }
+    .admin-tab {
+      border: 0;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+    .admin-tab:hover { color: var(--text-strong); }
+    .admin-tab.is-active {
+      color: var(--brand-blue);
+      border-bottom-color: var(--brand-blue);
+    }
+    /* ---------- AI 反馈表 ---------- */
+    .feedback-scroll {
+      max-height: 620px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+    }
+    .feedback-table {
+      width: 100%;
+      table-layout: fixed;
+      margin: 0;
+      font-size: 13px;
+      border-collapse: collapse;
+    }
+    .feedback-table th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 9px 12px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-align: left;
+      white-space: nowrap;
+    }
+    .feedback-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      color: var(--text-main);
+    }
+    .feedback-table tr:last-child td { border-bottom: 0; }
+    .feedback-table tbody tr:hover { background: var(--surface-2); }
+    .feedback-raw {
+      font-weight: 600;
+      color: var(--text-strong);
+      word-break: break-word;
+      line-height: 1.6;
+    }
+    .feedback-json {
+      margin: 0;
+      max-height: 88px;
+      overflow: auto;
+      padding: 6px 8px;
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--text-muted);
+      font-size: 11px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .feedback-meta {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+      line-height: 1.7;
+    }
+    .feedback-status {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .feedback-status.is-pending { color: #b45309; background: #fef3c7; }
+    .feedback-status.is-processed { color: #15803d; background: #dcfce7; }
+    .feedback-source { font-size: 11px; color: var(--text-dim); }
   </style>
 </head>
 <body>
@@ -225,6 +317,14 @@
       <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
     </header>
 
+    <div class="admin-tabs" role="tablist">
+      <button type="button" class="admin-tab is-active" role="tab" data-tab="notices"
+              aria-selected="true">通知发布</button>
+      <button type="button" class="admin-tab" role="tab" data-tab="feedback"
+              aria-selected="false">AI 反馈与记忆</button>
+    </div>
+
+    <section id="pane-notices">
     <div class="admin-grid">
       <!-- 左：发布表单 -->
       <section>
@@ -290,6 +390,32 @@
         </div>
       </section>
     </div>
+    </section>
+
+    <!-- AI 反馈与记忆（v0.10）：看 /api/feedback 列表，把处理完的反馈标记掉 -->
+    <section id="pane-feedback" hidden>
+      <div class="admin-card">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+          <h2 class="admin-card-title mb-0">
+            AI 反馈与记忆
+            <span class="badge text-bg-secondary" id="feedback-total">0</span>
+          </h2>
+          <div class="d-flex align-items-center gap-2">
+            <select id="feedback-filter" class="form-select form-select-sm" style="width:auto">
+              <option value="">全部状态</option>
+              <option value="pending">待处理</option>
+              <option value="processed">已处理</option>
+            </select>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="feedback-refresh">刷新</button>
+          </div>
+        </div>
+        <p class="admin-hint mb-3">
+          AI 解析错的句子和人工纠正结果都记在这里，状态 pending 的可以固化进 Prompt；
+          每行点「标记已处理」即 PUT /api/feedback/&lt;id&gt; 改状态。
+        </p>
+        <div id="feedback-list"></div>
+      </div>
+    </section>
   </main>
 
   <div class="admin-toast" id="admin-toast"></div>
@@ -564,6 +690,174 @@
       });
 
       loadList();
+    })();
+  </script>
+
+  <script>
+    /* ---------- Tab 切换 + AI 反馈与记忆（v0.10） ---------- */
+    (function () {
+      "use strict";
+
+      var $ = function (id) { return document.getElementById(id); };
+      var state = { items: [], loaded: false, loading: false };
+
+      function toast(message, isError) {
+        var box = $("admin-toast");
+        box.textContent = message;
+        box.classList.toggle("is-error", !!isError);
+        box.classList.add("is-show");
+        window.clearTimeout(toast._timer);
+        toast._timer = window.setTimeout(function () {
+          box.classList.remove("is-show");
+        }, 2600);
+      }
+
+      function escapeHtml(text) {
+        return String(text == null ? "" : text)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function request(url, options) {
+        return fetch(url, options).then(function (response) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            if (!response.ok) {
+              throw new Error(data.error || "请求失败（" + response.status + "）");
+            }
+            return data;
+          });
+        });
+      }
+
+      /* ---------- Tab 切换 ---------- */
+
+      var tabs = Array.prototype.slice.call(document.querySelectorAll(".admin-tab"));
+
+      function switchTab(name) {
+        tabs.forEach(function (tab) {
+          var active = tab.getAttribute("data-tab") === name;
+          tab.classList.toggle("is-active", active);
+          tab.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        $("pane-notices").hidden = name !== "notices";
+        $("pane-feedback").hidden = name !== "feedback";
+        // 第一次进反馈 Tab 才拉数据，避免每次进 /admin 都多打一个请求
+        if (name === "feedback" && !state.loaded) { loadFeedback(); }
+      }
+
+      tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          switchTab(tab.getAttribute("data-tab"));
+        });
+      });
+
+      /* ---------- 反馈列表 ---------- */
+
+      // 解析结果可能是 JSON 字符串，也可能是历史脏数据；尽量格式化成缩进 JSON，
+      // 实在解析不了就原样展示，绝不让列表因为一条脏数据崩掉。
+      function formatJson(value) {
+        if (value == null || value === "") { return "—"; }
+        if (typeof value === "object") { return JSON.stringify(value, null, 2); }
+        try {
+          return JSON.stringify(JSON.parse(value), null, 2);
+        } catch (error) {
+          return String(value);
+        }
+      }
+
+      function renderFeedback() {
+        var box = $("feedback-list");
+        $("feedback-total").textContent = String(state.items.length);
+        if (!state.items.length) {
+          box.innerHTML = '<div class="admin-empty">还没有 AI 反馈，记账页解析出错时记一条，这里就能看到。</div>';
+          return;
+        }
+        box.innerHTML =
+          '<div class="feedback-scroll"><table class="feedback-table">' +
+            "<colgroup>" +
+              '<col style="width:24%"><col style="width:26%"><col style="width:26%">' +
+              '<col style="width:12%"><col style="width:12%">' +
+            "</colgroup>" +
+            "<thead><tr>" +
+              "<th>原始文本</th><th>解析 JSON</th><th>纠正 JSON</th><th>状态 / 时间</th><th>操作</th>" +
+            "</tr></thead><tbody>" +
+            state.items.map(function (item) {
+              var pending = item.status === "pending";
+              var created = item.created_at ? String(item.created_at).slice(0, 16) : "";
+              var processed = item.updated_at ? String(item.updated_at).slice(0, 16) : "";
+              return (
+                '<tr data-id="' + item.id + '">' +
+                  "<td>" +
+                    '<div class="feedback-raw">' + escapeHtml(item.raw_text) + "</div>" +
+                    (item.source ? '<div class="feedback-source">来源：' + escapeHtml(item.source) + "</div>" : "") +
+                  "</td>" +
+                  '<td><pre class="feedback-json">' + escapeHtml(formatJson(item.parsed_json)) + "</pre></td>" +
+                  '<td><pre class="feedback-json">' + escapeHtml(formatJson(item.corrected_json)) + "</pre></td>" +
+                  "<td>" +
+                    '<span class="feedback-status ' + (pending ? "is-pending" : "is-processed") + '">' +
+                      (pending ? "待处理" : "已处理") +
+                    "</span>" +
+                    '<div class="feedback-meta">#' + item.id + " · " + escapeHtml(created) +
+                    (!pending && processed ? "<br>处理于 " + escapeHtml(processed) : "") +
+                    "</div>" +
+                  "</td>" +
+                  "<td>" +
+                    (pending
+                      ? '<button type="button" class="btn btn-sm btn-outline-primary" data-process="' + item.id + '">标记已处理</button>'
+                      : '<span class="feedback-meta">—</span>') +
+                  "</td>" +
+                "</tr>"
+              );
+            }).join("") +
+          "</tbody></table></div>";
+      }
+
+      function loadFeedback() {
+        if (state.loading) { return Promise.resolve(); }
+        state.loading = true;
+        var status = $("feedback-filter").value;
+        var url = "/api/feedback" + (status ? "?status=" + encodeURIComponent(status) : "");
+        return request(url)
+          .then(function (data) {
+            state.items = data.items || [];
+            state.loaded = true;
+            renderFeedback();
+          })
+          .catch(function (error) {
+            $("feedback-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () { state.loading = false; });
+      }
+
+      $("feedback-refresh").addEventListener("click", function () {
+        loadFeedback().then(function () { toast("反馈列表已刷新"); });
+      });
+
+      $("feedback-filter").addEventListener("change", function () { loadFeedback(); });
+
+      $("feedback-list").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-process]");
+        if (!button) { return; }
+        var id = button.getAttribute("data-process");
+        button.disabled = true;
+        request("/api/feedback/" + id, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "processed" }),
+        })
+          .then(function () {
+            toast("反馈 #" + id + " 已标记为已处理");
+            return loadFeedback();
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            toast(error.message, true);
+          });
+      });
     })();
   </script>
 </body>
