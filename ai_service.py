@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -37,9 +38,15 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
 
 MODEL = "glm-4-flash"
+VISION_MODEL = "glm-4v-flash"
 BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 API_KEY_ENV = "ZHIPU_API_KEY"
 REQUEST_TIMEOUT = 20.0
+# 视觉模型要先把图片编码进上下文，明显比纯文本慢，单独给更长的超时
+VISION_TIMEOUT = 45.0
+# 智谱多模态接口对单张图片有大小限制，前端会先压缩到 1600px / JPEG 0.82，这里再兜一层
+IMAGE_MAX_BYTES = 5 * 1024 * 1024
+IMAGE_MIME_FALLBACK = "image/jpeg"
 
 ACTIONS = ("record", "debt", "add_contact", "unknown")
 RECORD_TYPES = ("expense", "income", "transfer")
@@ -151,6 +158,52 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 """
 
 
+VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户会给你一张手机截图，可能是微信/支付宝的支付成功页、账单列表、超市小票、银行短信或聊天转账记录。
+
+【任务】判断这张图是不是一笔可以记账的交易（消费、收入、转账、借贷），是就抽取字段，只输出一个 JSON 对象；不是账单（聊天闲谈、表情包、风景照、无关页面）就输出 {"action": "unknown"}。
+
+【输出要求】
+- 不要 Markdown 代码块、不要解释、不要多余文字。
+- 字段键名固定为下面 14 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
+  action          字符串，只能是 "record"（记账）、"debt"（借贷）、"unknown"（不是账单/看不清）
+  amount          数字，本笔交易金额，必须大于 0，不带货币符号
+  type            只能是 "expense"（支出）、"income"（收入/退款）、"transfer"（账户转账）
+  category        字符串，分类，如 餐饮、交通、购物、居住
+  account         字符串，付款账户名，截图能看出来才填，否则 ""
+  to_account      字符串，仅转账时填转入账户
+  fee             数字，手续费，没有填 0
+  date            字符串，交易时间，格式固定 "YYYY-MM-DD HH:MM"；只有日期填 00:00
+  note            字符串，商户/商品名 + 一句话摘要，不超过 30 字
+  is_reimbursable 布尔值，这张图是帮别人代付/垫付、之后要报销时为 true
+  contact_name    字符串，借贷对象或垫付对象姓名，没有填 ""
+  identity        字符串，联系人身份，如 同事、同学
+  phone           字符串，联系人电话，没有填 ""
+  wechat          字符串，联系人微信，没有填 ""
+  name            字符串，添加联系人时的姓名，没有填 ""
+
+【金额识别强约束】
+- 只取「实付/支付/消费/收款/转账」那笔交易金额，例如「-30.00」「实付 ¥30.00」「收款 100.00」。
+- 绝不把余额、优惠券面额、订单号、手机号、时间（12:31）、日期（2026-10-28）里的数字当金额。
+- 图里有多个金额时，取本次实际交易的那一笔；手续费单独放进 fee。
+- 看不清或没有明确金额 → 输出 {"action": "unknown"}，绝不猜。
+
+【类型与分类】
+- 「支付/付款/消费/买了」→ expense；「收款/退款/红包/工资到账」→ income（金额填正数）；「转给/转到」→ transfer。
+- 分类按商户判断：麦当劳/奶茶/咖啡/外卖/餐厅 → 餐饮；滴滴/地铁/公交/加油 → 交通；超市/淘宝/京东/日用品 → 购物；房租/水电/话费 → 居住；判断不了填 "其他"。
+- account：截图里出现的付款方式（零钱、余额、招商银行储蓄卡、花呗）能映射成账户名就填，判断不了填空字符串。
+
+【时间】
+- 截图里有交易时间就用它；只有日期填 00:00；完全没有时间用当前时间 __NOW__（今天 __TODAY__）。
+
+【示例】
+截图内容：支付成功 / 麦当劳 / 实付 ¥30.00 / 2026-10-28 12:31
+输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳 午餐", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}
+
+截图内容：一张猫的照片
+输出：{"action": "unknown"}
+"""
+
+
 class AIServiceError(Exception):
     """AI 解析失败：密钥缺失、网络错误、模型输出不是合法 JSON，都走这里。"""
 
@@ -160,14 +213,14 @@ def is_configured() -> bool:
     return bool(os.getenv(API_KEY_ENV, "").strip())
 
 
-def _client() -> OpenAI:
+def _client(timeout: float = REQUEST_TIMEOUT) -> OpenAI:
     key = os.getenv(API_KEY_ENV, "").strip()
     if not key:
         raise AIServiceError(
             "未配置 ZHIPU_API_KEY：请在项目根目录的 .env 里写入 ZHIPU_API_KEY=你的密钥，"
             "保存后重启 Flask 再试"
         )
-    return OpenAI(api_key=key, base_url=BASE_URL, timeout=REQUEST_TIMEOUT)
+    return OpenAI(api_key=key, base_url=BASE_URL, timeout=timeout)
 
 
 def _build_messages(text: str, now: datetime) -> list[dict[str, str]]:
@@ -384,3 +437,103 @@ def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
     if result["action"] != "record":
         raise AIServiceError("这句话不是记账指令，当前接口只支持记账")
     return {key: value for key, value in result.items() if key != "action"}
+
+
+def _split_data_url(image: str) -> tuple[str, str]:
+    """允许前端直接传 dataURL 或裸 Base64，返回 (裸 base64, mime)。"""
+    data = (image or "").strip()
+    mime = IMAGE_MIME_FALLBACK
+    if data.startswith("data:"):
+        header, _, data = data.partition(",")
+        if ";" in header:
+            mime = header[5:].split(";")[0].strip() or mime
+    return data.strip(), mime
+
+
+def _build_vision_messages(
+    image_base64: str, mime: str, now: datetime
+) -> list[dict[str, Any]]:
+    # 提示词里本身就有大量 JSON 花括号，不能用 str.format，改用占位符替换
+    prompt = VISION_PROMPT.replace(
+        "__TODAY__", now.strftime("%Y-%m-%d")
+    ).replace("__NOW__", now.strftime("%Y-%m-%d %H:%M"))
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:%s;base64,%s" % (mime, image_base64),
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+
+def parse_image(
+    image_base64: str,
+    mime: str = IMAGE_MIME_FALLBACK,
+    now: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """识别一张账单截图，返回与 parse_intent 同结构的字段；不是账单返回 {"action": "unknown"}。
+
+    前端已用 Canvas 压缩过图片，这里仍然做一次大小与 Base64 合法性校验，
+    避免把明显超限的图片发给视觉模型导致超时或 413。
+    """
+    raw_base64, detected_mime = _split_data_url(image_base64)
+    mime = detected_mime or mime or IMAGE_MIME_FALLBACK
+    if not raw_base64:
+        raise AIServiceError("没有收到图片数据，请重新选择截图")
+
+    try:
+        image_bytes = base64.b64decode(raw_base64, validate=False)
+    except Exception:
+        raise AIServiceError("图片数据不是合法的 Base64，请重新选择截图")
+    if not image_bytes:
+        raise AIServiceError("图片内容为空，请重新选择截图")
+    if len(image_bytes) > IMAGE_MAX_BYTES:
+        raise AIServiceError(
+            "图片太大（%.1fMB，上限 %.0fMB），请裁剪或压缩后重试"
+            % (len(image_bytes) / 1024.0 / 1024.0, IMAGE_MAX_BYTES / 1024.0 / 1024.0)
+        )
+    if not mime.startswith("image/"):
+        raise AIServiceError("只支持图片格式，收到的是 %s" % mime)
+
+    moment = now or datetime.now()
+    client = _client(VISION_TIMEOUT)
+    try:
+        completion = client.chat.completions.create(
+            model=VISION_MODEL,
+            messages=_build_vision_messages(raw_base64, mime, moment),
+            temperature=0.1,
+            max_tokens=500,
+        )
+    except Exception as error:
+        raise AIServiceError("调用智谱视觉接口失败：%s" % error)
+
+    try:
+        content = completion.choices[0].message.content
+    except (AttributeError, IndexError):
+        raise AIServiceError("智谱视觉接口返回结构异常")
+
+    if isinstance(content, list):
+        # 个别网关把 content 返回成 [{type: text, text: ...}]
+        content = "".join(
+            part.get("text", "") for part in content if isinstance(part, dict)
+        )
+    if not content:
+        raise AIServiceError("视觉模型没有返回内容，请换一张更清晰的截图")
+
+    try:
+        payload = json.loads(_strip_fence(content))
+    except json.JSONDecodeError as error:
+        raise AIServiceError("视觉模型返回的不是合法 JSON：%s" % error)
+
+    if not isinstance(payload, dict):
+        raise AIServiceError("视觉模型返回的不是 JSON 对象")
+
+    # 复用文本版的归一化：金额校验、日期换算、报销字段都走同一套规则
+    return _normalize_intent(payload, moment)

@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.10.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.0">
 </head>
 <body>
 
@@ -574,6 +574,18 @@
           </div>
         </div>
 
+        <!-- ============ 相册：v0.11 截图记账的原图凭证 ============ -->
+        <div class="panel album-card" id="album-card">
+          <div class="export-head">
+            <h3>相册</h3>
+            <span class="export-badge">截图凭证</span>
+          </div>
+          <p class="album-hint">截图记账保存的原图都在这里；点图直接打开对应账单，也可以只删图片、保留账单。</p>
+          <div class="profile-actions">
+            <button class="btn btn-light btn-sm" type="button" id="open-album-btn" data-bs-toggle="modal" data-bs-target="#album-modal">查看相册</button>
+          </div>
+        </div>
+
         <!-- ============ 回收站：v0.09 骨架，先占位 ============ -->
         <div class="panel trash-card" id="trash-card">
           <div class="export-head">
@@ -587,6 +599,37 @@
         </div>
         </div>
       </section>
+
+      <!-- ============ 相册弹窗（v0.11）：网格展示所有截图凭证 ============ -->
+      <div class="modal fade album-modal" id="album-modal" tabindex="-1" aria-labelledby="album-modal-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="album-modal-title">相册 · 截图凭证</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="album-intro">点图片打开对应账单；右上角 <strong>×</strong> 只删图片，账单会保留。</p>
+              <div class="album-grid" id="album-grid"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ============ 原图预览（详情里点「查看原图」） ============ -->
+      <div class="modal fade image-preview-modal" id="image-preview-modal" tabindex="-1" aria-labelledby="image-preview-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered modal-xl">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="image-preview-title">账单截图原图</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <img class="image-preview-img" id="image-preview-img" alt="账单截图原图">
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- ============ 帮助弹窗（v0.10：悬浮球问号入口） ============ -->
       <div class="modal fade help-modal" id="help-modal" tabindex="-1" aria-labelledby="help-modal-title" aria-hidden="true">
@@ -608,7 +651,7 @@
               <h6 class="help-section-title">功能速览</h6>
               <ul class="help-list">
                 <li><strong>AI 快记</strong>：一句话记账、记借贷或加联系人；「帮同事代买咖啡 30」会自动挂到联系人名下待报销。</li>
-                <li><strong>悬浮球</strong>：点蓝色钢笔展开普通记账、AI 文本、AI 截图与帮助，3 秒无操作自动收回。</li>
+                <li><strong>悬浮球</strong>：点蓝色钢笔展开普通记账、AI 文本、AI 截图与帮助；点功能菜单不收起，鼠标移开悬浮球 3 秒后自动收回。</li>
                 <li><strong>账单流</strong>：点年 / 月 / 日表头可折叠，折叠状态会自动记住。</li>
                 <li><strong>资产页</strong>：小眼睛一键隐藏金额，点统计卡看明细，可上传自定义卡片背景图。</li>
               </ul>
@@ -857,6 +900,14 @@
             <p class="reimb-hint" id="reimb-hint">默认全额报销，可改金额；勾选「已报销」后计入已报销统计。</p>
           </div>
           <button class="btn btn-sm btn-warning reimb-save" type="button" id="reimb-save-btn" hidden>保存报销设置</button>
+        </div>
+        <!-- v0.11 截图凭证：这条账目是截图记的，就显示缩略图 + 查看原图 -->
+        <div class="detail-image" id="detail-image" hidden>
+          <span class="detail-image-label">截图凭证</span>
+          <button class="detail-image-btn" type="button" id="detail-image-btn" title="查看原图">
+            <img class="detail-image-thumb" id="detail-image-thumb" alt="账单截图缩略图">
+            <span class="detail-image-tip">查看原图</span>
+          </button>
         </div>
       </div>
       <div class="modal-footer">
@@ -1108,7 +1159,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.10.2"></script>
+<script src="/static/script.js?v=0.11.0"></script>
 
 </body>
 </html>

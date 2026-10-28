@@ -301,3 +301,11 @@ v0.10.2-DEV 2026-10-28 真实浏览器布局抢救：资产页高度链 / 图表
 
 
 补充修复 3（同日）：资产页左栏滚动层错位。原先 `overflow-y:auto` 加在 `.assets-left`（整列）上，账户一多就是整列一起滚、净资产卡和统计卡被顶走，面板本身也没有真正受限高度。改为标准高度链：`#page-assets .assets-left` 用 `display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden`；`.assets-hero`/`.asset-stats` 设 `flex:0 0 auto` 不被压缩；`.accounts-panel` 设 `flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden`；真正滚动的是内部 `.account-groups`（`flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain`），`.panel-head` 固定不滚。1440/1920/1366/1200 四档实测：账户列表 scrollHeight 1513、可视 491/571/259/391，滚动位移 1022/942/1254/1122，左栏自身滚动位移恒为 0，净资产卡 150px、统计卡 157px 始终不被压，滚动到底部最后一个账户完整可见；<1024 单列时回退为页面滚动 + 列表 60vh 上限。
+
+v0.11-DEV 2026-10-28 AI 截图记账闭环：视觉模型解析 + 图片持久化 + 相册与悬浮球交互
+
+本版把「截图记账」从占位提示做成完整闭环。后端 ai_service 增加 parse_image：图片以 Base64 dataURL 塞进多模态 content 数组，交给 glm-4v-flash，配一份与文本版同约束的视觉 Prompt（金额只取实付、分类按商户、时间按小票，非账单返回 unknown），模型返回严格 JSON 后复用文本版的归一化与字段校验。app.py 新增 POST /api/records/ai/image：校验并解码 Base64（限制 5MB）→ 调视觉模型 → 命中 record 时复用原有意图分流入库 → 把前端压缩后的图片写入 static/uploads/ 并把路径回填 records.image_path（新增列，走既有 PRAGMA 迁移）；未知/非账单返回 422，图片解析失败 502。同时补 GET /api/records/images 相册列表与 DELETE /api/records/<id>/image 双删（清空 image_path 并删本地文件，账目本身保留）。
+
+前端把悬浮球【截图】换成真实文件选择：Canvas 按最长边 800px 等比缩放、白底转 JPEG（质量 0.82）再上传，避免大图超时；上传全程复用非阻塞气泡，先显示「正在识别截图…」，成功后标题「截图记账成功」并带 recordId 可点击直达详情，失败弹红色「无法识别该截图」。账单详情在有 image_path 时多一块「截图凭证」缩略图，点开走统一的「查看原图」预览弹窗；「我的」页新增相册卡片，弹窗以三列网格展示所有带图账目，点缩略图先收起相册再开对应账单详情，右上角删除按钮同时清库与删本地文件。悬浮球收回逻辑重写：点钢笔展开后不设倒计时，点菜单功能也保持展开，只有鼠标离开悬浮球及全部子图标范围才启动 3 秒计时，移回立即取消；子图标的文字提示统一改到图标左侧竖排居中，彻底避开主球与屏幕右/上边缘。
+
+踩坑与验证：视觉 Prompt 里自带 JSON 花括号，若用 str.format 注入当前时间会抛 KeyError(action)，改成占位符 replace；Base64 解码用逐字节 decode 会因跨 chunk 断开 UTF-8 而报错，改为一次性解码并只做长度/前缀校验；前端相册项的角标按 data-album-open 挂在按钮上，测试若按 data-record-id 取会拿不到，补了 item 级 data-record-id 才统一。真实 Chrome（headless=new）E2E 断言 31/31 通过：悬浮球展开 4.2 秒不收回、四子图标圆形中心距 61px 且全在视口内、提示居中在图标左侧且不压主球、选中 1600x1022 的图后压缩为 800x511、账目落库 amount 30/餐饮/expense/image_path 且文件在 uploads、成功气泡可点、相册网格出现 ¥30.00、详情显示截图凭证、原图预览同图、删图后账目仍在而本地文件消失、移出 3 秒收回且移回取消倒计时、页面无 JS 报错；后端脚本断言识别/落盘/相册/双删/非账单 422/坏 Base64 400 全通过，测试账目全部清理、余额与 uploads 回基线。

@@ -467,12 +467,15 @@ function bindEscClose(modalElement, instance) {
 
 // 10 秒还没回来就当超时，给用户一个明确提示，而不是让按钮一直转圈
 const REQUEST_TIMEOUT_MS = 10000;
+// 截图识别要等视觉模型（后端最长 45 秒），单独给更宽的超时
+const SHOT_REQUEST_TIMEOUT_MS = 90000;
 
-async function api(path, options) {
+async function api(path, options, timeoutMs) {
+  const waitMs = Number(timeoutMs) || REQUEST_TIMEOUT_MS;
   const controller = new AbortController();
   const timer = window.setTimeout(function () {
     controller.abort();
-  }, REQUEST_TIMEOUT_MS);
+  }, waitMs);
 
   let response;
   try {
@@ -482,7 +485,7 @@ async function api(path, options) {
     );
   } catch (error) {
     if (error && error.name === "AbortError") {
-      throw new Error("请求超时（10 秒），请检查网络后重试");
+      throw new Error("请求超时（" + Math.round(waitMs / 1000) + " 秒），请检查网络后重试");
     }
     if (error instanceof TypeError) {
       throw new Error("网络连接失败，请确认后端服务已启动");
@@ -526,6 +529,8 @@ const state = {
   reimbSummary: null,
   debtSummary: null,
   trashRecords: [],
+  // v0.11 相册：带截图凭证的账目（按 id 倒序）
+  albumRecords: [],
   editingId: null,
   presetAccount: "",
   // 日历：模式、当前年月、选中的某一天、日历专用的全量账单（不受账户筛选影响）
@@ -553,6 +558,8 @@ let recordModal = null;
 let accountModal = null;
 let categoryModal = null;
 let recordDetailModal = null;
+let albumModal = null;
+let imagePreviewModal = null;
 
 /* ==================== 金额 / 公式 ==================== */
 
@@ -3615,6 +3622,7 @@ function openRecordDetail(recordId) {
     $("detail-body").innerHTML = buildDetailBody(record);
   }
   renderReimbBlock(record);
+  renderDetailImage(record);
   if ($("record-detail-title")) {
     $("record-detail-title").textContent = "账单详情 #" + record.id;
   }
@@ -3967,6 +3975,8 @@ function saveBudget() {
 /* ==================== 右下角悬浮球（钢笔 + 三向菜单，v0.09.2） ==================== */
 
 let fabAutoTimer = null;
+// 鼠标离开悬浮球区域后，等这么久自动收回（v0.11：只有离开才开始计时）
+const FAB_AUTO_CLOSE_MS = 3000;
 
 /** 悬浮球不再承载预算面板（预算改由 #budget-btn 弹窗管理），保留函数兼容旧调用点 */
 function renderFab() {
@@ -3986,7 +3996,8 @@ function openFab() {
   if (ball) {
     ball.setAttribute("aria-expanded", "true");
   }
-  scheduleFabAutoClose();
+  // v0.11：点开不再设时限，只有鼠标移出悬浮球区域才由 mouseleave 启动倒计时
+  window.clearTimeout(fabAutoTimer);
 }
 
 function closeFab() {
@@ -4002,12 +4013,12 @@ function closeFab() {
   }
 }
 
-/** 点开菜单后 3 秒内没有任何继续操作，自动收回 */
+/** 鼠标离开悬浮球（含所有子图标）后才开始 3 秒倒计时；移回由 mouseenter 取消 */
 function scheduleFabAutoClose() {
   window.clearTimeout(fabAutoTimer);
   fabAutoTimer = window.setTimeout(function () {
     closeFab();
-  }, 3000);
+  }, FAB_AUTO_CLOSE_MS);
 }
 
 function toggleFab() {
@@ -4024,7 +4035,7 @@ function toggleFab() {
 
 /** 三个分支：普通记账 / AI 文本快记 / AI 截图识别（截图识别入口先占位） */
 function handleFabAction(action) {
-  closeFab();
+  // v0.11：点了功能菜单也保持展开，等鼠标移开悬浮球才开始 3 秒倒计时
   if (action === "record") {
     openRecordModal();
     return;
@@ -4046,13 +4057,261 @@ function handleFabAction(action) {
 }
 
 function onFabShotPicked(event) {
-  const file = event.target.files && event.target.files[0];
+  const input = event.target;
+  const file = input.files && input.files[0];
   if (!file) {
     return;
   }
-  toast("截图识别将在下一版接入，已选中：" + file.name, "success");
-  event.target.value = "";
+  // 立刻清空，同一张图再选一次也能触发 change
+  input.value = "";
+  if (!/^image\//.test(String(file.type || ""))) {
+    toast("只能选图片文件（jpg / png / webp）", "error");
+    return;
+  }
+  uploadShotForAi(file);
 }
+
+/** 用 Canvas 把用户选的图等比缩到最长边 800px（小图不放大） */
+function compressImageFile(file) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onerror = function () {
+      reject(new Error("读取图片失败，请重新选择"));
+    };
+    reader.onload = function () {
+      const image = new Image();
+      image.onerror = function () {
+        reject(new Error("这张图片打不开，请换一张截图"));
+      };
+      image.onload = function () {
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        if (!width || !height) {
+          reject(new Error("图片尺寸异常，请换一张截图"));
+          return;
+        }
+        // 等比缩放，只缩不放
+        const scale = Math.min(1, SHOT_MAX_SIDE / Math.max(width, height));
+        const targetWidth = Math.max(1, Math.round(width * scale));
+        const targetHeight = Math.max(1, Math.round(height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+        const context = canvas.getContext("2d");
+        if (!context) {
+          reject(new Error("当前浏览器不支持图片压缩，请换用 Chrome / Edge"));
+          return;
+        }
+        // JPEG 没有透明通道：先铺白底，否则截图里的透明区域会变成黑块
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, targetWidth, targetHeight);
+        context.drawImage(image, 0, 0, targetWidth, targetHeight);
+        try {
+          resolve({
+            dataUrl: canvas.toDataURL("image/jpeg", SHOT_JPEG_QUALITY),
+            mime: "image/jpeg",
+            width: targetWidth,
+            height: targetHeight,
+          });
+        } catch (error) {
+          reject(new Error("图片压缩失败，请换一张截图"));
+        }
+      };
+      image.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// 压缩后的最长边：800px 足够认清账单文字，又能把几 MB 的原图压到几十 KB
+const SHOT_MAX_SIDE = 800;
+const SHOT_JPEG_QUALITY = 0.82;
+
+async function uploadShotForAi(file) {
+  // 复用全局气泡：先建立「正在识别截图...」的思考气泡，识别完原地变成成功/失败气泡
+  const bubble = createBubble("shot");
+  if (bubble) {
+    bubbleStatus(bubble, "正在识别截图...");
+  }
+  try {
+    const compressed = await compressImageFile(file);
+    if (bubble) {
+      bubbleStatus(bubble, "正在识别截图（" + compressed.width + "×" + compressed.height + "）...");
+    }
+    const data = await api(
+      "/api/records/ai/image",
+      jsonOptions("POST", { image: compressed.dataUrl, mime: compressed.mime }),
+      SHOT_REQUEST_TIMEOUT_MS
+    );
+    const record = data.record || {};
+    const summary = [money(record.amount), record.category || "其他", record.account || "现金"].join(" · ");
+    if (bubble) {
+      bubbleFinish(bubble, {
+        title: "截图记账成功",
+        message: summary + "，点这里看账单详情",
+        recordId: data.id,
+      });
+    } else {
+      toast("截图记账成功：" + summary, "success");
+    }
+    await refresh();
+    // 相册正开着就顺手刷新，免得用户看到旧图
+    if ($("album-modal") && $("album-modal").classList.contains("show")) {
+      loadAlbum();
+    }
+  } catch (error) {
+    const message = (error && error.message) || "截图识别失败，请重试";
+    if (bubble) {
+      bubbleFinish(bubble, { title: "无法识别该截图", message: message, error: true });
+    } else {
+      toast(message, "error");
+    }
+  }
+}
+
+/* ==================== 相册（v0.11）：所有截图凭证 ==================== */
+
+function recordImageUrl(record) {
+  const path = record && (record.image_url || record.image_path);
+  return path ? String(path) : "";
+}
+
+async function loadAlbum() {
+  const grid = $("album-grid");
+  if (!grid) {
+    return;
+  }
+  grid.innerHTML = '<p class="album-empty">正在读取相册…</p>';
+  try {
+    const data = await api("/api/records/images");
+    state.albumRecords = data && Array.isArray(data.records) ? data.records : [];
+  } catch (error) {
+    grid.innerHTML = '<p class="album-empty">' + escapeHtml(error.message) + "</p>";
+    return;
+  }
+  renderAlbum();
+}
+
+function renderAlbum() {
+  const grid = $("album-grid");
+  if (!grid) {
+    return;
+  }
+  if (!state.albumRecords.length) {
+    grid.innerHTML =
+      '<p class="album-empty">相册还是空的：点右下角钢笔 → 截图，选择小票或支付截图就会自动识别记账，并把原图存在这里。</p>';
+    return;
+  }
+  grid.innerHTML = state.albumRecords
+    .map(function (record) {
+      const url = recordImageUrl(record);
+      const typeText = record.type === "income" ? "收入" : record.type === "transfer" ? "转账" : "支出";
+      return (
+        '<div class="album-item" data-record-id="' +
+        record.id +
+        '">' +
+        '<button class="album-thumb" type="button" data-album-open="' +
+        record.id +
+        '" title="查看对应账单">' +
+        '<img src="' +
+        escapeHtml(url) +
+        '" alt="' +
+        escapeHtml(record.note || "账单截图") +
+        '" loading="lazy">' +
+        "</button>" +
+        '<button class="album-del" type="button" data-album-delete="' +
+        record.id +
+        '" title="删除这张图片">×</button>' +
+        '<div class="album-meta">' +
+        '<span class="album-money' +
+        (record.type === "income" ? " is-income" : "") +
+        '">' +
+        money(record.amount) +
+        "</span>" +
+        '<span class="album-cat">' +
+        escapeHtml(typeText + " · " + (record.category || "其他")) +
+        "</span>" +
+        '<span class="album-date">' +
+        escapeHtml(displayDate(record.date)) +
+        "</span>" +
+        "</div>" +
+        "</div>"
+      );
+    })
+    .join("");
+}
+
+async function openAlbumRecord(recordId) {
+  // 先收起相册再开详情，两层遮罩叠一起会很糊
+  if (albumModal) {
+    hideModalSafe(albumModal, $("album-modal"));
+  }
+  let record = findRecordById(recordId);
+  if (!record) {
+    try {
+      await refresh();
+    } catch (error) {
+      record = null;
+    }
+    record = findRecordById(recordId);
+  }
+  if (!record) {
+    toast("找不到这条账单，可能已经被删除了", "error");
+    return;
+  }
+  window.setTimeout(function () {
+    openRecordDetail(record.id);
+  }, 300);
+}
+
+async function deleteAlbumImage(recordId) {
+  const record = findRecordById(recordId);
+  const label = record ? money(record.amount) + " · " + (record.category || "其他") : "这条账单";
+  if (!window.confirm("只删除" + label + "的截图，账单本身保留。确定删除图片？")) {
+    return;
+  }
+  try {
+    await api("/api/records/" + recordId + "/image", { method: "DELETE" });
+    toast("图片已删除", "success");
+    await loadAlbum();
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+/** 详情弹窗里的截图凭证：有图才显示，没图直接 hidden */
+function renderDetailImage(record) {
+  const box = $("detail-image");
+  const thumb = $("detail-image-thumb");
+  if (!box || !thumb) {
+    return;
+  }
+  const url = recordImageUrl(record);
+  if (!url) {
+    box.hidden = true;
+    thumb.removeAttribute("src");
+    return;
+  }
+  thumb.src = url;
+  box.hidden = false;
+}
+
+function openImagePreview(url) {
+  const current = $("detail-image-thumb") && $("detail-image-thumb").getAttribute("src");
+  const target = String(url || current || "");
+  if (!target) {
+    toast("这条账单没有截图", "error");
+    return;
+  }
+  if ($("image-preview-img")) {
+    $("image-preview-img").src = target;
+  }
+  if (imagePreviewModal) {
+    imagePreviewModal.show();
+  }
+}
+
 
 /* ---------- 全局快捷键：N 记一笔、Ctrl + K 搜索 ---------- */
 
@@ -4423,7 +4682,8 @@ function bindEvents() {
     });
   }
 
-  // 悬浮球：点钢笔展开三向菜单，3 秒无操作自动收回；点外部也收回
+  // 悬浮球（v0.11）：点钢笔展开不设时限；点菜单功能保持展开；
+  // 只有鼠标移出整个悬浮球（含子图标）区域，才开始 3 秒倒计时，移回立即取消。
   if ($("fab")) {
     if ($("fab-ball")) {
       $("fab-ball").addEventListener("click", function (event) {
@@ -4444,10 +4704,40 @@ function bindEvents() {
     if ($("fab-shot-file")) {
       $("fab-shot-file").addEventListener("change", onFabShotPicked);
     }
+    // 鼠标移进悬浮球：立刻取消倒计时，操作途中菜单不会被收走
+    $("fab").addEventListener("mouseenter", function () {
+      window.clearTimeout(fabAutoTimer);
+    });
+    // 鼠标移出悬浮球（含全部子图标）后才开始 3 秒倒计时
+    $("fab").addEventListener("mouseleave", function () {
+      if ($("fab").classList.contains("is-open")) {
+        scheduleFabAutoClose();
+      }
+    });
     document.addEventListener("click", function (event) {
       if ($("fab") && !$("fab").contains(event.target)) {
         closeFab();
       }
+    });
+  }
+
+  // 相册：点图看对应账单，点 × 只删图片
+  if ($("album-grid")) {
+    $("album-grid").addEventListener("click", function (event) {
+      const removeBtn = event.target.closest("[data-album-delete]");
+      if (removeBtn) {
+        deleteAlbumImage(Number(removeBtn.getAttribute("data-album-delete")));
+        return;
+      }
+      const openBtn = event.target.closest("[data-album-open]");
+      if (openBtn) {
+        openAlbumRecord(Number(openBtn.getAttribute("data-album-open")));
+      }
+    });
+  }
+  if ($("detail-image-btn")) {
+    $("detail-image-btn").addEventListener("click", function () {
+      openImagePreview();
     });
   }
 
@@ -5737,6 +6027,18 @@ async function init() {
     if (budgetElement && budgetModal) {
       bindEscClose(budgetElement, budgetModal);
     }
+    if ($("album-modal")) {
+      albumModal = new window.bootstrap.Modal($("album-modal"));
+      bindEscClose($("album-modal"), albumModal);
+      // 每次打开相册都重新拉一遍，保证看到刚截的那张
+      $("album-modal").addEventListener("show.bs.modal", function () {
+        loadAlbum();
+      });
+    }
+    if ($("image-preview-modal")) {
+      imagePreviewModal = new window.bootstrap.Modal($("image-preview-modal"));
+      bindEscClose($("image-preview-modal"), imagePreviewModal);
+    }
   }
 
   // 主题 / 侧栏 / 预算 / 每页条数都从 localStorage 恢复，刷新页面不闪
@@ -6172,6 +6474,7 @@ const activeBubbles = new Map();
 const BUBBLE_TITLES = {
   record: "极速记账",
   ai: "AI 正在处理",
+  shot: "截图记账",
   fast: "极速记账",
   error: "处理失败",
 };

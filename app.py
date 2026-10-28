@@ -1,3 +1,4 @@
+import base64
 import datetime
 import io
 import json
@@ -482,6 +483,158 @@ def create_record_by_ai_stream():
             "Connection": "keep-alive",
         },
     )
+
+
+# ---------------- 截图记账（v0.11）：Base64 图片 -> 视觉模型 -> 落盘 + 入库 ----------------
+
+# 常见图片 MIME 与落盘后缀的对应关系；前端 Canvas 压缩后基本都是 image/jpeg
+AI_IMAGE_MIME_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+
+
+def _decode_ai_image(image_base64, mime):
+    """把前端传来的 Base64（可带 dataURL 前缀）解成 (bytes, 真实 MIME, 错误信息)。"""
+    data = image_base64.strip()
+    if data.startswith("data:"):
+        header, _, data = data.partition(",")
+        if ";" in header:
+            mime = header[5:].split(";")[0] or mime
+    try:
+        raw = base64.b64decode(data, validate=False)
+    except (ValueError, TypeError):
+        return None, mime, "图片数据不是合法的 Base64"
+    if not raw:
+        return None, mime, "图片内容是空的，请重新选择截图"
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return None, mime, "图片不能超过 5MB，请压缩后再试"
+    return raw, mime, None
+
+
+def _save_ai_image_to_disk(raw, mime):
+    """把截图落盘到 static/uploads/，返回 (访问路径, 错误信息)。"""
+    mime = (mime or "").lower()
+    if not mime.startswith("image/"):
+        return None, "只支持图片文件（jpg / png / webp / gif）"
+    extension = AI_IMAGE_MIME_EXTENSIONS.get(mime)
+    if extension is None:
+        return None, "不支持的图片格式，请用 jpg / png / webp / gif"
+    # 时间戳 + 随机串：既能按时间排序，也绝不会撞名互相覆盖
+    filename = (
+        "shot_"
+        + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        + "_"
+        + uuid.uuid4().hex[:8]
+        + extension
+    )
+    with open(os.path.join(UPLOAD_DIR, filename), "wb") as handle:
+        handle.write(raw)
+    return "/static/uploads/" + filename, None
+
+
+def _remove_saved_image(image_path):
+    """删除 static/uploads/ 下的截图；只认已知前缀，绝不接受任意路径。
+
+    # TODO(v0.12+): 接入云存档后，这里要同时删除云对象，并改由云端返回永久 URL
+    """
+    if not image_path or not isinstance(image_path, str):
+        return
+    prefix = "/static/uploads/"
+    if not image_path.startswith(prefix):
+        return
+    target = os.path.join(UPLOAD_DIR, os.path.basename(image_path))
+    if os.path.isfile(target):
+        try:
+            os.remove(target)
+        except OSError:
+            # 文件被占用/已被删都不影响数据库状态，下次再清
+            pass
+
+
+@app.route("/api/records/ai/image", methods=["POST"])
+def create_record_by_ai_image():
+    """截图记账：前端 Canvas 压缩后的 Base64 -> 视觉模型识别 -> 原图落盘 + 账目入库。
+
+    请求体 {"image": "data:image/jpeg;base64,..."}（也可只传裸 Base64 + mime）。
+    成功返回与 /api/records/ai 同构的 201，额外带 image_path，前端据此显示「查看原图」。
+    """
+    data = request.get_json(silent=True) or {}
+    image = data.get("image")
+    if not isinstance(image, str) or not image.strip():
+        return jsonify(error="没有收到图片，请重新选择截图"), 400
+
+    # Base64 相对原图膨胀约 4/3，先按编码长度粗筛，别把超大图读进内存再报错
+    if len(image) > MAX_UPLOAD_BYTES * 2:
+        return jsonify(error="图片太大，请重新选择或裁剪后再试"), 413
+
+    mime = data.get("mime") if isinstance(data.get("mime"), str) else None
+    raw, mime, error_message = _decode_ai_image(image, mime)
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+
+    try:
+        parsed = ai_service.parse_image(image, mime or ai_service.IMAGE_MIME_FALLBACK)
+    except ai_service.AIServiceError as exc:
+        # 密钥失效 / 超时 / 模型返回坏 JSON 都算上游失败，502 让前端提示重试
+        return jsonify(error=str(exc)), 502
+
+    if parsed["action"] == "unknown":
+        return jsonify(error="无法识别该截图，请换一张清晰的账单截图"), 422
+    if parsed["action"] != "record":
+        # 截图里是借贷/联系人信息：v0.11 只闭环「记账」，明确告知而不是静默丢弃
+        return jsonify(
+            error="这张截图看起来是借贷或联系人信息，截图记账暂时只支持消费/收入账单"
+        ), 422
+
+    # 先落盘再入库：图片路径要跟着账目一起写，避免「账记了、图丢了」
+    image_path, error_message = _save_ai_image_to_disk(raw, mime)
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+
+    text = parsed.get("note") or "截图记账"
+    body, status = _apply_ai_intent(parsed, text)
+    if status >= 400:
+        _remove_saved_image(image_path)
+        return jsonify(body), status
+
+    # 账目已写成，再把图片挂上去；挂失败就撤销账目并删图，保持要么都有要么都没有
+    if not database.set_record_image(body["id"], image_path):
+        database.delete_record(body["id"])
+        _remove_saved_image(image_path)
+        return jsonify(error="截图保存失败，请重试"), 500
+
+    body["source"] = "ai_image"
+    body["image_path"] = image_path
+    body["record"]["image_path"] = image_path
+    # 相册/详情直接拿这个地址渲染 <img>，前端省一次拼接
+    body["record"]["image_url"] = image_path
+    return jsonify(body), status
+
+
+@app.route("/api/records/images", methods=["GET"])
+def list_record_images():
+    """相册列表：所有带截图的账目（金额/分类/时间/图片路径一次给全）。"""
+    records = database.list_records_with_images()
+    return jsonify(count=len(records), records=records)
+
+
+@app.route("/api/records/<int:record_id>/image", methods=["DELETE"])
+def delete_record_image(record_id):
+    """相册里「删除图片」：数据库清空 image_path + 删本地文件，账目本身保留。"""
+    record = database.get_record(record_id)
+    if record is None:
+        return jsonify(error="账目不存在（可能已被删除）"), 404
+    image_path = (record.get("image_path") or "").strip()
+    if not image_path:
+        return jsonify(error="这条账目没有截图"), 404
+    if not database.set_record_image(record_id, ""):
+        return jsonify(error="图片记录清理失败，请重试"), 500
+    _remove_saved_image(image_path)
+    return jsonify(removed=True, record_id=record_id)
 
 
 # ---------------- AI 反馈与记忆库（v0.10） ----------------

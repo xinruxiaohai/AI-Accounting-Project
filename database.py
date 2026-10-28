@@ -297,7 +297,8 @@ def init_db():
                     is_reimbursable INTEGER NOT NULL DEFAULT 0,
                     reimbursement_contact_id INTEGER,
                     reimbursed_amount REAL NOT NULL DEFAULT 0,
-                    total_reimbursement REAL NOT NULL DEFAULT 0
+                    total_reimbursement REAL NOT NULL DEFAULT 0,
+                    image_path TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -343,6 +344,11 @@ def init_db():
             if "total_reimbursement" not in columns:
                 conn.execute(
                     "ALTER TABLE records ADD COLUMN total_reimbursement REAL NOT NULL DEFAULT 0"
+                )
+            # v0.11 新增：截图记账的原图相对路径（空串表示没有截图）
+            if "image_path" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN image_path TEXT NOT NULL DEFAULT ''"
                 )
 
             # 账户表：name 主键，balance 当前余额，group_name 大类（资金/储蓄/投资）
@@ -871,6 +877,7 @@ def add_record(
     reimbursement_contact_id=None,
     reimbursed_amount=0,
     total_reimbursement=0,
+    image_path="",
 ):
     """插入一笔账并联动余额，返回 (新 id, 错误信息)。
 
@@ -893,8 +900,9 @@ def add_record(
                 INSERT INTO records
                        (amount, category, category_id, note, date, account, type,
                         formula, to_account, fee, is_reimbursable,
-                        reimbursement_contact_id, reimbursed_amount, total_reimbursement)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        reimbursement_contact_id, reimbursed_amount, total_reimbursement,
+                        image_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     amount,
@@ -911,6 +919,7 @@ def add_record(
                     reimbursement_contact_id,
                     round(float(reimbursed_amount), 2),
                     round(float(total_reimbursement), 2),
+                    image_path or "",
                 ),
             )
             _apply_effects(
@@ -1032,7 +1041,7 @@ _RECORD_SELECT = (
     "SELECT r.id, r.amount, r.category, r.category_id, r.note, r.date, "
     "       r.account, r.type, r.formula, r.to_account, r.fee, "
     "       r.is_reimbursable, r.reimbursement_contact_id, r.reimbursed_amount, "
-    "       r.total_reimbursement, r.deleted_at, "
+    "       r.total_reimbursement, r.deleted_at, r.image_path, "
     "       p.name AS category_parent, ct.name AS reimbursement_contact_name "
     "  FROM records r "
     "  LEFT JOIN categories c ON c.id = r.category_id "
@@ -1072,6 +1081,43 @@ def list_records(account=None, category_id=None, parent_id=None):
         for record in records:
             record["date"] = normalize_date(record["date"])
         return records
+    finally:
+        conn.close()
+
+
+def list_records_with_images():
+    """相册：取出所有带截图凭证的账目，最新记的排最前。
+
+    回收站里的账目不算（图还在，但用户在相册里看到的应该只是有效账目）；
+    排序用 id 而不是 date，保证「刚识别的那张」一定在最前面。
+    """
+    sql = (
+        _RECORD_SELECT
+        + " WHERE r.deleted_at IS NULL"
+        + "   AND r.image_path IS NOT NULL AND r.image_path <> ''"
+        + " ORDER BY r.id DESC"
+    )
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
+def set_record_image(record_id, image_path):
+    """给账目挂上/换掉/清空截图路径，只改这一列，不动余额和其它字段。
+
+    返回是否命中这条账目；传空字符串表示解绑（相册里删图时用）。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE records SET image_path = ? WHERE id = ?",
+                (image_path or "", record_id),
+            )
+            return cur.rowcount > 0
     finally:
         conn.close()
 
