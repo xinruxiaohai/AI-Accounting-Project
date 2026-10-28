@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.09.1">
+  <link rel="stylesheet" href="/static/style.css?v=0.09.1b">
 </head>
 <body>
 
@@ -420,47 +420,52 @@
           </div>
         </div>
 
-        <!-- 按大类分组的账户卡片 -->
-        <div class="panel">
-          <div class="panel-head">
-            <span class="panel-title">我的账户</span>
-            <div class="panel-tools">
-              <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
-              <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
-            </div>
-          </div>
-          <!-- 卡片由 script.js 按 group 渲染，点卡片选中账户 -->
-          <div class="account-groups" id="account-groups">
-            <p class="empty-cell">正在加载账户…</p>
-          </div>
-        </div>
+        <!-- v0.09.1：左右分块（左 4 成账户列表 / 右 6 成流水），<1024px 自动上下堆叠 -->
+        <div class="assets-split">
 
-        <!-- 选中账户的流水：按日期分组，带当日收支小计 -->
-        <div class="panel">
-          <div class="panel-head">
-            <span class="panel-title" id="detail-title">账户流水</span>
-            <div class="panel-tools">
-              <button class="btn btn-sm btn-primary" type="button" id="quick-add-btn" disabled>在此账户下记一笔</button>
+          <!-- 左：按大类分组的账户卡片 -->
+          <div class="panel assets-left">
+            <div class="panel-head">
+              <span class="panel-title">我的账户</span>
+              <div class="panel-tools">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
+                <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
+              </div>
+            </div>
+            <!-- 卡片由 script.js 按 group 渲染，点卡片选中账户 -->
+            <div class="account-groups" id="account-groups">
+              <p class="empty-cell">正在加载账户…</p>
             </div>
           </div>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle mb-0 account-table">
-              <thead>
-                <tr>
-                  <th class="col-time">时间</th>
-                  <th class="col-type">类型</th>
-                  <th>分类</th>
-                  <th class="text-end col-amount">金额</th>
-                  <th class="col-note">备注</th>
-                </tr>
-              </thead>
-              <tbody id="account-records">
-                <tr>
-                  <td colspan="5" class="empty-cell">先在上方点一个账户，这里会显示它的流水</td>
-                </tr>
-              </tbody>
-            </table>
+
+          <!-- 右：选中账户的流水，按日期分组，带当日收支小计 -->
+          <div class="panel assets-right">
+            <div class="panel-head">
+              <span class="panel-title" id="detail-title">账户流水</span>
+              <div class="panel-tools">
+                <button class="btn btn-sm btn-primary" type="button" id="quick-add-btn" disabled>在此账户下记一笔</button>
+              </div>
+            </div>
+            <div class="table-responsive">
+              <table class="table table-hover align-middle mb-0 account-table">
+                <thead>
+                  <tr>
+                    <th class="col-time">时间</th>
+                    <th class="col-type">类型</th>
+                    <th>分类</th>
+                    <th class="text-end col-amount">金额</th>
+                    <th class="col-note">备注</th>
+                  </tr>
+                </thead>
+                <tbody id="account-records">
+                  <tr>
+                    <td colspan="5" class="empty-cell">点左侧账户，这里会显示它的流水</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
+
         </div>
 
       </section>
@@ -987,7 +992,7 @@
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.09.1"></script>
+<script src="/static/script.js?v=0.09.1b"></script>
 
 </body>
 </html>

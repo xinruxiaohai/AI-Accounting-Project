@@ -4061,3 +4061,53 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* v0.09.1 补丁：资产页左右分块（左 4 成账户 / 右 6 成流水），<1024px 上下堆叠 */
+.assets-split {
+  display: grid;
+  grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
+  gap: 14px;
+  align-items: start;
+  margin-top: 14px;
+}
+
+.assets-split > .panel {
+  margin: 0;
+  min-width: 0;
+}
+
+.assets-left .account-cards {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+
+.assets-right .table-responsive {
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+/* 选中账户：整块淡蓝底 + 左侧蓝色竖条，比只有一圈描边更明显 */
+.account-card.active {
+  background: #eff6ff;
+  border-color: var(--brand-blue);
+  box-shadow: inset 4px 0 0 var(--brand-blue), 0 4px 14px rgba(37, 99, 235, 0.18);
+}
+
+[data-theme="dark"] .account-card.active {
+  background: rgba(37, 99, 235, 0.18);
+  border-color: #60a5fa;
+  box-shadow: inset 4px 0 0 #60a5fa, 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+@media (max-width: 1023.98px) {
+  .assets-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .assets-left .account-cards {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  }
+
+  .assets-right .table-responsive {
+    max-height: none;
+  }
+}

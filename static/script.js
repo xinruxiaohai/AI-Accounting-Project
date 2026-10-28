@@ -1164,6 +1164,18 @@ async function loadAccounts() {
         clearDetail();
       }
     }
+
+    // v0.09.1：进入资产页默认选中「现金」（没有就选第一个账户），右侧直接渲染流水
+    if (!state.detailAccount && state.accounts.length) {
+      const hasCash = state.accounts.some(function (account) {
+        return account.name === "现金";
+      });
+      const preferred = hasCash ? "现金" : state.accounts[0].name;
+      state.detailAccount = preferred;
+      $("detail-title").textContent = preferred + " · 流水";
+      $("quick-add-btn").disabled = false;
+      renderAccountGroups();
+    }
   } finally {
     finish();
   }
