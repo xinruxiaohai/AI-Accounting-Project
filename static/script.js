@@ -335,18 +335,33 @@ function beginTableLoad(tbody, colspan, rows) {
   if (!tbody) {
     return function () {};
   }
+  const isTable = tbody.tagName === "TBODY";
   const timer = setTimeout(function () {
-    tbody.innerHTML = skeletonRowsHtml(colspan, rows || 5);
+    tbody.innerHTML = isTable ? skeletonRowsHtml(colspan, rows || 5) : skeletonFeedHtml(rows || 5);
     tbody.setAttribute("aria-busy", "true");
   }, 120);
 
   return function () {
     clearTimeout(timer);
     tbody.removeAttribute("aria-busy");
-    if (tbody.querySelector(".skeleton-row")) {
-      tbody.innerHTML = emptyStateHtml(colspan, "数据加载失败，请稍后重试");
+    if (tbody.querySelector(".skeleton-row, .sk-feed-row")) {
+      tbody.innerHTML = isTable
+        ? emptyStateHtml(colspan, "数据加载失败，请稍后重试")
+        : feedEmptyHtml("数据加载失败，请稍后重试");
     }
   };
+}
+
+/** v0.09.2：列表流骨架屏（不是表格） */
+function skeletonFeedHtml(rows) {
+  let html = "";
+  for (let r = 0; r < (rows || 5); r += 1) {
+    html +=
+      '<div class="sk-feed-row"><span class="sk-line" style="width:12%"></span>' +
+      '<span class="sk-line" style="width:46%"></span>' +
+      '<span class="sk-line" style="width:22%"></span></div>';
+  }
+  return html;
 }
 
 function groupsSkeletonHtml() {
@@ -504,6 +519,7 @@ const state = {
   accountGroups: [],
   accounts: [],
   allRecords: [],
+  amountHidden: false,
   detailAccount: "",
   detailRecords: [],
   reimbSummary: null,
@@ -1086,6 +1102,31 @@ function fillAccountSelects() {
   }
 }
 
+/** 平台色：常见账户用品牌色，其余按名字哈希取色 */
+const ACCOUNT_TONES = {
+  现金: "#0ea5e9",
+  支付宝: "#1677ff",
+  微信: "#07c160",
+  银行卡: "#f59e0b",
+  信用卡: "#ef4444",
+  花呗: "#8b5cf6",
+  借呗: "#10b981",
+  云闪付: "#e11d48",
+};
+
+function accountTone(name) {
+  const key = String(name || "");
+  if (ACCOUNT_TONES[key]) {
+    return ACCOUNT_TONES[key];
+  }
+  const palette = ["#0ea5e9", "#1677ff", "#07c160", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981", "#e11d48", "#64748b"];
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  }
+  return palette[hash % palette.length];
+}
+
 function renderAccountGroups() {
   const box = $("account-groups");
   if (!state.accounts.length) {
@@ -1099,27 +1140,38 @@ function renderAccountGroups() {
         return sum + Number(account.balance || 0);
       }, 0);
 
-      const cards = group.accounts
+      const rows = group.accounts
         .map(function (account) {
           const active = account.name === state.detailAccount ? " active" : "";
-          const tone = Number(account.balance) < 0 ? " is-negative" : "";
+          const name = escapeHtml(account.name);
+          const balance = Number(account.balance || 0);
+          const shown = state.amountHidden ? "¥••••" : money(account.balance);
           return (
-            '<div class="account-card' +
+            '<div class="account-row' +
             active +
             '" data-account="' +
-            escapeHtml(account.name) +
+            name +
+            '" role="button" tabindex="0">' +
+            '<span class="account-dot" style="background:' +
+            accountTone(account.name) +
             '">' +
-            '<button class="account-card-del" type="button" data-del-account="' +
-            escapeHtml(account.name) +
+            escapeHtml(String(account.name || "?").slice(0, 1)) +
+            "</span>" +
+            '<span class="account-row-main">' +
+            '<span class="account-row-name">' +
+            name +
+            "</span>" +
+            '<span class="account-row-sub">' +
+            escapeHtml(group.name) +
+            "</span></span>" +
+            '<span class="account-row-balance' +
+            (balance < 0 ? " is-negative" : "") +
+            '">' +
+            shown +
+            "</span>" +
+            '<button class="account-row-del" type="button" data-del-account="' +
+            name +
             '" title="删除账户">×</button>' +
-            '<div class="account-card-name">' +
-            escapeHtml(account.name) +
-            "</div>" +
-            '<div class="account-card-balance' +
-            tone +
-            '">' +
-            money(account.balance) +
-            "</div>" +
             "</div>"
           );
         })
@@ -1132,11 +1184,11 @@ function renderAccountGroups() {
         escapeHtml(group.name) +
         "</span>" +
         '<span class="account-group-total">合计 ' +
-        money(total) +
+        (state.amountHidden ? "¥••••" : money(total)) +
         "</span>" +
         "</div>" +
-        '<div class="account-cards">' +
-        cards +
+        '<div class="account-list">' +
+        rows +
         "</div>" +
         "</div>"
       );
@@ -1186,7 +1238,7 @@ function clearDetail() {
   state.detailRecords = [];
   $("detail-title").textContent = "账户流水";
   $("quick-add-btn").disabled = true;
-  $("account-records").innerHTML = emptyStateHtml(5, "先在上方点一个账户，这里会显示它的流水");
+  $("account-records").innerHTML = feedEmptyHtml("先在上方点一个账户，这里会显示它的流水");
 }
 
 async function selectAccount(name) {
@@ -1584,6 +1636,20 @@ function trendOption(series) {
 }
 
 /** 第一次真正画图时才 init，避免页面还没有数据就建实例 */
+/** v0.09.2：窗口尺寸变化时同步重算 ECharts 画布，避免图表错位 */
+let chartResizeTimer = null;
+function scheduleChartResize() {
+  window.clearTimeout(chartResizeTimer);
+  chartResizeTimer = window.setTimeout(function () {
+    if (pieChart) {
+      pieChart.resize();
+    }
+    if (trendChart) {
+      trendChart.resize();
+    }
+  }, 120);
+}
+
 function initCharts() {
   if (!window.echarts) {
     return false;
@@ -1845,49 +1911,162 @@ function renderDashboard() {
 
 /* ==================== 账单列表 ==================== */
 
+/** v0.09.2：金额语义色——收入绿、支出红、转账等资金流转深灰 */
 function amountCellHtml(record) {
   if (record.type === "income") {
-    return '<span class="text-success">+' + money(record.amount) + "</span>";
+    return '<span class="amt-income">+' + money(record.amount) + "</span>";
   }
   if (record.type === "transfer") {
     const fee = Number(record.fee || 0);
     const feeTip = fee > 0 ? '<div class="fee-note">含手续费 ' + money(fee) + "</div>" : "";
-    return '<span class="text-danger">-' + money(record.amount) + "</span>" + feeTip;
+    return '<span class="amt-neutral">' + money(record.amount) + "</span>" + feeTip;
   }
-  return '<span class="text-danger">-' + money(record.amount) + "</span>";
+  return '<span class="amt-expense">-' + money(record.amount) + "</span>";
+}
+
+function feedAmountHtml(record) {
+  if (record.type === "income") {
+    return '<span class="amt-income">+' + money(record.amount) + "</span>";
+  }
+  if (record.type === "transfer") {
+    return '<span class="amt-neutral">' + money(record.amount) + "</span>";
+  }
+  return '<span class="amt-expense">-' + money(record.amount) + "</span>";
+}
+
+/** 只取时间 HH:MM，列表左侧灰色小字用 */
+function timeOf(record) {
+  const match = String(displayDate(record.date) || "").match(/(\d{1,2}:\d{2})/);
+  return match ? match[1] : "";
 }
 
 /**
- * v0.06.2：表格里的一行。整行可点 → 弹出「账单详情」，
- * 行末不再有实心黄 / 红的编辑删除按钮（痛点：满屏刺眼按钮 + 容易误触）。
+ * v0.09.2：当时余额快照。
+ * 账单没有存历史余额，这里从账户当前余额出发，按时间倒着把每笔的影响减回去，
+ * 得到「这一笔记完之后」的余额。借贷没有账单行，跨过借贷日期时会有一点误差。
  */
-function recordRowHtml(record) {
+function balanceSnapshots(records) {
+  const balances = {};
+  state.accounts.forEach(function (account) {
+    balances[account.name] = Number(account.balance || 0);
+  });
+  const snapshots = {};
+  records.forEach(function (record) {
+    if (record.account && Object.prototype.hasOwnProperty.call(balances, record.account)) {
+      snapshots[record.id] = balances[record.account];
+    }
+    reverseBalanceEffects(balances, record);
+  });
+  return snapshots;
+}
+
+function reverseBalanceEffects(balances, record) {
+  const account = record.account;
+  const amount = Number(record.amount || 0);
+  if (record.type === "expense") {
+    if (Object.prototype.hasOwnProperty.call(balances, account)) {
+      balances[account] += amount;
+    }
+  } else if (record.type === "income") {
+    if (Object.prototype.hasOwnProperty.call(balances, account)) {
+      balances[account] -= amount;
+    }
+  } else if (record.type === "transfer") {
+    if (Object.prototype.hasOwnProperty.call(balances, account)) {
+      balances[account] += amount + Number(record.fee || 0);
+    }
+    if (record.to_account && Object.prototype.hasOwnProperty.call(balances, record.to_account)) {
+      balances[record.to_account] -= amount;
+    }
+  }
+}
+
+/** App 列表流的一行：时间 · 分类/备注 · 金额 + 余额快照 */
+function feedRowHtml(record, snapshots, options) {
+  options = options || {};
+  const snapshot = snapshots ? snapshots[record.id] : undefined;
+  const sub = [];
+  if (record.note) {
+    sub.push(escapeHtml(record.note));
+  }
+  if (options.showAccount) {
+    sub.push(escapeHtml(record.account || ""));
+  }
   return (
-    '<tr data-id="' +
+    '<div class="feed-row" role="button" tabindex="0" data-id="' +
     record.id +
-    '" tabindex="0">' +
-    '<td class="col-time">' +
-    escapeHtml(displayDate(record.date)) +
-    "</td>" +
-    '<td class="col-type">' +
-    (TYPE_BADGES[record.type] || TYPE_BADGES.expense) +
-    "</td>" +
-    "<td>" +
-    categoryLabel(record) +
-    "</td>" +
-    '<td class="col-account">' +
-    escapeHtml(record.account) +
-    "</td>" +
-    '<td class="text-end col-amount">' +
-    amountCellHtml(record) +
-    "</td>" +
-    '<td class="note-cell" title="' +
-    (record.note ? escapeHtml(record.note) : "") +
     '">' +
-    (record.note ? escapeHtml(record.note) : "-") +
-    "</td>" +
-    "</tr>"
+    '<span class="feed-time">' + escapeHtml(timeOf(record)) + "</span>" +
+    '<span class="feed-main">' +
+    '<span class="feed-cat">' + categoryLabel(record) + "</span>" +
+    (sub.length ? '<span class="feed-note">' + sub.join(" · ") + "</span>" : "") +
+    "</span>" +
+    '<span class="feed-right">' +
+    '<span class="feed-amount">' + feedAmountHtml(record) + "</span>" +
+    (snapshot === undefined
+      ? ""
+      : '<span class="feed-balance">余额 ' + money(snapshot) + "</span>") +
+    "</span></div>"
   );
+}
+
+/**
+ * 按「月表头 → 日表头 → 明细」渲染整段账单流。
+ * totalRecords 用于月表头汇总（分页时仍然显示整月总额）。
+ */
+function feedGroupsHtml(records, snapshots, options) {
+  options = options || {};
+  if (!records.length) {
+    return '<div class="feed-empty">' + escapeHtml(options.empty || "还没有记录") + "</div>";
+  }
+  const monthTotals = new Map();
+  (options.totalRecords || records).forEach(function (record) {
+    const key = dateKeyOf(record).slice(0, 7);
+    if (!monthTotals.has(key)) {
+      monthTotals.set(key, []);
+    }
+    monthTotals.get(key).push(record);
+  });
+  const dayTotals = new Map();
+  records.forEach(function (record) {
+    const key = dateKeyOf(record);
+    if (!dayTotals.has(key)) {
+      dayTotals.set(key, []);
+    }
+    dayTotals.get(key).push(record);
+  });
+
+  let html = "";
+  let monthKey = "";
+  let dayKey = "";
+  records.forEach(function (record) {
+    const key = dateKeyOf(record);
+    const keyMonth = key.slice(0, 7);
+    if (keyMonth !== monthKey) {
+      monthKey = keyMonth;
+      dayKey = "";
+      const parts = monthKey.split("-");
+      const monthSum = summarize(monthTotals.get(monthKey) || []);
+      html +=
+        '<div class="feed-month"><span>' + parts[0] + "年" + Number(parts[1]) + "月</span>" +
+        '<span class="feed-month-sub">支 ' + money(monthSum.expense) +
+        " · 收 " + money(monthSum.income) + "</span></div>";
+    }
+    if (key !== dayKey) {
+      dayKey = key;
+      const daySum = summarize(dayTotals.get(key) || []);
+      html +=
+        '<div class="feed-day"><span class="feed-day-date">' + Number(key.slice(8)) + "日</span>" +
+        '<span class="feed-day-sub">收 ' + money(daySum.income) +
+        " · 支 " + money(daySum.expense) + "</span></div>";
+    }
+    html += feedRowHtml(record, snapshots, options);
+  });
+  return html;
+}
+
+function feedEmptyHtml(hint) {
+  return '<div class="feed-empty">' + escapeHtml(hint) + "</div>";
 }
 
 /* ---------- 分页 / 滚动加载（v0.06.3） ---------- */
@@ -2029,6 +2208,13 @@ function sentinelRowHtml(rendered, total) {
   );
 }
 
+/** v0.09.2：列表流的滚动哨兵（div 版） */
+function sentinelFeedHtml(rendered, total) {
+  return (
+    '<div class="feed-sentinel" id="scroll-sentinel">' + sentinelText(rendered, total) + "</div>"
+  );
+}
+
 let recordObserver = null;
 
 function stopRecordObserver() {
@@ -2089,24 +2275,13 @@ function appendMoreRecords() {
   if (state.renderedCount >= total) {
     return;
   }
-  const sentinel = $("scroll-sentinel");
-  if (!sentinel) {
+  if (!$("scroll-sentinel")) {
     return;
   }
 
-  const nextCount = Math.min(total, state.renderedCount + INFINITE_STEP);
-  const rowsHtml = records
-    .slice(state.renderedCount, nextCount)
-    .map(recordRowHtml)
-    .join("");
-  state.renderedCount = nextCount;
-
-  const row = sentinel.closest("tr");
-  if (row) {
-    row.insertAdjacentHTML("beforebegin", rowsHtml);
-    sentinel.textContent = sentinelText(nextCount, total);
-  }
-
+  // v0.09.2：列表流按「月/日表头 + 明细」整段渲染，追加时整体重绘前缀保持一致
+  state.renderedCount = Math.min(total, state.renderedCount + INFINITE_STEP);
+  renderRecords();
   renderPager(total);
   if (state.renderedCount >= total) {
     stopRecordObserver();
@@ -2114,8 +2289,8 @@ function appendMoreRecords() {
 }
 
 function renderRecords() {
-  const tbody = $("record-list");
-  if (!tbody) {
+  const box = $("record-list");
+  if (!box) {
     return;
   }
 
@@ -2127,12 +2302,15 @@ function renderRecords() {
   if (!total) {
     stopRecordObserver();
     state.renderedCount = 0;
-    tbody.innerHTML = query
-      ? emptyStateHtml(6, "没有匹配「" + escapeHtml(query) + "」的账单，换个关键词试试")
-      : emptyStateHtml(6, "还没有记录，点右上角「+ 记一笔」开始吧");
+    box.innerHTML = query
+      ? feedEmptyHtml("没有匹配「" + query + "」的账单，换个关键词试试")
+      : feedEmptyHtml("还没有记录，点右上角「+ 记一笔」开始吧");
     renderPager(0);
     return;
   }
+
+  const showAccount = !($("filter-account") && $("filter-account").value);
+  const snapshots = balanceSnapshots(records);
 
   // 不分页：先渲染 20 条，之后交给 IntersectionObserver 追加
   if (!state.pageSize) {
@@ -2140,11 +2318,11 @@ function renderRecords() {
       Math.max(state.renderedCount, INFINITE_STEP),
       total
     );
-    tbody.innerHTML =
-      records
-        .slice(0, state.renderedCount)
-        .map(recordRowHtml)
-        .join("") + sentinelRowHtml(state.renderedCount, total);
+    box.innerHTML =
+      feedGroupsHtml(records.slice(0, state.renderedCount), snapshots, {
+        showAccount: showAccount,
+        totalRecords: records,
+      }) + sentinelFeedHtml(state.renderedCount, total);
     renderPager(total);
     observeScrollSentinel();
     return;
@@ -2155,10 +2333,10 @@ function renderRecords() {
   const pageCount = pageCountOf(total);
   state.pageIndex = Math.min(Math.max(1, state.pageIndex), pageCount);
   const start = (state.pageIndex - 1) * state.pageSize;
-  tbody.innerHTML = records
-    .slice(start, start + state.pageSize)
-    .map(recordRowHtml)
-    .join("");
+  box.innerHTML = feedGroupsHtml(records.slice(start, start + state.pageSize), snapshots, {
+    showAccount: showAccount,
+    totalRecords: records,
+  });
   renderPager(total);
 }
 
@@ -2190,39 +2368,21 @@ function accountRowHtml(record) {
 }
 
 function renderAccountRecords() {
-  const tbody = $("account-records");
-  if (!tbody) {
+  const box = $("account-records");
+  if (!box) {
     return;
   }
 
   if (!state.detailRecords.length) {
-    tbody.innerHTML = emptyStateHtml(5, "这个账户还没有流水");
+    box.innerHTML = feedEmptyHtml("这个账户还没有流水");
     return;
   }
 
-  // v0.09.1：按日期分组，每组先出一行「日期 + 当日收/支小计」，再跟当天的明细
-  const groups = new Map();
-  state.detailRecords.forEach(function (record) {
-    const key = dateKeyOf(record);
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(record);
+  // v0.09.2：月表头 → 日表头 → 流水行；右侧金额带当时余额快照
+  const snapshots = balanceSnapshots(state.detailRecords);
+  box.innerHTML = feedGroupsHtml(state.detailRecords, snapshots, {
+    empty: "这个账户还没有流水",
   });
-
-  let html = "";
-  groups.forEach(function (records, key) {
-    const day = summarize(records);
-    html +=
-      '<tr class="day-head"><td colspan="5">' +
-      '<div class="day-head-inner">' +
-      '<span class="day-head-date">' + escapeHtml(key) + "</span>" +
-      '<span class="day-head-sub">收 <b class="plus">' + money(day.income) + "</b> · 支 " +
-      '<b class="minus">' + money(day.expense) + "</b> · 共 " + records.length + " 笔</span>" +
-      "</div></td></tr>";
-    html += records.map(accountRowHtml).join("");
-  });
-  tbody.innerHTML = html;
 }
 
 async function loadRecords() {
@@ -2380,26 +2540,23 @@ function listRowHtml(record) {
 }
 
 function renderDayRecords(records, emptyText) {
-  const tbody = $("day-records");
-  if (!tbody) {
+  const box = $("day-records");
+  if (!box) {
     return;
   }
 
   if (!records.length) {
-    tbody.innerHTML = emptyStateHtml(4, emptyText);
+    box.innerHTML = feedEmptyHtml(emptyText);
     return;
   }
 
   // 同一天的账单按时间正序，看起来更符合直觉
-  tbody.innerHTML = records
-    .slice()
-    .sort(function (a, b) {
-      return String(displayDate(a.date)).localeCompare(String(displayDate(b.date)));
-    })
-    .map(function (record) {
-      return '<tr data-id="' + record.id + '" tabindex="0">' + listRowHtml(record) + "</tr>";
-    })
-    .join("");
+  const ordered = records.slice().sort(function (a, b) {
+    return String(displayDate(a.date)).localeCompare(String(displayDate(b.date)));
+  });
+  box.innerHTML = feedGroupsHtml(ordered, balanceSnapshots(ordered), {
+    empty: emptyText,
+  });
 }
 
 function setDetailHead(title, sub) {
@@ -3458,12 +3615,12 @@ function deleteFromDetail() {
   removeRecord(recordId);
 }
 
-/** 表格整行点击 → 详情；行内真有按钮时让它自己处理 */
+/** 表格整行 / 列表流一行点击 → 详情；行内真有按钮时让它自己处理 */
 function onRowClick(event) {
   if (event.target.closest("button, a, input, select, label")) {
     return;
   }
-  const row = event.target.closest("tr[data-id]");
+  const row = event.target.closest(".feed-row[data-id], tr[data-id]");
   if (!row) {
     return;
   }
@@ -3475,7 +3632,7 @@ function onRowKeydown(event) {
   if (event.key !== "Enter" && event.key !== " ") {
     return;
   }
-  const row = event.target.closest("tr[data-id]");
+  const row = event.target.closest(".feed-row[data-id], tr[data-id]");
   if (!row || event.target !== row) {
     return;
   }
@@ -3749,31 +3906,15 @@ function saveBudget() {
   toast("本月预算已改为 " + money(state.budget), "success");
 }
 
-/* ==================== 右下角悬浮球（预算剩余 + 快捷键） ==================== */
+/* ==================== 右下角悬浮球（钢笔 + 三向菜单，v0.09.2） ==================== */
 
-let fabCloseTimer = null;
+let fabAutoTimer = null;
 
+/** 悬浮球不再承载预算面板（预算改由 #budget-btn 弹窗管理），保留函数兼容旧调用点 */
 function renderFab() {
-  const summary = summarize(currentMonthRecords());
-  const spent = summary.expense;
-  const limit = state.budget;
-  const left = cents(limit - spent);
-  const ratio = limit > 0 ? Math.min(1, spent / limit) : 0;
-
-  if ($("fab-left")) {
-    $("fab-left").textContent = money(left);
-    $("fab-left").classList.toggle("is-negative", left < 0);
-  }
-  if ($("fab-spent")) {
-    $("fab-spent").textContent = money(spent) + " / " + money(limit);
-  }
-  const fill = $("fab-fill");
-  if (fill) {
-    fill.style.width = Math.round(ratio * 100) + "%";
-  }
   const fab = $("fab");
   if (fab) {
-    fab.classList.toggle("is-over", spent > limit);
+    fab.classList.remove("is-over");
   }
 }
 
@@ -3782,35 +3923,33 @@ function openFab() {
   if (!fab) {
     return;
   }
-  window.clearTimeout(fabCloseTimer);
-  renderFab();
   fab.classList.add("is-open");
-  if ($("fab-ball")) {
-    $("fab-ball").setAttribute("aria-expanded", "true");
+  const ball = $("fab-ball");
+  if (ball) {
+    ball.setAttribute("aria-expanded", "true");
   }
-  if ($("fab-panel")) {
-    $("fab-panel").setAttribute("aria-hidden", "false");
-  }
+  scheduleFabAutoClose();
 }
 
 function closeFab() {
+  window.clearTimeout(fabAutoTimer);
   const fab = $("fab");
-  if (!fab || !fab.classList.contains("is-open")) {
+  if (!fab) {
     return;
   }
   fab.classList.remove("is-open");
-  if ($("fab-ball")) {
-    $("fab-ball").setAttribute("aria-expanded", "false");
-  }
-  if ($("fab-panel")) {
-    $("fab-panel").setAttribute("aria-hidden", "true");
+  const ball = $("fab-ball");
+  if (ball) {
+    ball.setAttribute("aria-expanded", "false");
   }
 }
 
-/** 鼠标移出后留一点缓冲，方便从球滑进面板 */
-function scheduleCloseFab() {
-  window.clearTimeout(fabCloseTimer);
-  fabCloseTimer = window.setTimeout(closeFab, 220);
+/** 点开菜单后 3 秒内没有任何继续操作，自动收回 */
+function scheduleFabAutoClose() {
+  window.clearTimeout(fabAutoTimer);
+  fabAutoTimer = window.setTimeout(function () {
+    closeFab();
+  }, 3000);
 }
 
 function toggleFab() {
@@ -3823,6 +3962,34 @@ function toggleFab() {
   } else {
     openFab();
   }
+}
+
+/** 三个分支：普通记账 / AI 文本快记 / AI 截图识别（截图识别入口先占位） */
+function handleFabAction(action) {
+  closeFab();
+  if (action === "record") {
+    openRecordModal();
+    return;
+  }
+  if (action === "ai") {
+    openAiModal();
+    return;
+  }
+  if (action === "shot") {
+    const input = $("fab-shot-file");
+    if (input) {
+      input.click();
+    }
+  }
+}
+
+function onFabShotPicked(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) {
+    return;
+  }
+  toast("截图识别将在下一版接入，已选中：" + file.name, "success");
+  event.target.value = "";
 }
 
 /* ---------- 全局快捷键：N 记一笔、Ctrl + K 搜索 ---------- */
@@ -4164,15 +4331,26 @@ function bindEvents() {
     });
   }
 
-  // 悬浮球：悬停展开、移出收起；点击也能开合（触屏友好）
+  // 悬浮球：点钢笔展开三向菜单，3 秒无操作自动收回；点外部也收回
   if ($("fab")) {
-    $("fab").addEventListener("mouseenter", openFab);
-    $("fab").addEventListener("mouseleave", scheduleCloseFab);
     if ($("fab-ball")) {
       $("fab-ball").addEventListener("click", function (event) {
         event.stopPropagation();
         toggleFab();
       });
+    }
+    if ($("fab-actions")) {
+      $("fab-actions").addEventListener("click", function (event) {
+        const action = event.target.closest("[data-fab-action]");
+        if (!action) {
+          return;
+        }
+        event.stopPropagation();
+        handleFabAction(action.getAttribute("data-fab-action"));
+      });
+    }
+    if ($("fab-shot-file")) {
+      $("fab-shot-file").addEventListener("change", onFabShotPicked);
     }
     document.addEventListener("click", function (event) {
       if ($("fab") && !$("fab").contains(event.target)) {
@@ -4181,8 +4359,52 @@ function bindEvents() {
     });
   }
 
+  // 资产页：小眼睛隐藏金额、上传背景图、统计卡点开明细
+  if ($("hero-eye-btn")) {
+    $("hero-eye-btn").addEventListener("click", function (event) {
+      event.stopPropagation();
+      state.amountHidden = !state.amountHidden;
+      renderAssetsHero();
+      renderReimbCards();
+      renderAccountGroups();
+      renderAccountRecords();
+    });
+  }
+  if ($("hero-bg-btn") && $("hero-bg-file")) {
+    $("hero-bg-btn").addEventListener("click", function (event) {
+      event.stopPropagation();
+      $("hero-bg-file").click();
+    });
+    $("hero-bg-file").addEventListener("change", onHeroBgPick);
+  }
+  if (document.querySelector(".asset-stats")) {
+    document.querySelector(".asset-stats").addEventListener("click", function (event) {
+      const stat = event.target.closest("[data-stat]");
+      if (!stat) {
+        return;
+      }
+      openStatDetail(stat.getAttribute("data-stat"));
+    });
+  }
+  if ($("stat-detail-list")) {
+    $("stat-detail-list").addEventListener("click", function (event) {
+      const row = event.target.closest("[data-record-id]");
+      if (!row) {
+        return;
+      }
+      const record = findRecordById(row.getAttribute("data-record-id"));
+      if (record) {
+        hideModalSafe(statDetailModal, $("stat-detail-modal"));
+        openRecordDetail(record);
+      }
+    });
+  }
+
   // 全局快捷键（N 记一笔、Ctrl + K 搜索）
   document.addEventListener("keydown", onGlobalKeydown);
+  if (pieChart || trendChart) {
+    window.addEventListener("resize", scheduleChartResize);
+  }
 
   // 保存
   $("save-btn").addEventListener("click", saveRecord);
@@ -4219,7 +4441,7 @@ function bindEvents() {
   // 右键菜单只绑主账单表；账户流水与当日明细保留浏览器默认菜单
   if ($("record-list")) {
     $("record-list").addEventListener("contextmenu", function (event) {
-      const row = event.target.closest("tr[data-id]");
+      const row = event.target.closest(".feed-row[data-id], tr[data-id]");
       if (!row) {
         return;
       }
@@ -4371,7 +4593,7 @@ function bindEvents() {
       removeAccount(del.getAttribute("data-del-account"));
       return;
     }
-    const card = event.target.closest(".account-card");
+    const card = event.target.closest(".account-card, .account-row");
     if (card) {
       selectAccount(card.getAttribute("data-account")).catch(function (error) {
         toast(error.message, "error");
@@ -4689,10 +4911,10 @@ function renderReimbCards() {
     });
   }
   if ($("reimb-pending")) {
-    $("reimb-pending").textContent = money(pending);
+    $("reimb-pending").textContent = assetMoney(pending);
   }
   if ($("reimb-done")) {
-    $("reimb-done").textContent = money(done);
+    $("reimb-done").textContent = assetMoney(done);
   }
 }
 
@@ -4731,6 +4953,94 @@ async function loadDebtSummary() {
 }
 
 /** 顶部净资产卡：总资产=正余额账户+待收借出；总负债=负余额账户+待还借入 */
+/** 资产页金额显示：开启小眼睛后统一替换成圆点 */
+function assetMoney(value) {
+  return state.amountHidden ? "¥••••" : money(value);
+}
+
+/** 净资产卡背景图本地缓存键（v0.09.2 本地存储；TODO 云端：后续接账号体系后把同一 dataURL 上传对象存储并随用户同步） */
+const HERO_BG_KEY = "dsh.assetsHeroBg";
+
+function applyHeroBg() {
+  const hero = $("assets-hero");
+  if (!hero) {
+    return;
+  }
+  let raw = "";
+  try {
+    raw = window.localStorage.getItem(HERO_BG_KEY) || "";
+  } catch (error) {
+    raw = "";
+  }
+  if (!raw) {
+    hero.style.backgroundImage = "";
+    hero.classList.remove("has-bg");
+    return;
+  }
+  hero.style.backgroundImage =
+    'linear-gradient(160deg, rgba(2,6,23,.18), rgba(2,6,23,.58)), url("' + raw + '")';
+  hero.classList.add("has-bg");
+}
+
+/** 用户自选背景图：等比缩到 1600px 内再转 JPEG，尽量塞进 localStorage */
+function onHeroBgPick(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) {
+    return;
+  }
+  if (!/^image\//.test(file.type)) {
+    toast("请选择图片文件", "error");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function () {
+    const img = new Image();
+    img.onload = function () {
+      const maxWidth = 1600;
+      const scale = Math.min(1, maxWidth / (img.width || maxWidth));
+      const width = Math.max(1, Math.round((img.width || maxWidth) * scale));
+      const height = Math.max(1, Math.round((img.height || 900) * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+      let dataUrl = "";
+      try {
+        dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+      } catch (error) {
+        toast("图片读取失败，换一张试试", "error");
+        return;
+      }
+      try {
+        window.localStorage.setItem(HERO_BG_KEY, dataUrl);
+      } catch (error) {
+        toast("图片太大，换一张小一点的", "error");
+        return;
+      }
+      applyHeroBg();
+      toast("背景已更新", "success");
+    };
+    img.onerror = function () {
+      toast("图片读取失败，换一张试试", "error");
+    };
+    img.src = String(reader.result || "");
+  };
+  reader.readAsDataURL(file);
+  event.target.value = "";
+}
+
+function updateEyeButton() {
+  const btn = $("hero-eye-btn");
+  if (!btn) {
+    return;
+  }
+  btn.classList.toggle("is-off", state.amountHidden);
+  btn.setAttribute("aria-label", state.amountHidden ? "显示金额" : "隐藏金额");
+  btn.setAttribute("title", state.amountHidden ? "显示金额" : "隐藏金额");
+}
+
+/** 顶部净资产卡：总资产=正余额账户+待收借出；总负债=负余额账户+待还借入 */
 function renderAssetsHero() {
   let assets = 0;
   let liabilities = 0;
@@ -4748,26 +5058,135 @@ function renderAssetsHero() {
   liabilities += borrow;
 
   if ($("asset-net")) {
-    $("asset-net").textContent = money(cents(assets - liabilities));
+    $("asset-net").textContent = assetMoney(cents(assets - liabilities));
   }
   if ($("asset-total")) {
-    $("asset-total").textContent = money(cents(assets));
+    $("asset-total").textContent = assetMoney(cents(assets));
   }
   if ($("asset-liability")) {
-    $("asset-liability").textContent = money(cents(liabilities));
+    $("asset-liability").textContent = assetMoney(cents(liabilities));
   }
   if ($("asset-borrow")) {
-    $("asset-borrow").textContent = money(cents(borrow));
+    $("asset-borrow").textContent = assetMoney(cents(borrow));
   }
   if ($("asset-lend")) {
-    $("asset-lend").textContent = money(cents(lend));
+    $("asset-lend").textContent = assetMoney(cents(lend));
   }
+  updateEyeButton();
+  applyHeroBg();
+}
+
+/* ==================== 资产统计明细弹窗（v0.09.2） ==================== */
+
+const STAT_DETAIL_TITLES = {
+  borrow: "借入明细",
+  lend: "借出明细",
+  pending: "待报销明细",
+  done: "已报销明细",
+};
+
+function statDetailRowHtml(title, sub, amount, recordId) {
+  const clickable = recordId
+    ? ' data-record-id="' + recordId + '" tabindex="0" role="button"'
+    : "";
+  return (
+    '<div class="stat-detail-row"' +
+    clickable +
+    ">" +
+    '<span class="stat-detail-main">' +
+    '<span class="stat-detail-title">' +
+    escapeHtml(title) +
+    "</span>" +
+    '<span class="stat-detail-sub">' +
+    escapeHtml(sub) +
+    "</span>" +
+    "</span>" +
+    '<span class="stat-detail-amount">' +
+    amount +
+    "</span></div>"
+  );
+}
+
+async function openStatDetail(kind) {
+  const modalEl = $("stat-detail-modal");
+  const list = $("stat-detail-list");
+  if (!modalEl || !list) {
+    return;
+  }
+  $("stat-detail-title").textContent = STAT_DETAIL_TITLES[kind] || "明细";
+  list.innerHTML = '<div class="sk-feed-row"><span class="sk-line" style="width:60%"></span></div>';
+
+  let html = "";
+  if (kind === "borrow" || kind === "lend") {
+    try {
+      const data = await api("/api/debts?status=unpaid");
+      (data.debts || [])
+        .filter(function (debt) {
+          return debt.type === kind;
+        })
+        .forEach(function (debt) {
+          const when = debt.date ? String(debt.date).slice(0, 10) : "未记日期";
+          html += statDetailRowHtml(
+            debt.contact_name || "未命名联系人",
+            when + " · " + (kind === "borrow" ? "我欠对方" : "对方欠我"),
+            money(debt.amount),
+            null
+          );
+        });
+    } catch (error) {
+      html = "";
+    }
+    if (!html) {
+      html = emptyBlockHtml(kind === "borrow" ? "没有未结清的借入" : "没有未结清的借出");
+    }
+  } else {
+    (state.allRecords || [])
+      .filter(function (record) {
+        return record.type === "expense" && record.is_reimbursable;
+      })
+      .forEach(function (record) {
+        const total = Number(record.total_reimbursement || 0);
+        const paid = Number(record.reimbursed_amount || 0);
+        if (kind === "pending") {
+          if (total <= paid) {
+            return;
+          }
+          html += statDetailRowHtml(
+            record.note || record.category || "支出",
+            (record.date ? String(record.date).slice(0, 10) : "") +
+              " · " +
+              (record.reimbursement_contact_name || "未填报销人"),
+            money(cents(total - paid)),
+            record.id
+          );
+        } else {
+          if (paid <= 0) {
+            return;
+          }
+          html += statDetailRowHtml(
+            record.note || record.category || "支出",
+            (record.date ? String(record.date).slice(0, 10) : "") +
+              " · " +
+              (record.reimbursement_contact_name || "未填报销人"),
+            money(cents(paid)),
+            record.id
+          );
+        }
+      });
+    if (!html) {
+      html = emptyBlockHtml(kind === "pending" ? "没有待报销的账目" : "还没有已报销的账目");
+    }
+  }
+
+  list.innerHTML = html;
+  statDetailModal.show();
 }
 
 /* ==================== 回收站（v0.09.1） ==================== */
 
 let trashModal = null;
 let budgetModal = null;
+let statDetailModal = null;
 
 async function loadTrash() {
   const box = $("trash-list");
@@ -5226,6 +5645,10 @@ async function init() {
     }
     if (trashElement) {
       trashModal = new window.bootstrap.Modal(trashElement);
+    }
+    if ($("stat-detail-modal")) {
+      statDetailModal = new window.bootstrap.Modal($("stat-detail-modal"));
+      bindEscClose($("stat-detail-modal"), statDetailModal);
     }
     if (budgetElement) {
       budgetModal = new window.bootstrap.Modal(budgetElement);
