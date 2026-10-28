@@ -5200,6 +5200,7 @@ let aiModal = null;
 
 /** 打开 AI 快记弹窗：不主动清空，用户上次没发出去的文字还在 */
 function openAiModal() {
+  clearAiImage();
   if (aiModal) {
     aiModal.show();
   }
@@ -5232,20 +5233,113 @@ async function sendAiQuick() {
     return;
   }
   const text = String(input.value || "").trim();
-  if (!text) {
+  const imageFile = aiPendingImage;
+  if (!text && !imageFile) {
     return;
   }
-  const quick = aiQuickCommand(text);
   input.value = "";
   if (aiModal) {
     hideModalSafe(aiModal, $("ai-modal"));
   }
+  // 带图时优先按图识别：截图里已经有金额和商户，文本只当作备注不提交
+  if (imageFile) {
+    clearAiImage();
+    uploadShotForAi(imageFile);
+    return;
+  }
+  const quick = aiQuickCommand(text);
   if (quick) {
     runFastRecord(quick);
     return;
   }
   runAiStream(text);
 }
+
+/* ==================== AI 快记：图片识别（v0.11.1） ==================== */
+
+// 待识别的图片文件：弹窗里选了图就存在这，点发送时优先走 /api/records/ai/image
+var aiPendingImage = null;
+
+function clearAiImage() {
+  aiPendingImage = null;
+  const preview = $("ai-image-preview");
+  const image = $("ai-image-preview-img");
+  const meta = $("ai-image-meta");
+  const fileInput = $("ai-image-file");
+  if (preview) {
+    preview.classList.remove("is-show");
+  }
+  if (image) {
+    image.removeAttribute("src");
+  }
+  if (meta) {
+    meta.textContent = "";
+  }
+  if (fileInput) {
+    fileInput.value = "";
+  }
+}
+
+function setAiImage(file) {
+  if (!file) {
+    return;
+  }
+  if (!/^image\//.test(String(file.type || ""))) {
+    toast("只能选图片文件（jpg / png / webp）", "error");
+    return;
+  }
+  aiPendingImage = file;
+  const preview = $("ai-image-preview");
+  const image = $("ai-image-preview-img");
+  const meta = $("ai-image-meta");
+  const sizeKb = Math.max(1, Math.round(Number(file.size || 0) / 1024));
+  if (meta) {
+    meta.textContent =
+      (file.name || "待识别截图") +
+      " · 约 " +
+      sizeKb +
+      " KB；发送时会自动压到最长边 800px";
+  }
+  if (image) {
+    const reader = new FileReader();
+    reader.onload = function () {
+      image.src = String(reader.result || "");
+    };
+    reader.readAsDataURL(file);
+  }
+  if (preview) {
+    preview.classList.add("is-show");
+  }
+}
+
+function onAiImagePicked(event) {
+  const input = event.target;
+  const file = input.files && input.files[0];
+  // 立刻清空，下一张同名图也能重新触发 change
+  input.value = "";
+  if (file) {
+    setAiImage(file);
+  }
+}
+
+(function bindAiImageUi() {
+  const button = $("ai-image-btn");
+  const fileInput = $("ai-image-file");
+  const clearButton = $("ai-image-clear");
+  if (button && fileInput) {
+    button.addEventListener("click", function () {
+      fileInput.click();
+    });
+  }
+  if (fileInput) {
+    fileInput.addEventListener("change", onAiImagePicked);
+  }
+  if (clearButton) {
+    clearButton.addEventListener("click", function () {
+      clearAiImage();
+    });
+  }
+})();
 
 /* ==================== 报销（v0.09） ==================== */
 

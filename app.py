@@ -34,6 +34,60 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # 启动就建表 / 升级表结构。表已存在时 CREATE TABLE 会跳过，缺列时自动补列
 database.init_db()
 
+# ---------------- 全站访问密码（v0.11.1） ----------------
+
+# 这些接口在没验证密码时也要能访问：问配置、交密码换 token
+ACCESS_PUBLIC_PATHS = {"/api/access/config", "/api/access/verify"}
+
+# 改密码 / 删密码 / 调超时，要求最近 5 分钟内验证过密码
+ACCESS_REAUTH_MINUTES = 5
+
+
+def _request_access_token():
+    return (request.headers.get("X-Access-Token") or "").strip()
+
+
+def _fresh_admin_check(data):
+    """敏感设置的安全校验：刚输过密码才放行。
+
+    顺序：没设密码直接放行 → 请求里带了 fresh_password 就现场比对 →
+    否则看 X-Access-Token 的年龄是不是在 5 分钟以内。
+    返回 None 表示放行，否则返回 (jsonify, status) 错误响应。
+    """
+    config = database.get_access_config()
+    if not config["protected"]:
+        return None
+
+    fresh = data.get("fresh_password") if isinstance(data, dict) else None
+    if isinstance(fresh, str) and fresh:
+        if database.verify_access_password(fresh):
+            return None
+        return jsonify(error="当前密码不正确", code="access_denied"), 401
+
+    if database.check_access_session(_request_access_token(), ACCESS_REAUTH_MINUTES):
+        return None
+    return jsonify(error="为了安全，请先重新输入当前密码", code="reauth_required"), 401
+
+
+@app.before_request
+def _access_guard():
+    """没设密码时完全透明；设了密码就要求所有 /api/ 带有效 token。"""
+    if request.method == "OPTIONS":
+        return None
+
+    path = request.path
+    if not path.startswith("/api/") or path in ACCESS_PUBLIC_PATHS:
+        return None
+
+    config = database.get_access_config()
+    if not config["protected"]:
+        return None
+
+    if database.check_access_session(_request_access_token(), config["timeout_minutes"]):
+        return None
+
+    return jsonify(error="需要输入访问密码", code="access_required"), 401
+
 
 def _parse_datetime(value):
     """把请求里的日期时间统一成「YYYY-MM-DD HH:MM」，返回 (字符串, 错误信息)。"""
@@ -1003,8 +1057,17 @@ def statistics():
 
 @app.route("/api/notifications", methods=["GET"])
 def list_notifications():
-    """全部通知，前端信封面板按时间倒序展示。"""
-    return jsonify(notifications=database.list_notifications())
+    """通知列表。
+
+    默认只回 status=published，前台信封面板按时间倒序展示；
+    后台传 ?include=drafts 才拿到全部（含待审核草稿）。
+    """
+    include = (request.args.get("include") or "").strip()
+    if include in ("drafts", "all"):
+        return jsonify(notifications=database.list_notifications())
+    return jsonify(
+        notifications=database.list_notifications(status="published"),
+    )
 
 
 @app.route("/api/notifications", methods=["POST"])
@@ -1111,6 +1174,42 @@ def delete_notification(notify_id):
     return jsonify(deleted=notify_id)
 
 
+@app.route("/api/notifications/draft", methods=["POST"])
+def draft_notification():
+    """AI 起草一条通知草稿，返回 {draft: {...}}，状态 draft 等人工审核。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    topic = data.get("topic")
+    if not isinstance(topic, str) or not topic.strip():
+        return jsonify(error="topic 必须是非空字符串"), 400
+    if len(topic.strip()) > 200:
+        return jsonify(error="topic 最多 200 个字符"), 400
+
+    try:
+        draft = ai_service.generate_notification(topic.strip())
+    except ai_service.AIServiceError as exc:
+        return jsonify(error=str(exc)), 502
+
+    try:
+        notification = database.create_notification(
+            draft["title"], draft["content"], "", None, status="draft"
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(draft=notification), 201
+
+
+@app.route("/api/notifications/<int:notify_id>/publish", methods=["PUT"])
+def publish_notification(notify_id):
+    """一键发布草稿：status 改 published，发布时间刷新为现在。"""
+    notification = database.publish_notification(notify_id)
+    if notification is None:
+        return jsonify(error="通知不存在"), 404
+    return jsonify(notification)
+
+
 @app.route("/api/upload", methods=["POST"])
 def upload_image():
     """接收 multipart 表单里的 file 字段，存进 static/uploads，返回可直接访问的 URL。"""
@@ -1133,6 +1232,105 @@ def upload_image():
     with open(os.path.join(UPLOAD_DIR, filename), "wb") as handle:
         handle.write(data)
     return jsonify(url="/static/uploads/" + filename, filename=filename), 201
+
+
+# ---------------- 访问密码接口（v0.11.1） ----------------
+
+
+@app.route("/api/access/config", methods=["GET"])
+def access_config():
+    """前端启动先问这个：有没有设密码、验证超时多久。"""
+    return jsonify(database.get_access_config())
+
+
+@app.route("/api/access/verify", methods=["POST"])
+def access_verify():
+    """交密码换 token；没设密码也发一个 token，前端逻辑保持统一。"""
+    data = request.get_json(silent=True) or {}
+    config = database.get_access_config()
+
+    if config["protected"]:
+        password = data.get("password")
+        if not isinstance(password, str) or not password:
+            return jsonify(error="请输入访问密码", code="access_denied"), 400
+        if not database.verify_access_password(password):
+            return jsonify(error="密码不正确，请重新输入", code="access_denied"), 401
+
+    token = database.create_access_session()
+    return jsonify(
+        ok=True,
+        token=token,
+        protected=config["protected"],
+        timeout_minutes=config["timeout_minutes"],
+    )
+
+
+@app.route("/api/access/passwords", methods=["GET"])
+def access_passwords():
+    """后台设置面板：密码列表（只有掩码序号）+ 当前超时。"""
+    config = database.get_access_config()
+    return jsonify(
+        passwords=database.list_access_passwords(),
+        timeout_minutes=config["timeout_minutes"],
+        protected=config["protected"],
+    )
+
+
+@app.route("/api/access/passwords", methods=["POST"])
+def add_access_password():
+    """新增密码。敏感操作：最近 5 分钟内没验证过就要重新输当前密码。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    denied = _fresh_admin_check(data)
+    if denied is not None:
+        return denied
+
+    password = data.get("password")
+    if not isinstance(password, str):
+        return jsonify(error="password 必须是字符串"), 400
+
+    ok, error, count = database.add_access_password(password)
+    if not ok:
+        return jsonify(error=error), 400
+    return jsonify(added=True, password_count=count,
+                   passwords=database.list_access_passwords()), 201
+
+
+@app.route("/api/access/passwords/<int:index>", methods=["DELETE"])
+def delete_access_password(index):
+    """删除指定序号的密码，同样要 5 分钟内验证过。"""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    denied = _fresh_admin_check(data)
+    if denied is not None:
+        return denied
+
+    ok, error, count = database.remove_access_password(index)
+    if not ok:
+        return jsonify(error=error), 400
+    return jsonify(deleted=index, password_count=count,
+                   passwords=database.list_access_passwords())
+
+
+@app.route("/api/access/timeout", methods=["PUT"])
+def update_access_timeout():
+    """调验证超时（10 分钟 ~ 1440 分钟），同样要 5 分钟内验证过。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    denied = _fresh_admin_check(data)
+    if denied is not None:
+        return denied
+
+    ok, error, minutes = database.set_access_timeout(data.get("timeout_minutes"))
+    if not ok:
+        return jsonify(error=error), 400
+    return jsonify(timeout_minutes=minutes)
 
 
 @app.route("/admin", methods=["GET"])

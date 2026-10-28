@@ -204,6 +204,24 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 """
 
 
+NOTIFICATION_PROMPT = """你是记账应用的「更新通知撰稿人」。用户会给你一个主题（例如「新增截图记账与访问密码」），你要写一条面向普通用户的中文更新通知，只输出一个 JSON 对象。
+
+【写作规范】
+- title：不超过 30 个汉字，直接点明这次更新做了什么，不要用「重磅」「震撼」这类营销词。
+- content：纯文本，不带 Markdown、不带 HTML 标签、不用表情或符号装饰，语气平实克制。
+- 结构必须是带序号的条目：用 1. 2. 3. 分行写，每条一句到两句话，讲清楚「改了什么、用户能怎么用、注意什么」。
+- 3 到 5 条，总字数控制在 200 字以内；不夸大、不编造没提到的功能。
+- 输出的 JSON 只有两个键：title（字符串）、content（字符串，条目之间用 \n 分隔）。
+
+【示例】
+主题：截图记账上线
+输出：{"title": "新增截图记账功能", "content": "1. 现在可以直接上传支付截图记账，AI 会自动识别金额、分类与账户。\n2. 识别结果会先在右下角显示进度，成功后点气泡即可查看账单详情。\n3. 截图会保存在本机相册，可在「我的」页面查看原图或删除图片。"}
+
+主题：可以忽略
+输出：{"title": "更新说明", "content": "1. 本次更新优化了操作体验。"}
+"""
+
+
 class AIServiceError(Exception):
     """AI 解析失败：密钥缺失、网络错误、模型输出不是合法 JSON，都走这里。"""
 
@@ -537,3 +555,77 @@ def parse_image(
 
     # 复用文本版的归一化：金额校验、日期换算、报销字段都走同一套规则
     return _normalize_intent(payload, moment)
+
+
+def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    """根据主题起草一条更新通知（纯文本、带序号），返回 {"title", "content"}。
+
+    content 保持纯文本（\n 分行），由调用方决定怎么入库或转成后台编辑器格式；
+    模型返回里混进来 HTML 或 Markdown 的，这里统一剥掉，保证「纯文本」这条规范。
+    """
+    cleaned = (topic or "").strip()
+    if not cleaned:
+        raise AIServiceError("先写一个更新主题，比如「新增截图记账功能」")
+    if len(cleaned) > 200:
+        raise AIServiceError("主题太长了，控制在 200 字以内")
+
+    now = now or datetime.now()
+    client = _client()
+    kwargs: dict[str, Any] = {
+        "model": MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": NOTIFICATION_PROMPT
+                + "\n\n现在日期："
+                + now.strftime("%Y-%m-%d")
+                + "\n主题："
+                + cleaned,
+            }
+        ],
+        "temperature": 0.6,
+        "max_tokens": 900,
+    }
+
+    try:
+        completion = client.chat.completions.create(
+            **kwargs, response_format={"type": "json_object"}
+        )
+    except Exception as error:
+        if "response_format" not in str(error) and "json_object" not in str(error):
+            raise AIServiceError("调用智谱接口失败：%s" % error)
+        completion = client.chat.completions.create(**kwargs)
+
+    try:
+        content = completion.choices[0].message.content
+    except (AttributeError, IndexError):
+        raise AIServiceError("智谱接口返回结构异常")
+    if not content:
+        raise AIServiceError("模型返回了空内容")
+
+    try:
+        payload = json.loads(_strip_fence(content))
+    except json.JSONDecodeError as error:
+        raise AIServiceError("模型返回的不是合法 JSON：%s" % error)
+    if not isinstance(payload, dict):
+        raise AIServiceError("模型返回的不是 JSON 对象")
+
+    title = _as_text(payload.get("title"))
+    body = _as_text(payload.get("content"))
+    if not title:
+        title = cleaned[:30]
+    if len(title) > 80:
+        title = title[:80]
+
+    # 纯文本规范：去掉 HTML 标签与 Markdown 强调符号，压掉多余空行
+    body = re.sub(r"<[^>]+>", "", body)
+    body = body.replace("**", "").replace("__", "").replace("#", "").replace("`", "")
+    lines = [line.strip() for line in body.splitlines()]
+    lines = [line for line in lines if line]
+    body = "\n".join(lines)
+    if not body:
+        raise AIServiceError("模型没有写出正文，请换个主题重试")
+    if len(body) > 1200:
+        body = body[:1200]
+
+    return {"title": title, "content": body}

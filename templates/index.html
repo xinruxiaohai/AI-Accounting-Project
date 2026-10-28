@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.11.0">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.1">
 </head>
 <body>
 
@@ -937,7 +937,25 @@
       <div class="modal-body">
         <textarea class="form-control ai-textarea" id="ai-input" rows="4" maxlength="200"
                   placeholder="您可以输入：昨天买咖啡25 / 借给小王50 / 添加联系人老李..."></textarea>
-        <p class="ai-modal-hint">记账、借贷、添加联系人三合一；Ctrl + Enter 发送，Esc 关闭。</p>
+        <div class="ai-image-row">
+          <button class="ai-image-btn" type="button" id="ai-image-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="18" height="14" rx="2"></rect>
+              <circle cx="8.5" cy="10" r="1.6"></circle>
+              <path d="m4 17 4.5-4.6 3.2 3.1 2.6-2.4L20 17.5"></path>
+            </svg>
+            上传图片
+          </button>
+          <span class="ai-image-hint" id="ai-image-hint">支付截图、小票都能识别；带图时优先按图记账</span>
+        </div>
+        <input type="file" id="ai-image-file" accept="image/*" class="visually-hidden">
+        <div class="ai-thumb" id="ai-image-preview">
+          <img id="ai-image-preview-img" alt="待识别的截图">
+          <div class="ai-thumb-meta" id="ai-image-meta"></div>
+          <button class="ai-thumb-del" type="button" id="ai-image-clear" title="移除这张图">×</button>
+        </div>
+        <p class="ai-modal-hint">记账、借贷、添加联系人三合一；带图片时发给 AI 识别截图；Ctrl + Enter 发送，Esc 关闭。</p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
@@ -1158,8 +1176,9 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
+<script src="/static/access-guard.js?v=0.11.1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.11.0"></script>
+<script src="/static/script.js?v=0.11.1"></script>
 
 </body>
 </html>

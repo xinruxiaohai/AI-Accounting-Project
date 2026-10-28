@@ -411,7 +411,42 @@ def init_db():
                     title        TEXT    NOT NULL,
                     content      TEXT    NOT NULL DEFAULT '',
                     image_url    TEXT    NOT NULL DEFAULT '',
-                    publish_date TEXT    NOT NULL
+                    publish_date TEXT    NOT NULL,
+                    status       TEXT    NOT NULL DEFAULT 'published'
+                )
+                """
+            )
+            # v0.11.1 新增：status 区分草稿与已发布。老表升级时补列，历史通知一律视为已发布
+            notify_columns = [
+                row["name"] for row in conn.execute("PRAGMA table_info(notifications)")
+            ]
+            if "status" not in notify_columns:
+                conn.execute(
+                    "ALTER TABLE notifications ADD COLUMN status TEXT NOT NULL DEFAULT 'published'"
+                )
+            # 前台只查 published，后台分开查草稿与已发布，状态索引避免全表扫
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notifications_status "
+                "ON notifications (status)"
+            )
+
+            # 站点级配置（v0.11.1）：目前只放访问密码（逗号分隔的加盐哈希）与验证超时分钟数。
+            # 单行 key/value 结构，后续新配置直接加 key，不用再改表。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_config (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            # 访问会话（v0.11.1）：验证成功发一个随机 token，前端每次请求带上；
+            # 服务端按 created_at + verify_timeout 判定是否过期，过期即要求重新输入密码。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS access_sessions (
+                    token      TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL
                 )
                 """
             )
@@ -1683,6 +1718,11 @@ def delete_debt(debt_id):
 # ---------------- 通知（v0.06.2） ----------------
 
 
+# 通知状态（v0.11.1）：draft=AI 起草或人工存草稿，待后台审核；published=前台可见
+NOTIFICATION_STATUSES = ("draft", "published")
+NOTIFICATION_COLUMNS = "id, title, content, image_url, publish_date, status"
+
+
 def _row_to_notification(row):
     return {
         "id": row["id"],
@@ -1690,27 +1730,42 @@ def _row_to_notification(row):
         "content": row["content"],
         "image_url": row["image_url"],
         "publish_date": row["publish_date"],
+        "status": row["status"] if "status" in row.keys() else "published",
     }
 
 
-def list_notifications():
-    """全部通知，按发布时间倒序（新发的排最上面）。"""
+def list_notifications(status=None):
+    """通知列表，按发布时间倒序（新发的排最上面）。
+
+    status 传 "published" 只给前台已发布列表，传 "draft" 是后台待审核草稿；
+    不传则返回全部（仅后台维护用）。
+    """
+    sql = "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications"
+    params = []
+    if status:
+        if status not in NOTIFICATION_STATUSES:
+            raise RecordError("status 只能是 draft / published")
+        sql += " WHERE status = ?"
+        params.append(status)
+    sql += " ORDER BY publish_date DESC, id DESC"
+
     conn = get_conn()
     try:
-        rows = conn.execute(
-            "SELECT id, title, content, image_url, publish_date "
-            "FROM notifications ORDER BY publish_date DESC, id DESC"
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
         return [_row_to_notification(row) for row in rows]
     finally:
         conn.close()
 
 
-def create_notification(title, content="", image_url="", publish_date=None):
-    """发布一条通知，返回入库后的完整字典。"""
+def create_notification(title, content="", image_url="", publish_date=None, status="published"):
+    """发布一条通知（或存草稿），返回入库后的完整字典。"""
     title = (title or "").strip()
     if not title:
         raise RecordError("通知标题不能为空")
+
+    status = (status or "published").strip()
+    if status not in NOTIFICATION_STATUSES:
+        raise RecordError("status 只能是 draft / published")
 
     publish_date = (publish_date or "").strip() or datetime.datetime.now().strftime(
         "%Y-%m-%d %H:%M"
@@ -1720,13 +1775,13 @@ def create_notification(title, content="", image_url="", publish_date=None):
     try:
         with conn:
             cursor = conn.execute(
-                "INSERT INTO notifications (title, content, image_url, publish_date) "
-                "VALUES (?, ?, ?, ?)",
-                (title, content or "", image_url or "", publish_date),
+                "INSERT INTO notifications (title, content, image_url, publish_date, status) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (title, content or "", image_url or "", publish_date, status),
             )
             new_id = cursor.lastrowid
         row = conn.execute(
-            "SELECT id, title, content, image_url, publish_date FROM notifications WHERE id = ?",
+            "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications WHERE id = ?",
             (new_id,),
         ).fetchone()
         return _row_to_notification(row)
@@ -1734,7 +1789,31 @@ def create_notification(title, content="", image_url="", publish_date=None):
         conn.close()
 
 
-def update_notification(notify_id, title=None, content=None, image_url=None, publish_date=None):
+def publish_notification(notify_id):
+    """把草稿发布出去：status 改 published，publish_date 刷新为当前时间。"""
+    conn = get_conn()
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM notifications WHERE id = ?", (notify_id,)
+        ).fetchone()
+        if exists is None:
+            return None
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        with conn:
+            conn.execute(
+                "UPDATE notifications SET status = 'published', publish_date = ? WHERE id = ?",
+                (now, notify_id),
+            )
+        row = conn.execute(
+            "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications WHERE id = ?",
+            (notify_id,),
+        ).fetchone()
+        return _row_to_notification(row)
+    finally:
+        conn.close()
+
+
+def update_notification(notify_id, title=None, content=None, image_url=None, publish_date=None, status=None):
     """改通知：只更新传进来的字段（None 表示不动），返回改后的完整字典。
 
     没有这条通知返回 None，由 app.py 转成 404。
@@ -1745,6 +1824,11 @@ def update_notification(notify_id, title=None, content=None, image_url=None, pub
         if not title:
             raise RecordError("通知标题不能为空")
         fields["title"] = title
+    if status is not None:
+        status = str(status).strip()
+        if status not in NOTIFICATION_STATUSES:
+            raise RecordError("status 只能是 draft / published")
+        fields["status"] = status
     if content is not None:
         fields["content"] = content
     if image_url is not None:
@@ -1765,7 +1849,7 @@ def update_notification(notify_id, title=None, content=None, image_url=None, pub
                     list(fields.values()) + [notify_id],
                 )
         row = conn.execute(
-            "SELECT id, title, content, image_url, publish_date FROM notifications WHERE id = ?",
+            "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications WHERE id = ?",
             (notify_id,),
         ).fetchone()
         return _row_to_notification(row)
@@ -1895,5 +1979,236 @@ def update_feedback_status(feedback_id, status):
             (feedback_id,),
         ).fetchone()
         return _row_to_feedback(row), None
+    finally:
+        conn.close()
+
+
+# ---------------- 站点访问密码与验证会话（v0.11.1） ----------------
+
+# 访问密码用「随机盐 + SHA256」存，多个密码用逗号拼在 admin_config.value 里。
+# 只在服务端比哈希，接口永远不回明文；后台列表也只显示「密码 1 / 密码 2」这样的掩码。
+ACCESS_PASSWORD_KEY = "access_password"
+ACCESS_TIMEOUT_KEY = "verify_timeout"
+DEFAULT_VERIFY_TIMEOUT_MINUTES = 60
+MIN_VERIFY_TIMEOUT_MINUTES = 10
+MAX_VERIFY_TIMEOUT_MINUTES = 1440
+PASSWORD_MIN_LENGTH = 4
+PASSWORD_MAX_LENGTH = 64
+
+
+def _hash_password(raw_password, salt=None):
+    """返回「盐$哈希」；校验时把同一盐和用户输入再算一遍比对。"""
+    import hashlib
+    import secrets
+
+    salt = salt or secrets.token_hex(8)
+    digest = hashlib.sha256((salt + ":" + raw_password).encode("utf-8")).hexdigest()
+    return salt + "$" + digest
+
+
+def _password_matches(raw_password, stored):
+    if not stored or "$" not in stored:
+        return False
+    salt, _, _digest = stored.partition("$")
+    return _hash_password(raw_password, salt) == stored
+
+
+def _config_get(conn, key, default=""):
+    row = conn.execute(
+        "SELECT value FROM admin_config WHERE key = ?", (key,)
+    ).fetchone()
+    return row["value"] if row is not None else default
+
+
+def _config_set(conn, key, value):
+    conn.execute(
+        "INSERT INTO admin_config (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, str(value)),
+    )
+
+
+def get_access_config():
+    """前端启动时问一次：有没有设密码、多长的验证超时。"""
+    conn = get_conn()
+    try:
+        hashes = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        raw_timeout = _config_get(conn, ACCESS_TIMEOUT_KEY, "")
+        try:
+            timeout = int(raw_timeout) if raw_timeout else DEFAULT_VERIFY_TIMEOUT_MINUTES
+        except (TypeError, ValueError):
+            timeout = DEFAULT_VERIFY_TIMEOUT_MINUTES
+        timeout = max(MIN_VERIFY_TIMEOUT_MINUTES, min(MAX_VERIFY_TIMEOUT_MINUTES, timeout))
+        return {
+            "protected": bool(hashes),
+            "password_count": len(hashes),
+            "timeout_minutes": timeout,
+        }
+    finally:
+        conn.close()
+
+
+def verify_access_password(raw_password):
+    """比对任意一个已设密码；没设密码时视为通过（不强制拦截）。"""
+    raw_password = str(raw_password or "")
+    conn = get_conn()
+    try:
+        if not _config_get(conn, ACCESS_PASSWORD_KEY, ""):
+            return True
+        hashes = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        return any(_password_matches(raw_password, stored) for stored in hashes)
+    finally:
+        conn.close()
+
+
+def list_access_passwords():
+    """后台密码列表：只回掩码与序号，绝不回明文或哈希。"""
+    conn = get_conn()
+    try:
+        hashes = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        return [{"index": index, "label": "密码 %d" % (index + 1)} for index in range(len(hashes))]
+    finally:
+        conn.close()
+
+
+def add_access_password(raw_password):
+    """新增一个访问密码，返回 (是否成功, 错误信息, 密码数量)。"""
+    raw_password = str(raw_password or "")
+    if len(raw_password) < PASSWORD_MIN_LENGTH:
+        return False, "密码至少 %d 位" % PASSWORD_MIN_LENGTH, 0
+    if len(raw_password) > PASSWORD_MAX_LENGTH:
+        return False, "密码最多 %d 位" % PASSWORD_MAX_LENGTH, 0
+
+    conn = get_conn()
+    try:
+        hashes = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        if any(_password_matches(raw_password, stored) for stored in hashes):
+            return False, "这个密码已经存在了", len(hashes)
+        hashes.append(_hash_password(raw_password))
+        with conn:
+            _config_set(conn, ACCESS_PASSWORD_KEY, ",".join(hashes))
+        return True, None, len(hashes)
+    finally:
+        conn.close()
+
+
+def remove_access_password(index):
+    """按序号删一个密码，返回 (是否成功, 错误信息, 剩余数量)。"""
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return False, "密码序号不合法", 0
+
+    conn = get_conn()
+    try:
+        hashes = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        if index < 0 or index >= len(hashes):
+            return False, "密码不存在", len(hashes)
+        hashes.pop(index)
+        with conn:
+            _config_set(conn, ACCESS_PASSWORD_KEY, ",".join(hashes))
+            # 删到没有密码时清掉全部会话，站点立刻回到免密状态
+            if not hashes:
+                conn.execute("DELETE FROM access_sessions")
+        return True, None, len(hashes)
+    finally:
+        conn.close()
+
+
+def set_access_timeout(minutes):
+    """改验证超时（10 分钟 ~ 1 天），返回 (是否成功, 错误信息, 分钟数)。"""
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return False, "超时时间必须是整数分钟", 0
+    if minutes < MIN_VERIFY_TIMEOUT_MINUTES or minutes > MAX_VERIFY_TIMEOUT_MINUTES:
+        return False, "超时时间要在 %d ~ %d 分钟之间" % (
+            MIN_VERIFY_TIMEOUT_MINUTES,
+            MAX_VERIFY_TIMEOUT_MINUTES,
+        ), 0
+
+    conn = get_conn()
+    try:
+        with conn:
+            _config_set(conn, ACCESS_TIMEOUT_KEY, minutes)
+        return True, None, minutes
+    finally:
+        conn.close()
+
+
+def create_access_session():
+    """验证成功后发 token，返回 token 字符串。"""
+    import secrets
+
+    token = secrets.token_urlsafe(24)
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_conn()
+    try:
+        with conn:
+            # 顺手清掉一天前的会话，避免表无限长
+            conn.execute(
+                "DELETE FROM access_sessions WHERE created_at < ?",
+                ((datetime.datetime.now() - datetime.timedelta(days=1)).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),),
+            )
+            conn.execute(
+                "INSERT INTO access_sessions (token, created_at) VALUES (?, ?)",
+                (token, now),
+            )
+        return token
+    finally:
+        conn.close()
+
+
+def get_access_session_age(token):
+    """返回 token 已存在的秒数；token 不存在返回 None。"""
+    token = str(token or "").strip()
+    if not token:
+        return None
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT created_at FROM access_sessions WHERE token = ?", (token,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            created = datetime.datetime.strptime(row["created_at"], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+        return max(0, int((datetime.datetime.now() - created).total_seconds()))
+    finally:
+        conn.close()
+
+
+def check_access_session(token, timeout_minutes=None):
+    """token 是否仍在验证有效期内。"""
+    if timeout_minutes is None:
+        timeout_minutes = get_access_config()["timeout_minutes"]
+    age = get_access_session_age(token)
+    if age is None:
+        return False
+    return age < timeout_minutes * 60
+
+
+def revoke_access_session(token):
+    token = str(token or "").strip()
+    if not token:
+        return
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute("DELETE FROM access_sessions WHERE token = ?", (token,))
     finally:
         conn.close()

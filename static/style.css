@@ -6396,3 +6396,262 @@ body {
     gap: 10px;
   }
 }
+
+/* ================= v0.11.1：全站访问密码遮罩 ================= */
+
+.access-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(9, 13, 24, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, visibility 0.18s ease;
+}
+
+.access-overlay.is-show {
+  opacity: 1;
+  visibility: visible;
+}
+
+html.access-locked,
+html.access-locked body {
+  overflow: hidden;
+}
+
+.access-card {
+  width: min(420px, 100%);
+  padding: 28px 26px 22px;
+  border-radius: 20px;
+  background: var(--surface, #fff);
+  color: var(--text-main, #1f2937);
+  border: 1px solid var(--border, #e5e7eb);
+  box-shadow: 0 30px 80px rgba(2, 6, 23, 0.45);
+}
+
+.access-badge {
+  width: 46px;
+  height: 46px;
+  margin: 0 auto 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  color: #fff;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+}
+
+.access-badge svg {
+  width: 24px;
+  height: 24px;
+}
+
+.access-title {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.access-sub {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-sub, #6b7280);
+  text-align: center;
+}
+
+.access-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.access-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-soft, #f8fafc);
+  color: inherit;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.access-input:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.16);
+}
+
+.access-input.is-invalid {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14);
+}
+
+.access-error {
+  margin: 0;
+  font-size: 12.5px;
+  color: #dc2626;
+}
+
+.access-error[hidden] {
+  display: none;
+}
+
+.access-btn {
+  height: 44px;
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  cursor: pointer;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+
+.access-btn:hover {
+  filter: brightness(1.06);
+}
+
+.access-btn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.access-foot {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-sub, #6b7280);
+  text-align: center;
+}
+
+.access-overlay.access-shake .access-card {
+  animation: access-shake 0.32s ease;
+}
+
+@keyframes access-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-7px); }
+  50% { transform: translateX(6px); }
+  75% { transform: translateX(-4px); }
+}
+
+[data-theme="dark"] .access-card {
+  background: var(--surface, #111a2b);
+  border-color: var(--border, #243049);
+}
+
+/* ================= v0.11.1：AI 快记弹窗「上传图片」 ================= */
+
+.ai-image-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+
+.ai-image-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--border, #cbd5e1);
+  background: var(--bg-soft, #f8fafc);
+  color: var(--text-sub, #475569);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.ai-image-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-image-btn:hover {
+  border-color: #2563eb;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.ai-image-hint {
+  font-size: 12px;
+  color: var(--text-sub, #94a3b8);
+}
+
+.ai-thumb {
+  display: none;
+  position: relative;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border, #e5e7eb);
+  background: var(--bg-soft, #f8fafc);
+}
+
+.ai-thumb.is-show {
+  display: flex;
+}
+
+.ai-thumb img {
+  width: 84px;
+  height: 84px;
+  object-fit: cover;
+  border-radius: 9px;
+  background: #e2e8f0;
+}
+
+.ai-thumb-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-sub, #6b7280);
+  word-break: break-all;
+}
+
+.ai-thumb-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-thumb-del:hover {
+  background: rgba(220, 38, 38, 0.86);
+}
+
+[data-theme="dark"] .ai-thumb,
+[data-theme="dark"] .ai-image-btn {
+  background: var(--bg-soft, #182234);
+}
+
+/* v0.11.1：暗色模式下相册缩略图保持清晰 */
+[data-theme="dark"] .ai-thumb img {
+  background: #0f172a;
+}
+

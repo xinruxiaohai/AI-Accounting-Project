@@ -305,6 +305,190 @@
     .feedback-status.is-pending { color: #b45309; background: #fef3c7; }
     .feedback-status.is-processed { color: #15803d; background: #dcfce7; }
     .feedback-source { font-size: 11px; color: var(--text-dim); }
+    /* ================= v0.11.1：AI 起草与审核工作流 ================= */
+    .admin-badge-draft {
+      background: rgba(245, 158, 11, 0.16);
+      color: #b45309;
+      font-weight: 600;
+    }
+    .ai-draft-box {
+      border: 1px dashed #c7d2fe;
+      border-radius: 12px;
+      padding: 12px;
+      background: #f8faff;
+      margin-bottom: 16px;
+    }
+    .ai-draft-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .ai-draft-row .form-control {
+      flex: 1 1 200px;
+      min-width: 0;
+    }
+    .ai-draft-hint {
+      margin: 6px 0 0;
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .draft-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .draft-item {
+      border: 1px solid #fcd34d;
+      border-radius: 12px;
+      padding: 11px 12px;
+      background: #fffbeb;
+      transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    }
+    .draft-item.is-active {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+    }
+    .draft-item-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .draft-item-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2937;
+      word-break: break-all;
+    }
+    .draft-item-date {
+      flex: 0 0 auto;
+      font-size: 11.5px;
+      color: #92400e;
+    }
+    .draft-item-body {
+      margin-top: 6px;
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: #57534e;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .draft-item-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 9px;
+      flex-wrap: wrap;
+    }
+
+    /* ================= v0.11.1：访问密码设置面板 ================= */
+    .settings-modal .modal-dialog {
+      max-width: 520px;
+    }
+    .settings-section-title {
+      margin: 4px 0 4px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    .settings-hint {
+      margin: 0 0 10px;
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: #6b7280;
+    }
+    .settings-divider {
+      height: 1px;
+      margin: 18px 0;
+      background: #e5e7eb;
+    }
+    .password-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .password-empty {
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px dashed #cbd5e1;
+      color: #64748b;
+      font-size: 12.5px;
+      line-height: 1.7;
+      background: #f8fafc;
+    }
+    .password-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 9px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #fff;
+    }
+    .password-label {
+      font-size: 13px;
+      color: #334155;
+    }
+    .password-del {
+      border: 0;
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: rgba(220, 38, 38, 0.1);
+      color: #dc2626;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .password-del:hover {
+      background: rgba(220, 38, 38, 0.18);
+    }
+    .timeout-slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .timeout-slider-row input[type="range"] {
+      flex: 1 1 auto;
+      accent-color: #2563eb;
+    }
+    .timeout-value {
+      flex: 0 0 auto;
+      font-size: 13px;
+      font-weight: 600;
+      color: #2563eb;
+    }
+    .settings-reauth {
+      display: none;
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid #fca5a5;
+      background: #fef2f2;
+    }
+    .settings-reauth.is-show {
+      display: block;
+    }
+    .settings-reauth p {
+      margin: 0 0 10px;
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: #b91c1c;
+    }
+
+    @media (max-width: 767.98px) {
+      .admin-draft-row,
+      .ai-draft-row {
+        align-items: stretch;
+      }
+      .ai-draft-row .form-control,
+      .ai-draft-row .btn {
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
@@ -314,7 +498,17 @@
         <h1>通知发布台</h1>
         <p>在这里写通知，前台点顶部信封就能看到；仅在开发期使用。</p>
       </div>
-      <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
+      <div class="admin-head-actions">
+        <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
+        <button type="button" class="admin-gear-btn" id="admin-settings-btn"
+                title="访问密码与验证设置" aria-label="访问密码与验证设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3.2"></circle>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 0 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 0 1 0-4h.09A1.7 1.7 0 0 0 4.65 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.65h.09A1.7 1.7 0 0 0 10.65 3V3a2 2 0 0 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.35 9v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 0 1 0 4h-.09a1.7 1.7 0 0 0-1.51 .88z"></path>
+          </svg>
+        </button>
+      </div>
     </header>
 
     <div class="admin-tabs" role="tablist">
@@ -326,8 +520,21 @@
 
     <section id="pane-notices">
     <div class="admin-grid">
-      <!-- 左：发布表单 -->
+      <!-- 左：AI 起草 + 发布表单 -->
       <section>
+        <div class="admin-card mb-3">
+          <h3 class="admin-draft-title">AI 起草</h3>
+          <p class="admin-draft-sub">
+            写一个更新主题，AI 生成一条带序号的纯文本通知草稿，先存进右侧「待审核草稿」，确认无误再点发布。
+          </p>
+          <div class="admin-draft-row">
+            <input id="ai-draft-topic" class="form-control" type="text" maxlength="200"
+                   placeholder="例如：新增截图记账与全站访问密码">
+            <button class="btn btn-primary" type="button" id="ai-draft-btn">起草</button>
+          </div>
+          <div class="admin-count" id="ai-draft-hint"></div>
+        </div>
+
         <div class="admin-card">
           <h2 class="admin-card-title" id="editor-title">写一条新通知</h2>
 
@@ -376,6 +583,7 @@
 
           <div class="d-flex align-items-center gap-3">
             <button type="button" class="btn btn-primary" id="publish-btn">发布通知</button>
+            <button type="button" class="btn btn-outline-primary d-none" id="publish-as-btn">发布这条草稿</button>
             <button type="button" class="btn btn-outline-secondary d-none" id="cancel-edit-btn">取消编辑</button>
             <span class="admin-count" id="publish-hint"></span>
           </div>
@@ -384,6 +592,14 @@
 
       <!-- 右：已有通知 -->
       <section>
+        <div class="admin-card mb-3">
+          <h2 class="admin-card-title">
+            待审核草稿
+            <span class="badge admin-badge-draft" id="draft-total">0</span>
+          </h2>
+          <p class="admin-hint mb-2">AI 起草的通知先落在这里：点卡片回填到左边，改完点「发布这条草稿」。</p>
+          <div class="draft-list" id="draft-list"></div>
+        </div>
         <div class="admin-card">
           <h2 class="admin-card-title">
             已发布
@@ -421,14 +637,75 @@
     </section>
   </main>
 
+  <!-- 访问密码设置（v0.11.1） -->
+  <div class="modal fade settings-modal" id="settings-modal" tabindex="-1"
+       aria-labelledby="settings-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="settings-modal-title">访问密码与验证设置</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <h3 class="settings-section-title">访问密码</h3>
+          <p class="settings-hint">
+            设置任意一个密码后，全站会先要求输密码才能查看账本；可设多个备用密码。
+            当前密码列表：
+          </p>
+          <div class="password-list" id="password-list"></div>
+          <div class="admin-draft-row">
+            <input id="new-password" class="form-control" type="password" maxlength="64"
+                   placeholder="新增密码（至少 4 位）" autocomplete="new-password">
+            <button class="btn btn-primary" type="button" id="add-password-btn">新增</button>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <h3 class="settings-section-title">验证有效期</h3>
+          <p class="settings-hint">验证通过后多久之内免密（10 分钟 ~ 1 天），超时会立刻重新上锁。</p>
+          <div class="timeout-slider-row">
+            <input type="range" id="verify-timeout" min="10" max="1440" step="10" value="60"
+                   aria-label="验证有效期">
+            <span class="timeout-value" id="timeout-value">60 分钟</span>
+          </div>
+          <button class="btn btn-outline-primary btn-sm mt-2" type="button" id="save-timeout-btn">保存有效期</button>
+
+          <!-- 距离上次验证超过 5 分钟时，改密码 / 删密码 / 调超时要重新输一次 -->
+          <div class="settings-reauth" id="settings-reauth">
+            <p>为了安全，距上次验证已超过 5 分钟：请重新输入当前密码再修改。</p>
+            <div class="admin-draft-row">
+              <input id="reauth-password" class="form-control" type="password" maxlength="64"
+                     placeholder="当前访问密码" autocomplete="current-password">
+              <button class="btn btn-primary" type="button" id="reauth-confirm-btn">验证</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <span class="admin-count" id="settings-hint"></span>
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="admin-toast" id="admin-toast"></div>
 
+  <script src="/static/access-guard.js?v=0.11.1"></script>
+  <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
       "use strict";
 
       var $ = function (id) { return document.getElementById(id); };
-      var state = { notifications: [], imageUrl: "", publishing: false, editingId: null };
+      var state = {
+        notifications: [],
+        drafts: [],
+        imageUrl: "",
+        publishing: false,
+        editingId: null,
+        editingStatus: "published",
+        aiDrafting: false
+      };
 
       function toast(message, isError) {
         var box = $("admin-toast");
@@ -559,13 +836,17 @@
         state.imageUrl = "";
         $("cover-preview").textContent = "未选择";
         $("cover-input").value = "";
+        state.editingStatus = "published";
         $("publish-btn").textContent = "发布通知";
+        $("publish-as-btn").classList.add("d-none");
         $("cancel-edit-btn").classList.add("d-none");
       }
 
       function fillForm(item) {
         state.editingId = item.id;
-        $("editor-title").textContent = "编辑通知 #" + item.id;
+        state.editingStatus = item.status === "draft" ? "draft" : "published";
+        $("editor-title").textContent =
+          (state.editingStatus === "draft" ? "编辑草稿 #" : "编辑通知 #") + item.id;
         $("notice-title").value = item.title || "";
         $("title-count").textContent = String(($("notice-title").value || "").length);
         editor.innerHTML = item.content || "";
@@ -579,9 +860,14 @@
         var dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
         setNoticeDateValue(dateText);
         $("publish-btn").textContent = "保存修改";
+        $("publish-as-btn").classList.toggle("d-none", state.editingStatus !== "draft");
         $("cancel-edit-btn").classList.remove("d-none");
         window.scrollTo({ top: 0, behavior: "smooth" });
-        toast("已载入通知 #" + item.id + "，改完点「保存修改」");
+        toast(
+          state.editingStatus === "draft"
+            ? "已载入草稿 #" + item.id + "，改完可点「发布这条草稿」"
+            : "已载入通知 #" + item.id + "，改完点「保存修改」"
+        );
       }
 
       function setNoticeDateValue(value) {
@@ -645,7 +931,46 @@
           .then(function () { setPublishing(false); });
       });
 
-      /* ---------- 列表 ---------- */
+      /* ---------- 列表：待审核草稿 + 已发布 ---------- */
+
+      function plainText(html) {
+        return String(html || "")
+          .replace(/<[^>]+>/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function renderDraftList() {
+        var box = $("draft-list");
+        $("draft-total").textContent = String(state.drafts.length);
+        if (!state.drafts.length) {
+          box.innerHTML =
+            '<div class="admin-empty">还没有草稿：用上面的「AI 起草」生成一条，或从左侧表单发布。</div>';
+          return;
+        }
+        box.innerHTML = state.drafts.map(function (item) {
+          var date = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
+          var plain = plainText(item.content);
+          return (
+            '<article class="draft-item' +
+              (String(state.editingId) === String(item.id) ? " is-active" : "") +
+              '" data-draft="' + item.id + '">' +
+              '<div class="draft-item-head">' +
+                '<span class="draft-item-title">' + escapeHtml(item.title) + "</span>" +
+                '<span class="draft-item-date">' + escapeHtml(date) + "</span>" +
+              "</div>" +
+              '<div class="draft-item-body">' +
+                (plain ? escapeHtml(plain.slice(0, 160)) : "（无正文）") +
+              "</div>" +
+              '<div class="draft-item-actions">' +
+                '<button type="button" class="btn btn-sm btn-primary" data-publish="' + item.id + '">发布</button>' +
+                '<button type="button" class="btn btn-sm btn-outline-secondary" data-edit="' + item.id + '">编辑</button>' +
+                '<button type="button" class="btn btn-sm btn-outline-danger" data-del="' + item.id + '">删除</button>' +
+              "</div>" +
+            "</article>"
+          );
+        }).join("");
+      }
 
       function renderList() {
         var box = $("notice-list");
@@ -656,7 +981,7 @@
         }
         box.innerHTML = state.notifications.map(function (item) {
           var date = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
-          var plain = String(item.content || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+          var plain = plainText(item.content);
           return (
             '<article class="admin-notice" data-id="' + item.id + '">' +
               '<div class="admin-notice-head">' +
@@ -674,39 +999,428 @@
         }).join("");
       }
 
+      function splitNotifications(items) {
+        state.notifications = [];
+        state.drafts = [];
+        (items || []).forEach(function (item) {
+          if (item.status === "draft") {
+            state.drafts.push(item);
+          } else {
+            state.notifications.push(item);
+          }
+        });
+      }
+
       function loadList() {
-        return request("/api/notifications")
+        return request("/api/notifications?include=drafts")
           .then(function (data) {
-            state.notifications = data.notifications || [];
+            splitNotifications(data.notifications || []);
+            renderDraftList();
             renderList();
           })
           .catch(function (error) {
-            $("notice-list").innerHTML = '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+            $("notice-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+            $("draft-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
           });
       }
+
+      function findDraft(id) {
+        var targetId = Number(id);
+        return state.drafts.filter(function (item) {
+          return item.id === targetId;
+        })[0];
+      }
+
+      $("draft-list").addEventListener("click", function (event) {
+        var publishButton = event.target.closest("[data-publish]");
+        if (publishButton) {
+          var publishId = Number(publishButton.getAttribute("data-publish"));
+          if (!window.confirm("发布草稿 #" + publishId + "？发布后前台立刻可见。")) {
+            return;
+          }
+          publishButton.disabled = true;
+          request("/api/notifications/" + publishId + "/publish", { method: "PUT" })
+            .then(function () {
+              toast("草稿 #" + publishId + " 已发布，前台刷新可见");
+              if (String(state.editingId) === String(publishId)) {
+                resetForm();
+              }
+              return loadList();
+            })
+            .catch(function (error) {
+              publishButton.disabled = false;
+              toast(error.message, true);
+            });
+          return;
+        }
+
+        var editButton = event.target.closest("[data-edit]");
+        if (editButton) {
+          var target = findDraft(editButton.getAttribute("data-edit"));
+          if (target) {
+            fillForm(target);
+          }
+          return;
+        }
+
+        var delButton = event.target.closest("[data-del]");
+        if (!delButton) {
+          return;
+        }
+        var id = delButton.getAttribute("data-del");
+        if (!window.confirm("确定删除草稿 #" + id + " 吗？")) {
+          return;
+        }
+        delButton.disabled = true;
+        request("/api/notifications/" + id, { method: "DELETE" })
+          .then(function () {
+            toast("草稿 #" + id + " 已删除");
+            if (String(state.editingId) === String(id)) {
+              resetForm();
+            }
+            return loadList();
+          })
+          .catch(function (error) {
+            delButton.disabled = false;
+            toast(error.message, true);
+          });
+      });
 
       $("notice-list").addEventListener("click", function (event) {
         var editButton = event.target.closest("[data-edit]");
         if (editButton) {
           var targetId = Number(editButton.getAttribute("data-edit"));
-          var target = state.notifications.filter(function (item) { return item.id === targetId; })[0];
-          if (target) { fillForm(target); }
+          var target = state.notifications.filter(function (item) {
+            return item.id === targetId;
+          })[0];
+          if (target) {
+            fillForm(target);
+          }
           return;
         }
 
         var button = event.target.closest("[data-del]");
-        if (!button) { return; }
+        if (!button) {
+          return;
+        }
         var id = button.getAttribute("data-del");
-        if (!window.confirm("确定删除通知 #" + id + " 吗？")) { return; }
+        if (!window.confirm("确定删除通知 #" + id + " 吗？")) {
+          return;
+        }
         button.disabled = true;
         request("/api/notifications/" + id, { method: "DELETE" })
           .then(function () {
             toast("已删除");
-            if (String(state.editingId) === String(id)) { resetForm(); }
+            if (String(state.editingId) === String(id)) {
+              resetForm();
+            }
             return loadList();
           })
-          .catch(function (error) { button.disabled = false; toast(error.message, true); });
+          .catch(function (error) {
+            button.disabled = false;
+            toast(error.message, true);
+          });
       });
+
+      /* ---------- 发布这条草稿（编辑器里的） ---------- */
+
+      $("publish-as-btn").addEventListener("click", function () {
+        if (!state.editingId || state.editingStatus !== "draft") {
+          toast("当前编辑的不是草稿", true);
+          return;
+        }
+        var id = state.editingId;
+        $("publish-as-btn").disabled = true;
+        request("/api/notifications/" + id + "/publish", { method: "PUT" })
+          .then(function () {
+            toast("草稿 #" + id + " 已发布，前台刷新可见");
+            resetForm();
+            return loadList();
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          })
+          .then(function () {
+            $("publish-as-btn").disabled = false;
+          });
+      });
+
+      /* ---------- AI 起草 ---------- */
+
+      function setDrafting(busy) {
+        state.aiDrafting = busy;
+        var button = $("ai-draft-btn");
+        if (button) {
+          button.disabled = busy;
+          button.textContent = busy ? "起草中…" : "起草";
+        }
+        $("ai-draft-hint").textContent = busy
+          ? "AI 正在写草稿，通常 5~15 秒…"
+          : "";
+      }
+
+      $("ai-draft-btn").addEventListener("click", function () {
+        if (state.aiDrafting) {
+          return;
+        }
+        var topic = $("ai-draft-topic").value.trim();
+        if (!topic) {
+          toast("先写一个更新主题", true);
+          $("ai-draft-topic").focus();
+          return;
+        }
+        setDrafting(true);
+        request("/api/notifications/draft", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ topic: topic })
+        })
+          .then(function (data) {
+            var draft = data.draft || {};
+            toast("草稿已生成：" + (draft.title || "（无标题）"));
+            $("ai-draft-topic").value = "";
+            return loadList();
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          })
+          .then(function () {
+            setDrafting(false);
+          });
+      });
+
+      /* ---------- 访问密码设置（v0.11.1） ---------- */
+
+      var settingsModal = null;
+      var settingsState = { passwords: [], timeout: 60, reauthTarget: null, reauthIndex: null };
+
+      function humanizeTimeout(minutes) {
+        minutes = Number(minutes) || 60;
+        if (minutes < 60) {
+          return minutes + " 分钟";
+        }
+        var hours = Math.floor(minutes / 60);
+        var rest = minutes % 60;
+        return hours + " 小时" + (rest ? " " + rest + " 分钟" : "");
+      }
+
+      function renderPasswords() {
+        var box = $("password-list");
+        if (!settingsState.passwords.length) {
+          box.innerHTML =
+            '<div class="password-empty">还没有设置密码：设为空时全站免密，只适合本机自己用。</div>';
+          return;
+        }
+        box.innerHTML = settingsState.passwords.map(function (item) {
+          return (
+            '<div class="password-row">' +
+              '<span class="password-label">' + escapeHtml(item.label || ("密码 " + (item.index + 1))) + "</span>" +
+              '<button type="button" class="password-del" data-del-password="' + item.index + '">删除</button>' +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function setTimeoutDisplay(minutes) {
+        settingsState.timeout = Number(minutes) || 60;
+        $("verify-timeout").value = String(settingsState.timeout);
+        $("timeout-value").textContent = humanizeTimeout(settingsState.timeout);
+      }
+
+      function loadSettings() {
+        return request("/api/access/passwords")
+          .then(function (data) {
+            settingsState.passwords = data.passwords || [];
+            renderPasswords();
+            setTimeoutDisplay(data.timeout_minutes || 60);
+            return data;
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          });
+      }
+
+      function freshEnough() {
+        if (!window.DSHAccess) {
+          return true;
+        }
+        return window.DSHAccess.isFresh(5);
+      }
+
+      function requireFresh(target) {
+        if (freshEnough()) {
+          $("settings-reauth").classList.remove("is-show");
+          return true;
+        }
+        settingsState.reauthTarget = target || null;
+        $("settings-reauth").classList.add("is-show");
+        $("reauth-password").focus();
+        $("settings-hint").textContent = "需先重新验证当前密码";
+        return false;
+      }
+
+      function openSettings() {
+        if (!settingsModal && window.bootstrap) {
+          settingsModal = new window.bootstrap.Modal($("settings-modal"));
+        }
+        $("settings-reauth").classList.remove("is-show");
+        $("reauth-password").value = "";
+        $("new-password").value = "";
+        $("settings-hint").textContent = "";
+        if (settingsModal) {
+          settingsModal.show();
+        }
+        loadSettings();
+      }
+
+      if ($("admin-settings-btn")) {
+        $("admin-settings-btn").addEventListener("click", openSettings);
+      }
+
+      $("verify-timeout").addEventListener("input", function () {
+        setTimeoutDisplay(this.value);
+      });
+
+      $("add-password-btn").addEventListener("click", function () {
+        var password = $("new-password").value;
+        if (!password) {
+          toast("先输入要新增的密码", true);
+          $("new-password").focus();
+          return;
+        }
+        if (!freshEnough()) {
+          requireFresh("add");
+          toast("请先重新验证当前密码", true);
+          return;
+        }
+        var button = $("add-password-btn");
+        var firstPassword = settingsState.passwords.length === 0;
+        button.disabled = true;
+        request("/api/access/passwords", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: password })
+        })
+          .then(function () {
+            toast("密码已新增，全站已开启访问保护");
+            $("new-password").value = "";
+            if (firstPassword) {
+              // 首次设密后当前页还没有访问令牌，所有接口都会 401：刷新让全站守卫接管
+              window.setTimeout(function () {
+                window.location.reload();
+              }, 600);
+              return null;
+            }
+            return loadSettings();
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          })
+          .then(function () {
+            button.disabled = false;
+          });
+      });
+
+      $("password-list").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-del-password]");
+        if (!button) {
+          return;
+        }
+        var index = Number(button.getAttribute("data-del-password"));
+        if (!freshEnough()) {
+          settingsState.reauthIndex = index;
+          requireFresh("del");
+          toast("请先重新验证当前密码", true);
+          return;
+        }
+        if (!window.confirm("确定删除这个密码吗？删到没有密码时全站恢复免密。")) {
+          return;
+        }
+        button.disabled = true;
+        request("/api/access/passwords/" + index, { method: "DELETE" })
+          .then(function () {
+            toast("密码已删除");
+            return loadSettings();
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            toast(error.message, true);
+          });
+      });
+
+      $("save-timeout-btn").addEventListener("click", function () {
+        if (!freshEnough()) {
+          requireFresh("timeout");
+          toast("请先重新验证当前密码", true);
+          return;
+        }
+        var button = $("save-timeout-btn");
+        button.disabled = true;
+        request("/api/access/timeout", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timeout_minutes: settingsState.timeout })
+        })
+          .then(function (data) {
+            toast("验证有效期已改为 " + humanizeTimeout(data.timeout_minutes));
+            setTimeoutDisplay(data.timeout_minutes);
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          })
+          .then(function () {
+            button.disabled = false;
+          });
+      });
+
+      $("reauth-confirm-btn").addEventListener("click", function () {
+        var password = $("reauth-password").value;
+        if (!password) {
+          toast("请输入当前密码", true);
+          return;
+        }
+        if (!window.DSHAccess || !window.DSHAccess.verifyPassword) {
+          toast("页面脚本还没就绪，刷新后重试", true);
+          return;
+        }
+        var button = $("reauth-confirm-btn");
+        button.disabled = true;
+        window.DSHAccess.verifyPassword(password)
+          .then(function () {
+            $("settings-reauth").classList.remove("is-show");
+            $("reauth-password").value = "";
+            $("settings-hint").textContent = "验证成功，可以继续修改";
+            toast("验证成功");
+            // 验证后 token 已刷新，用户刚才点的操作需要自己再点一次
+            if (settingsState.reauthTarget === "add") {
+              $("add-password-btn").click();
+            } else if (settingsState.reauthTarget === "timeout") {
+              $("save-timeout-btn").click();
+            } else if (settingsState.reauthTarget === "del" && settingsState.reauthIndex !== null) {
+              var pendingIndex = settingsState.reauthIndex;
+              settingsState.reauthIndex = null;
+              request("/api/access/passwords/" + pendingIndex, { method: "DELETE" })
+                .then(function () {
+                  toast("密码已删除");
+                  return loadSettings();
+                })
+                .catch(function (error) {
+                  toast(error.message, true);
+                });
+            }
+            settingsState.reauthTarget = null;
+          })
+          .catch(function (error) {
+            toast(error.message || "密码不正确", true);
+          })
+          .then(function () {
+            button.disabled = false;
+          });
+      });
+
+      /* ---------- 启动 ---------- */
 
       loadList();
     })();

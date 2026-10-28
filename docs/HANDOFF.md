@@ -9,8 +9,8 @@ AI 记账管家 项目动态交接文档
 每次大版本封版，必须同步补全 docs/prompts/ 下的 Prompt 快照，并严格按照第三板块的规范更新 docs/dev-log.md。
 
 一、当前项目状态
-当前版本：v0.11-DEV（AI 截图记账闭环 + 截图相册 + 悬浮球交互修复，已在真实浏览器跑通「选图 → 压缩 → 识别 → 入库 → 相册」E2E 并封版）
-当前进度：v0.10 已完成五组重构。后端 AI 升级为意图路由 + 代买/报销场景（抽出 is_reimbursable 与 contact_name，报销自动关联联系人并记入待报销），新增 /api/records/ai/stream SSE 分阶段推送解析进度，新增 ai_feedback 表与 /api/feedback（错误文本 / AI 结果 / 用户纠正），/admin 增加「AI 反馈与记忆」Tab。全站骨架锁 100vh 内部各自滚动，manifest 改为 window-controls-overlay 并用 env(titlebar-area-*) 让 topbar 避开窗口控制按钮；首页卡片缩小 20%，资产页左 4 成（净资产卡 + 四统计卡）右 6 成纯流水；新增「账单」页：左侧年月树带当月收支，右侧关键词 / 类型 / 账户 / 日期区间 / 金额区间筛选与八列大表格。交互层：金额语义色全局生效（仅收支红绿，借贷转账深色），侧栏点击后强制收起残留 Tooltip，账单流支持年 / 月 / 日三级折叠（localStorage 记忆），资产统计四卡点击弹明细；悬浮球钢笔径向四分支（普通记账 / AI 文本快记 / AI 截图识别占位 / 帮助），3 秒无操作收回，帮助弹窗含快捷键与功能速览。AI 输入框前置正则极速拦截（如「午饭30」无账户自动补「现金」直接入库），其余指令立即关窗并在右下角弹出可并发气泡，走 SSE 打字机与思考动效，3 秒后淡出、悬停或失焦暂停倒计时，成功气泡点击直达详情。v0.10.1 补丁针对验收反馈修复六处细节：账单页与管理后台的日期字段改成「中文占位文本框 + 全尺寸透明原生选择器覆盖层」，选择后立即回显并同步筛选状态；资产页左右两栏改为 align-items:stretch，右侧流水面板与空态撑满高度；首页图表容器补 min-height:240px，画布 210px 不再被压缩截断；悬浮球四向展开全部改为向左/向上位移，任何窗口宽度都不越出视口；侧栏导航 Tooltip 改为 hover 触发并在点击时 hide()+blur()，不再残留；账户名补 display:block + ellipsis，金额 flex 固定不挤压。v0.10.2 针对真实浏览器验收再修三处：资产页外层改成 flex 高度链（#page-assets.active 撑满 100%，.assets-left / .assets-right 各自 height:100% + overflow-y:auto，右栏流水与空态 flex 撑满），彻底消除右栏下方的灰色留白；首页图表容器强制 280px 画布高度（.chart-box min-height 310px），resize 在 DOM 落定后 100ms 再重绘；悬浮球改用标准圆弧算法（半径 118 的四分之一圆弧，相邻图标中心距 61px），任何窗口宽度下图标都不再重叠也不出视口；同时修掉首页两栏「假独立滚动」——栏内卡片不再被 flex 压缩（日历被日明细遮挡的根因），近 7 天等卡片内部滚动全部移除，滚动统一交给中栏 / 右栏容器；另把首页「本月预算」卡重写为左圆环（固定 96px、垂直居中）+ 右三行（标题/改预算、已花/预算、日均/剩余日均额度 + 贴底长条进度）的紧凑两栏结构。资产页左栏再拆高度链：`.assets-left` 锁 100% 高、净资产卡/统计卡 `flex-shrink:0`，「我的账户」面板 `flex:1 + min-height:0`，内部 `.account-groups` 才是 `overflow-y:auto` 的滚动层。v0.11 实装 AI 截图记账闭环。ai_service 新增 parse_image：用 glm-4v-flash 视觉模型，把图片以 Base64 dataURL 放进多模态 content 数组，配一份和文本版同约束的 VISION_PROMPT（金额只取实付、分类按商户、时间按小票，非账单返回 unknown），输出严格 JSON 后再复用文本版归一化。后端新增 POST /api/records/ai/image（Base64 → 视觉解析 → 复用意图分流入库 → 压缩图落盘 static/uploads/ 并把路径写进 records.image_path），新增 GET /api/records/images 相册列表、DELETE /api/records/<id>/image 图片双删（清库字段 + 删本地文件，账目保留）。前端悬浮球【截图】真正唤起文件选择，Canvas 把最长边压到 800px 的 JPEG 再上传，全程复用非阻塞气泡：正在识别截图 → 截图记账成功可点击进详情；账单详情新增「截图凭证」缩略图与查看原图预览弹窗；「我的」页新增相册卡片，网格相册弹窗支持点图进对应账单、删除图片（本地 + 数据库双删）。悬浮球交互重写：点钢笔或点功能后保持展开不设时限，只有鼠标离开悬浮球及全部子图标范围才开始 3 秒倒计时、移回即取消；子图标文字提示统一固定在图标左侧竖排居中，不再被主球或屏幕边缘遮挡。下一步进入 v0.12（报销进阶、报表与云存档）。
+当前版本：v0.11.1-DEV（PWA 窗口控制按钮适配 + AI 弹窗图片快记 + 通知 AI 起草审核 + 全站访问密码，已在真实浏览器跑通「设密 → 遮罩拦截 → 解锁 → 超时重锁 → 5 分钟重验证」E2E 并封版）
+当前进度：v0.10 已完成五组重构。后端 AI 升级为意图路由 + 代买/报销场景（抽出 is_reimbursable 与 contact_name，报销自动关联联系人并记入待报销），新增 /api/records/ai/stream SSE 分阶段推送解析进度，新增 ai_feedback 表与 /api/feedback（错误文本 / AI 结果 / 用户纠正），/admin 增加「AI 反馈与记忆」Tab。全站骨架锁 100vh 内部各自滚动，manifest 改为 window-controls-overlay 并用 env(titlebar-area-*) 让 topbar 避开窗口控制按钮；首页卡片缩小 20%，资产页左 4 成（净资产卡 + 四统计卡）右 6 成纯流水；新增「账单」页：左侧年月树带当月收支，右侧关键词 / 类型 / 账户 / 日期区间 / 金额区间筛选与八列大表格。交互层：金额语义色全局生效（仅收支红绿，借贷转账深色），侧栏点击后强制收起残留 Tooltip，账单流支持年 / 月 / 日三级折叠（localStorage 记忆），资产统计四卡点击弹明细；悬浮球钢笔径向四分支（普通记账 / AI 文本快记 / AI 截图识别占位 / 帮助），3 秒无操作收回，帮助弹窗含快捷键与功能速览。AI 输入框前置正则极速拦截（如「午饭30」无账户自动补「现金」直接入库），其余指令立即关窗并在右下角弹出可并发气泡，走 SSE 打字机与思考动效，3 秒后淡出、悬停或失焦暂停倒计时，成功气泡点击直达详情。v0.10.1 补丁针对验收反馈修复六处细节：账单页与管理后台的日期字段改成「中文占位文本框 + 全尺寸透明原生选择器覆盖层」，选择后立即回显并同步筛选状态；资产页左右两栏改为 align-items:stretch，右侧流水面板与空态撑满高度；首页图表容器补 min-height:240px，画布 210px 不再被压缩截断；悬浮球四向展开全部改为向左/向上位移，任何窗口宽度都不越出视口；侧栏导航 Tooltip 改为 hover 触发并在点击时 hide()+blur()，不再残留；账户名补 display:block + ellipsis，金额 flex 固定不挤压。v0.10.2 针对真实浏览器验收再修三处：资产页外层改成 flex 高度链（#page-assets.active 撑满 100%，.assets-left / .assets-right 各自 height:100% + overflow-y:auto，右栏流水与空态 flex 撑满），彻底消除右栏下方的灰色留白；首页图表容器强制 280px 画布高度（.chart-box min-height 310px），resize 在 DOM 落定后 100ms 再重绘；悬浮球改用标准圆弧算法（半径 118 的四分之一圆弧，相邻图标中心距 61px），任何窗口宽度下图标都不再重叠也不出视口；同时修掉首页两栏「假独立滚动」——栏内卡片不再被 flex 压缩（日历被日明细遮挡的根因），近 7 天等卡片内部滚动全部移除，滚动统一交给中栏 / 右栏容器；另把首页「本月预算」卡重写为左圆环（固定 96px、垂直居中）+ 右三行（标题/改预算、已花/预算、日均/剩余日均额度 + 贴底长条进度）的紧凑两栏结构。资产页左栏再拆高度链：`.assets-left` 锁 100% 高、净资产卡/统计卡 `flex-shrink:0`，「我的账户」面板 `flex:1 + min-height:0`，内部 `.account-groups` 才是 `overflow-y:auto` 的滚动层。v0.11 实装 AI 截图记账闭环。ai_service 新增 parse_image：用 glm-4v-flash 视觉模型，把图片以 Base64 dataURL 放进多模态 content 数组，配一份和文本版同约束的 VISION_PROMPT（金额只取实付、分类按商户、时间按小票，非账单返回 unknown），输出严格 JSON 后再复用文本版归一化。后端新增 POST /api/records/ai/image（Base64 → 视觉解析 → 复用意图分流入库 → 压缩图落盘 static/uploads/ 并把路径写进 records.image_path），新增 GET /api/records/images 相册列表、DELETE /api/records/<id>/image 图片双删（清库字段 + 删本地文件，账目保留）。前端悬浮球【截图】真正唤起文件选择，Canvas 把最长边压到 800px 的 JPEG 再上传，全程复用非阻塞气泡：正在识别截图 → 截图记账成功可点击进详情；账单详情新增「截图凭证」缩略图与查看原图预览弹窗；「我的」页新增相册卡片，网格相册弹窗支持点图进对应账单、删除图片（本地 + 数据库双删）。悬浮球交互重写：点钢笔或点功能后保持展开不设时限，只有鼠标离开悬浮球及全部子图标范围才开始 3 秒倒计时、移回即取消；子图标文字提示统一固定在图标左侧竖排居中，不再被主球或屏幕边缘遮挡。v0.11.1 完成四块应用化改造。PWA manifest 使用 window-controls-overlay，topbar 通过 env(titlebar-area-*) 让出右侧窗口控制按钮安全区。AI 快记弹窗新增【上传图片】入口：本地 FileReader 生成缩略图预览与「文件名 · 大小 · 发送时自动压到 800px」说明，点发送直接走 /api/records/ai/image 并复用全局气泡；有图时忽略文本框，无图时仍走文本解析。通知体系升级为「AI 起草 + 人工审核」：ai_service.generate_notification 生成标题与序号正文，草稿以 status=draft 入库，用户端只返回 published，/admin 新增 AI 起草输入框与「待审核草稿」「已发布通知」两栏，草稿可发布/编辑/删除。新增全站访问密码：admin_config 存密码哈希与免密时长（10 分钟~1 天可调），access_sessions 存一次性会话；static/access-guard.js 先于主脚本启动，未设密码不拦，设密后整站遮罩并锁滚动，验证通过把 token 与时间存 localStorage，超时或任何 401 立刻重新上锁并保留已填内容；/admin 设置齿轮 Modal 管理密码增删与免密时长，修改/删除密码或改超时距上次验证超过 5 分钟必须弹框重新输入当前密码；首次设密后当前页自动刷新交给遮罩接管。下一步进入 v0.12（报销进阶、报表与云存档）。
 运行方式：Windows PowerShell 在根目录执行 .\venv\Scripts\python.exe app.py
 
 二、AI 核心开发契约
@@ -44,13 +44,19 @@ accounts: name(PK), balance(唯一真相), group_name。
 categories: id, name, parent_id (二级分类)。
 
 ai_feedback: id, raw_text(用户原话), parsed(AI 解析 JSON), corrected(用户纠正 JSON), source, status(pending/processed), created_at。
+notifications: id, title, content, date(发送日期文本), image_path(配图), created_at, status(draft 草稿 / published 已发布，v0.11.1 新增)。
+admin_config: key, value（存访问密码哈希与免密时长 timeout_minutes，v0.11.1 新增）。
+access_sessions: token, created_at, label（访问会话记录，用于免密期与 5 分钟重验证，v0.11.1 新增）。
 
 五、核心后端 API 速查
 /api/records (GET/POST/PUT/DELETE)
 /api/accounts (GET/POST/PUT/DELETE)
 /api/categories (GET/POST/PUT/DELETE)
 /api/statistics (GET)
-/api/notifications (GET/POST/PUT/DELETE)
+/api/notifications (GET/POST/PUT/DELETE；GET 默认只返回 published，管理端可带 ?include=drafts)
+POST /api/notifications/draft AI 起草通知草稿（status=draft）；PUT /api/notifications/<id>/publish 发布草稿。
+/api/access/config (GET) 是否受保护、密码数量、免密时长；/api/access/verify (POST) 输入密码换 token。
+/api/access/passwords (POST) 新增密码；/api/access/passwords/<index> (DELETE) 删除密码；/api/access/timeout (PUT) 调整免密时长（后两者超过 5 分钟需重新验证）。
 /api/upload (POST)
 /api/records/ai (POST) AI 意图分流：record / debt / add_contact / unknown（兼容旧调用）。
 /api/records/ai/stream (POST) SSE 流式解析：thinking → extracting_amount → resolving_category → saving → done / unknown / error。
@@ -61,12 +67,12 @@ GET /api/records/images 相册列表（所有带截图的账目，仅未删除�
 GET /api/records/trash 回收站列表；PUT /api/records/<id>/restore 恢复；DELETE /api/records/<id>/purge 彻底删除（DELETE /api/records/<id> 现为软删除，余额同步回滚）。
 
 六、下一步行动计划
-当前目标：v0.11 已完成（AI 截图记账闭环、截图相册、悬浮球交互修复），进入 v0.12 功能深化。
+当前目标：v0.11.1 已完成（PWA 窗口控制按钮适配、AI 弹窗图片快记、通知 AI 起草审核、全站访问密码），进入 v0.12 功能深化。
 执行步骤：
 1. 报销进阶：部分报销进度、按报销人筛选账单、报销记录导出；反馈数据用于纠正 Prompt。
 2. 数据安全：一键备份 / 恢复（SQLite 导出导入），导出 CSV 增加报销与截图字段。
 3. 报表页：月度/年度趋势与分类占比图表，替代纯文字统计。
 4. 云存档：把 static/uploads 的截图上传云端（代码注释已预留接口位置）。
 5. 移动端细节与可访问性（焦点顺序、对比度、触控热区）。
-6. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV / v0.09.1-DEV / v0.09.2-DEV / v0.10-DEV / v0.10.1-DEV / v0.10.2-DEV / v0.11-DEV 标签。
+6. 封版后 py_compile / node --check 加端到端自测，更新 dev-log 与 prompts；本机暂连不上 GitHub，网络恢复后 push main 与 v0.08.1-DEV / v0.09-DEV / v0.09.1-DEV / v0.09.2-DEV / v0.10-DEV / v0.10.1-DEV / v0.10.2-DEV / v0.11-DEV / v0.11.1-DEV 标签。
 备注：.env 换 Key 后必须彻底结束旧 Flask 进程再启动，否则旧进程仍持有旧密钥返回 401。
