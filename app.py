@@ -1276,6 +1276,28 @@ def access_passwords():
     )
 
 
+@app.route("/api/access/passwords/reveal", methods=["POST"])
+def reveal_access_password():
+    """查看明文密码（v0.11.2）：必须现场交当前密码，独立二次验证。
+
+    这里刻意不走 _fresh_admin_check：5 分钟内免密也不放行，必须每次重新输入。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    password = data.get("password")
+    if not isinstance(password, str) or not password:
+        return jsonify(error="请输入当前密码", code="access_denied"), 400
+
+    ok, error, plain = database.reveal_access_password(data.get("index"), password)
+    if not ok:
+        code = "access_denied" if error == "当前密码不正确" else "bad_request"
+        status = 401 if code == "access_denied" else 400
+        return jsonify(error=error, code=code), status
+    return jsonify(index=int(data.get("index")), password=plain)
+
+
 @app.route("/api/access/passwords", methods=["POST"])
 def add_access_password():
     """新增密码。敏感操作：最近 5 分钟内没验证过就要重新输当前密码。"""

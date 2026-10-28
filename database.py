@@ -1985,10 +1985,12 @@ def update_feedback_status(feedback_id, status):
 
 # ---------------- 站点访问密码与验证会话（v0.11.1） ----------------
 
-# 访问密码用「随机盐 + SHA256」存，多个密码用逗号拼在 admin_config.value 里。
-# 只在服务端比哈希，接口永远不回明文；后台列表也只显示「密码 1 / 密码 2」这样的掩码。
+# 访问密码存在 admin_config.value 里，多个密码用逗号拼接。
+# v0.11.2 起改为可回显格式「p1$Base64(明文)」：后台「查看密码」需要现场二次验证后显示明文；
+# 兼容 v0.11.1 的旧格式「随机盐$SHA256」，旧格式仍可校验但无法回显，提示删除后重设。
 ACCESS_PASSWORD_KEY = "access_password"
 ACCESS_TIMEOUT_KEY = "verify_timeout"
+PASSWORD_STORE_PREFIX = "p1$"
 DEFAULT_VERIFY_TIMEOUT_MINUTES = 60
 MIN_VERIFY_TIMEOUT_MINUTES = 10
 MAX_VERIFY_TIMEOUT_MINUTES = 1440
@@ -2006,8 +2008,37 @@ def _hash_password(raw_password, salt=None):
     return salt + "$" + digest
 
 
+def _encode_password(raw_password):
+    """v0.11.2 起的新存储格式：p1$ + urlsafe Base64，可解码用于「查看密码」。"""
+    import base64
+
+    token = base64.urlsafe_b64encode(str(raw_password).encode("utf-8")).decode("ascii")
+    return PASSWORD_STORE_PREFIX + token
+
+
+def _decode_password(stored):
+    """把 p1$ 存储还原成明文；v0.11.1 的盐$哈希返回 None（不可逆）。"""
+    import base64
+
+    if not stored or not stored.startswith(PASSWORD_STORE_PREFIX):
+        return None
+    token = stored[len(PASSWORD_STORE_PREFIX):]
+    try:
+        raw = base64.urlsafe_b64decode(token.encode("ascii"))
+    except (ValueError, TypeError, UnicodeError):
+        return None
+    return raw.decode("utf-8", "replace")
+
+
 def _password_matches(raw_password, stored):
-    if not stored or "$" not in stored:
+    if not stored:
+        return False
+    plain = _decode_password(stored)
+    if plain is not None:
+        import hmac
+
+        return hmac.compare_digest(plain, raw_password)
+    if "$" not in stored:
         return False
     salt, _, _digest = stored.partition("$")
     return _hash_password(raw_password, salt) == stored
@@ -2077,6 +2108,38 @@ def list_access_passwords():
         conn.close()
 
 
+def reveal_access_password(index, raw_password):
+    """查看指定序号的明文密码：必须现场输入任意一个当前密码二次验证。
+
+    不复用 5 分钟免密会话（由调用方保证），这里只认请求体里的明文密码；
+    v0.11.1 的旧哈希无法还原，返回提示让用户删掉重设。
+    返回 (是否成功, 错误信息, 明文)。
+    """
+    try:
+        index = int(index)
+    except (TypeError, ValueError):
+        return False, "密码序号不合法", ""
+    raw_password = str(raw_password or "")
+
+    conn = get_conn()
+    try:
+        stored_list = [
+            item for item in _config_get(conn, ACCESS_PASSWORD_KEY, "").split(",") if item
+        ]
+        if not stored_list:
+            return False, "还没有设置密码", ""
+        if not any(_password_matches(raw_password, stored) for stored in stored_list):
+            return False, "当前密码不正确", ""
+        if index < 0 or index >= len(stored_list):
+            return False, "密码不存在", ""
+        plain = _decode_password(stored_list[index])
+        if plain is None:
+            return False, "这个密码是旧版哈希存储，无法回显；请删除后重新添加", ""
+        return True, None, plain
+    finally:
+        conn.close()
+
+
 def add_access_password(raw_password):
     """新增一个访问密码，返回 (是否成功, 错误信息, 密码数量)。"""
     raw_password = str(raw_password or "")
@@ -2092,7 +2155,7 @@ def add_access_password(raw_password):
         ]
         if any(_password_matches(raw_password, stored) for stored in hashes):
             return False, "这个密码已经存在了", len(hashes)
-        hashes.append(_hash_password(raw_password))
+        hashes.append(_encode_password(raw_password))
         with conn:
             _config_set(conn, ACCESS_PASSWORD_KEY, ",".join(hashes))
         return True, None, len(hashes)

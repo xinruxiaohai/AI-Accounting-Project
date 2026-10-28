@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.11.0">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.2">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -384,9 +384,57 @@
       flex-wrap: wrap;
     }
 
+    /* ================= v0.11.2：设置齿轮按钮 ================= */
+    .admin-gear-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+      color: var(--text-main);
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+      transition: transform 0.18s ease, background 0.18s ease,
+        border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+    }
+    .admin-gear-btn svg {
+      width: 21px;
+      height: 21px;
+      display: block;
+    }
+    .admin-gear-btn:hover {
+      transform: rotate(45deg);
+      background: var(--brand-blue);
+      border-color: var(--brand-blue);
+      color: #fff;
+      box-shadow: 0 6px 16px rgba(37, 99, 235, 0.28);
+    }
+    .admin-gear-btn:active {
+      transform: rotate(45deg) scale(0.94);
+    }
+    .admin-gear-btn:focus-visible {
+      outline: 2px solid var(--brand-blue);
+      outline-offset: 2px;
+    }
+
     /* ================= v0.11.1：访问密码设置面板 ================= */
     .settings-modal .modal-dialog {
       max-width: 520px;
+    }
+    .reveal-modal .modal-dialog {
+      max-width: 420px;
+    }
+    .reveal-error {
+      display: none;
+      margin: 8px 0 0;
+      color: #dc2626;
+    }
+    .reveal-error.is-show {
+      display: block;
     }
     .settings-section-title {
       margin: 4px 0 4px;
@@ -433,6 +481,36 @@
     .password-label {
       font-size: 13px;
       color: #334155;
+    }
+    .password-secret {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      color: #64748b;
+      letter-spacing: 1px;
+    }
+    .password-secret.is-plain {
+      color: #0f172a;
+      letter-spacing: 0;
+      word-break: break-all;
+    }
+    .password-actions {
+      display: flex;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    .password-view {
+      border: 0;
+      padding: 4px 10px;
+      border-radius: 8px;
+      background: rgba(37, 99, 235, 0.1);
+      color: #2563eb;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .password-view:hover {
+      background: rgba(37, 99, 235, 0.18);
     }
     .password-del {
       border: 0;
@@ -637,6 +715,32 @@
     </section>
   </main>
 
+  <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密） -->
+  <div class="modal fade reveal-modal" id="reveal-modal" tabindex="-1"
+       aria-labelledby="reveal-modal-title" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="reveal-modal-title">查看明文密码</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+        </div>
+        <div class="modal-body">
+          <p class="settings-hint">
+            为了安全，查看明文密码需要单独验证：请输入任意一个当前访问密码，
+            这次验证不受「免密时长」影响，每次都必输。
+          </p>
+          <input id="reveal-password" class="form-control" type="password" maxlength="64"
+                 placeholder="当前访问密码" autocomplete="current-password">
+          <p class="settings-hint reveal-error" id="reveal-error"></p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+          <button type="button" class="btn btn-primary" id="reveal-confirm-btn">验证并查看</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 访问密码设置（v0.11.1） -->
   <div class="modal fade settings-modal" id="settings-modal" tabindex="-1"
        aria-labelledby="settings-modal-title" aria-hidden="true">
@@ -690,7 +794,7 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/access-guard.js?v=0.11.1"></script>
+  <script src="/static/access-guard.js?v=0.11.2"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1194,7 +1298,15 @@
       /* ---------- 访问密码设置（v0.11.1） ---------- */
 
       var settingsModal = null;
-      var settingsState = { passwords: [], timeout: 60, reauthTarget: null, reauthIndex: null };
+      var revealModal = null;
+      var settingsState = {
+        passwords: [],
+        timeout: 60,
+        reauthTarget: null,
+        reauthIndex: null,
+        revealed: {},
+        revealIndex: null
+      };
 
       function humanizeTimeout(minutes) {
         minutes = Number(minutes) || 60;
@@ -1214,10 +1326,21 @@
           return;
         }
         box.innerHTML = settingsState.passwords.map(function (item) {
+          var index = Number(item.index);
+          var plain = settingsState.revealed[index];
+          var label = escapeHtml(item.label || ("密码 " + (index + 1)));
+          var secret = plain
+            ? '<span class="password-secret is-plain" data-secret-index="' + index + '">' +
+                escapeHtml(plain) + "</span>"
+            : '<span class="password-secret" data-secret-index="' + index + '">******</span>';
           return (
             '<div class="password-row">' +
-              '<span class="password-label">' + escapeHtml(item.label || ("密码 " + (item.index + 1))) + "</span>" +
-              '<button type="button" class="password-del" data-del-password="' + item.index + '">删除</button>' +
+              '<span class="password-label">' + label + "</span>" +
+              secret +
+              '<div class="password-actions">' +
+                '<button type="button" class="password-view" data-view-password="' + index + '">查看密码</button>' +
+                '<button type="button" class="password-del" data-del-password="' + index + '">删除</button>' +
+              "</div>" +
             "</div>"
           );
         }).join("");
@@ -1265,6 +1388,11 @@
         if (!settingsModal && window.bootstrap) {
           settingsModal = new window.bootstrap.Modal($("settings-modal"));
         }
+        if (!revealModal && window.bootstrap) {
+          revealModal = new window.bootstrap.Modal($("reveal-modal"));
+        }
+        settingsState.revealed = {};
+        settingsState.revealIndex = null;
         $("settings-reauth").classList.remove("is-show");
         $("reauth-password").value = "";
         $("new-password").value = "";
@@ -1324,6 +1452,11 @@
       });
 
       $("password-list").addEventListener("click", function (event) {
+        var viewButton = event.target.closest("[data-view-password]");
+        if (viewButton) {
+          openReveal(viewButton.getAttribute("data-view-password"));
+          return;
+        }
         var button = event.target.closest("[data-del-password]");
         if (!button) {
           return;
@@ -1418,6 +1551,76 @@
           .then(function () {
             button.disabled = false;
           });
+      });
+
+      /* ---------- 查看明文密码（v0.11.2，独立二次验证） ---------- */
+
+      function openReveal(index) {
+        settingsState.revealIndex = Number(index);
+        if (!revealModal && window.bootstrap) {
+          revealModal = new window.bootstrap.Modal($("reveal-modal"));
+        }
+        $("reveal-password").value = "";
+        $("reveal-error").classList.remove("is-show");
+        $("reveal-error").textContent = "";
+        if (revealModal) {
+          revealModal.show();
+        }
+        window.setTimeout(function () {
+          $("reveal-password").focus();
+        }, 200);
+      }
+
+      function confirmReveal() {
+        var index = settingsState.revealIndex;
+        var password = $("reveal-password").value;
+        var errorBox = $("reveal-error");
+        if (index === null || index === undefined) {
+          return;
+        }
+        if (!password) {
+          errorBox.textContent = "请输入当前访问密码";
+          errorBox.classList.add("is-show");
+          $("reveal-password").focus();
+          return;
+        }
+        var button = $("reveal-confirm-btn");
+        button.disabled = true;
+        request("/api/access/passwords/reveal", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ index: index, password: password })
+        })
+          .then(function (data) {
+            settingsState.revealed[index] = data.password;
+            renderPasswords();
+            toast("验证通过，已显示明文密码（请勿泄露）");
+            if (revealModal) {
+              revealModal.hide();
+              // 弹窗刚弹出就立刻验证时，Bootstrap 还在入场动画里，hide() 会被忽略；
+              // 这里补一次延时兜底，确保验证通过后弹窗一定关闭。
+              window.setTimeout(function () {
+                if (revealModal && $("reveal-modal").classList.contains("show")) {
+                  revealModal.hide();
+                }
+              }, 350);
+            }
+          })
+          .catch(function (error) {
+            errorBox.textContent = error.message || "当前密码不正确";
+            errorBox.classList.add("is-show");
+          })
+          .then(function () {
+            button.disabled = false;
+          });
+      }
+
+      $("reveal-confirm-btn").addEventListener("click", confirmReveal);
+      $("reveal-password").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          confirmReveal();
+        }
       });
 
       /* ---------- 启动 ---------- */

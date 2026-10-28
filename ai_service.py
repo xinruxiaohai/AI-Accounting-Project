@@ -204,7 +204,12 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 """
 
 
-NOTIFICATION_PROMPT = """你是记账应用的「更新通知撰稿人」。用户会给你一个主题（例如「新增截图记账与访问密码」），你要写一条面向普通用户的中文更新通知，只输出一个 JSON 对象。
+NOTIFICATION_PROMPT = """你是记账应用的「更新通知撰稿人」。用户会给你一个主题（例如「新增截图记账与访问密码」），并附上「最新真实开发日志」，你要把日志里真实发生的改动润色成一条面向普通用户的中文更新通知，只输出一个 JSON 对象。
+
+【绝对依据】
+- 你只能基于附带的真实开发日志写内容：日志里提到了什么改动，就写什么，用普通用户能听懂的话解释「他能在哪里用到、怎么用」。
+- 严禁编造日志里没有的功能；严禁写「修复了若干已知问题」「优化了性能」「提升稳定性」这类没有日志依据的空话。
+- 如果主题和日志内容关系不大，就围绕主题写日志中确实相关的那部分改动，不硬凑。
 
 【写作规范】
 - title：不超过 30 个汉字，直接点明这次更新做了什么，不要用「重磅」「震撼」这类营销词。
@@ -220,6 +225,48 @@ NOTIFICATION_PROMPT = """你是记账应用的「更新通知撰稿人」。用�
 主题：可以忽略
 输出：{"title": "更新说明", "content": "1. 本次更新优化了操作体验。"}
 """
+
+
+# ---------------- 通知起草参考真实开发日志（v0.11.2） ----------------
+
+DEV_LOG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "docs", "dev-log.md"
+)
+DEV_LOG_ENTRY_MAX_CHARS = 3600
+_VERSION_LINE_RE = re.compile(r"^v\d+\.\d+")
+
+
+def latest_dev_log_entry() -> str:
+    """读取 docs/dev-log.md 中最后一个版本段落的原文，给通知起草当唯一依据。
+
+    开发日志按「v0.xx-DEV 日期 标题」分段，段落之间用破折号分隔；
+    这里只取最后一段，并去掉末尾的分隔线与多余空行。
+    """
+    try:
+        with open(DEV_LOG_PATH, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return ""
+
+    lines = [line.rstrip() for line in text.splitlines()]
+    starts = [
+        index
+        for index, line in enumerate(lines)
+        if _VERSION_LINE_RE.match(line.strip())
+    ]
+    if not starts:
+        return ""
+
+    block = []
+    for line in lines[starts[-1]:]:
+        if block and _VERSION_LINE_RE.match(line.strip()):
+            break
+        block.append(line)
+    while block and (not block[-1] or set(block[-1]) <= set("—-")):
+        block.pop()
+
+    entry = "\n".join(block).strip()
+    return entry[:DEV_LOG_ENTRY_MAX_CHARS]
 
 
 class AIServiceError(Exception):
@@ -571,12 +618,26 @@ def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[st
 
     now = now or datetime.now()
     client = _client()
+
+    reference = latest_dev_log_entry()
+    if reference:
+        reference_block = (
+            "\n\n【最新真实开发日志（唯一依据，不得编造日志之外的内容）】\n"
+            + reference
+        )
+    else:
+        reference_block = (
+            "\n\n【最新真实开发日志】\n（没有读到开发日志：请只根据主题做最保守的概括，"
+            "不要编造具体功能与「修复已知问题」类空话）"
+        )
+
     kwargs: dict[str, Any] = {
         "model": MODEL,
         "messages": [
             {
                 "role": "user",
                 "content": NOTIFICATION_PROMPT
+                + reference_block
                 + "\n\n现在日期："
                 + now.strftime("%Y-%m-%d")
                 + "\n主题："
