@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.11.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.3">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -542,13 +542,28 @@
     .settings-reauth {
       display: none;
       margin-top: 16px;
-      padding: 12px;
+      padding: 14px;
       border-radius: 12px;
       border: 1px solid #fca5a5;
       background: #fef2f2;
     }
+    /* v0.11.3：危险操作的二次验证层必须压在所有弹窗之上，不允许被原弹窗遮住 */
     .settings-reauth.is-show {
       display: block;
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: min(420px, 92vw);
+      z-index: 100000 !important;
+      box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+    }
+    /* v0.11.3：独立二次验证弹窗（查看明文密码等）统一层级规范 */
+    .modal.verify-top-modal {
+      z-index: 100000 !important;
+    }
+    .modal.verify-top-modal.show ~ .modal-backdrop {
+      z-index: 99999 !important;
     }
     .settings-reauth p {
       margin: 0 0 10px;
@@ -601,15 +616,11 @@
       <!-- 左：AI 起草 + 发布表单 -->
       <section>
         <div class="admin-card mb-3">
-          <h3 class="admin-draft-title">AI 起草</h3>
+          <h3 class="admin-draft-title">AI 更新公告</h3>
           <p class="admin-draft-sub">
-            写一个更新主题，AI 生成一条带序号的纯文本通知草稿，先存进右侧「待审核草稿」，确认无误再点发布。
+            不需要手填主题：点下面按钮，后端自动读取当前版本号与 docs/dev-log.md 里该版本的真实日志，生成一条标题带版本号的公告草稿，存进右侧「待审核草稿」，确认无误再点发布。
           </p>
-          <div class="admin-draft-row">
-            <input id="ai-draft-topic" class="form-control" type="text" maxlength="200"
-                   placeholder="例如：新增截图记账与全站访问密码">
-            <button class="btn btn-primary" type="button" id="ai-draft-btn">起草</button>
-          </div>
+          <button class="btn btn-primary btn-lg w-100" type="button" id="ai-draft-btn">一键起草当前版本更新公告</button>
           <div class="admin-count" id="ai-draft-hint"></div>
         </div>
 
@@ -715,8 +726,8 @@
     </section>
   </main>
 
-  <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密） -->
-  <div class="modal fade reveal-modal" id="reveal-modal" tabindex="-1"
+  <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
+  <div class="modal fade reveal-modal verify-top-modal" id="reveal-modal" tabindex="-1"
        aria-labelledby="reveal-modal-title" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
@@ -753,7 +764,7 @@
         <div class="modal-body">
           <h3 class="settings-section-title">访问密码</h3>
           <p class="settings-hint">
-            设置任意一个密码后，全站会先要求输密码才能查看账本；可设多个备用密码。
+            设置任意一个密码后，只有进入 /admin 后台才需要先输密码；用户端首页、账单、资产、我的都免密直接可用。可设多个备用密码。
             当前密码列表：
           </p>
           <div class="password-list" id="password-list"></div>
@@ -794,7 +805,7 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/access-guard.js?v=0.11.2"></script>
+  <script src="/static/access-guard.js?v=0.11.3"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1026,8 +1037,8 @@
         })
           .then(function () {
             toast(editingId
-              ? "通知 #" + editingId + " 已更新，前台刷新即可看到"
-              : "发布成功，前台刷新即可看到");
+              ? "通知 #" + editingId + " 已更新"
+              : "已存入「待审核草稿」，确认后点发布才对外可见");
             resetForm();
             return loadList();
           })
@@ -1258,10 +1269,12 @@
         var button = $("ai-draft-btn");
         if (button) {
           button.disabled = busy;
-          button.textContent = busy ? "起草中…" : "起草";
+          button.textContent = busy
+            ? "AI 正在写更新公告…"
+            : "一键起草当前版本更新公告";
         }
         $("ai-draft-hint").textContent = busy
-          ? "AI 正在写草稿，通常 5~15 秒…"
+          ? "正在读取当前版本与开发日志，通常 5~15 秒…"
           : "";
       }
 
@@ -1269,22 +1282,15 @@
         if (state.aiDrafting) {
           return;
         }
-        var topic = $("ai-draft-topic").value.trim();
-        if (!topic) {
-          toast("先写一个更新主题", true);
-          $("ai-draft-topic").focus();
-          return;
-        }
         setDrafting(true);
         request("/api/notifications/draft", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ topic: topic })
+          body: "{}"
         })
           .then(function (data) {
             var draft = data.draft || {};
             toast("草稿已生成：" + (draft.title || "（无标题）"));
-            $("ai-draft-topic").value = "";
             return loadList();
           })
           .catch(function (error) {

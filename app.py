@@ -39,6 +39,25 @@ database.init_db()
 # 这些接口在没验证密码时也要能访问：问配置、交密码换 token
 ACCESS_PUBLIC_PATHS = {"/api/access/config", "/api/access/verify"}
 
+# v0.11.3：密码只管后台。用户端（首页 / 资产 / 账单 / 我的）的读写接口全部免密，
+# 只有下面这些后台接口才要求 token：
+#   /api/access/*        设置面板（config / verify 除外）
+#   /api/upload          后台发通知时传封面图
+#   /api/notifications*  写操作与 ?include=drafts 的草稿列表（已发布列表对用户公开）
+ACCESS_PROTECTED_PREFIXES = ("/api/access/", "/api/notifications", "/api/upload")
+
+
+def _needs_access(path, method):
+    """这个接口是否需要访问密码。只保护后台，用户端一律放行。"""
+    if path in ACCESS_PUBLIC_PATHS:
+        return False
+    if path.startswith("/api/notifications"):
+        # 用户端只看已发布列表；草稿与增删改都属于后台
+        if method == "GET" and "include" not in request.args:
+            return False
+        return True
+    return any(path.startswith(prefix) for prefix in ACCESS_PROTECTED_PREFIXES)
+
 # 改密码 / 删密码 / 调超时，要求最近 5 分钟内验证过密码
 ACCESS_REAUTH_MINUTES = 5
 
@@ -71,12 +90,12 @@ def _fresh_admin_check(data):
 
 @app.before_request
 def _access_guard():
-    """没设密码时完全透明；设了密码就要求所有 /api/ 带有效 token。"""
+    """v0.11.3：设了密码也只拦后台接口；用户端页面完全免密。"""
     if request.method == "OPTIONS":
         return None
 
     path = request.path
-    if not path.startswith("/api/") or path in ACCESS_PUBLIC_PATHS:
+    if not path.startswith("/api/") or not _needs_access(path, request.method):
         return None
 
     config = database.get_access_config()
@@ -1072,7 +1091,7 @@ def list_notifications():
 
 @app.route("/api/notifications", methods=["POST"])
 def create_notification():
-    """开发者发布通知。content 允许带 HTML（后台编辑器产出），只给本机 /admin 用。"""
+    """后台手动写一条通知（v0.11.3：一律进「待审核草稿」，必须人工点发布才对外）。"""
     data = request.get_json(silent=True) or {}
 
     title = data.get("title")
@@ -1108,7 +1127,7 @@ def create_notification():
 
     try:
         notification = database.create_notification(
-            title, content, image_url, publish_date
+            title, content, image_url, publish_date, status="draft"
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
@@ -1176,19 +1195,26 @@ def delete_notification(notify_id):
 
 @app.route("/api/notifications/draft", methods=["POST"])
 def draft_notification():
-    """AI 起草一条通知草稿，返回 {draft: {...}}，状态 draft 等人工审核。"""
+    """AI 全自动起草当前版本更新公告（v0.11.3）。
+
+    前端不再传主题：后端自己读当前版本号 + docs/dev-log.md 里该版本的真实日志，
+    生成标题以「版本号 版本更新：」开头的草稿，状态 draft 等人工审核。
+    """
     data = request.get_json(silent=True)
+    if data is None:
+        data = {}
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
 
-    topic = data.get("topic")
-    if not isinstance(topic, str) or not topic.strip():
-        return jsonify(error="topic 必须是非空字符串"), 400
-    if len(topic.strip()) > 200:
-        return jsonify(error="topic 最多 200 个字符"), 400
+    version = detect_version()
+    hint = data.get("topic")
+    if hint is not None and not isinstance(hint, str):
+        return jsonify(error="topic 必须是字符串"), 400
 
     try:
-        draft = ai_service.generate_notification(topic.strip())
+        draft = ai_service.generate_notification(
+            version=version, hint=(hint or "").strip()
+        )
     except ai_service.AIServiceError as exc:
         return jsonify(error=str(exc)), 502
 
@@ -1198,7 +1224,7 @@ def draft_notification():
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
-    return jsonify(draft=notification), 201
+    return jsonify(draft=notification, version=version), 201
 
 
 @app.route("/api/notifications/<int:notify_id>/publish", methods=["PUT"])

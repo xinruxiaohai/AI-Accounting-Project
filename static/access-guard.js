@@ -2,8 +2,10 @@
  * AI记账管家 · 全站访问密码（v0.11.1）
  *
  * 职责一：给所有 /api/ 请求自动带上 X-Access-Token。
- * 职责二：没设密码时完全透明；设了密码就盖一层全屏遮罩，验证通过后
- *         把 token + 验证时间写进 localStorage，刷新页只要没超时就不弹。
+ * 职责二：只管 /admin 后台：没设密码时完全透明；设了密码就盖一层全屏遮罩。
+ *         用户端（首页 / 资产 / 账单 / 我的）绝对不弹密码框。
+ *         凭证存 sessionStorage：关掉标签页或浏览器再打开，必定重新验证。
+ *         （v0.11.3：从 localStorage 改为 sessionStorage）
  * 职责三：超时到点立刻重新上锁（阻断查看和操作），并对外暴露
  *         DSHAccess.isFresh()/verifyPassword()，供后台「改密码要 5 分钟内验证」
  *         那条规则判断。
@@ -19,6 +21,13 @@
 
   // 后台敏感操作（改密码 / 删密码 / 调超时）要求 5 分钟内验证过密码
   var FRESH_MINUTES = 5;
+
+  // v0.11.3：密码遮挡只作用于 /admin，用户端页面不弹密码框
+  var ADMIN_PATH_RE = /^\/admin(\/|$)/;
+
+  function isAdminPage() {
+    return ADMIN_PATH_RE.test(window.location.pathname || "");
+  }
 
   var config = { protected: false, timeout_minutes: 60, password_count: 0 };
   var overlay = null;
@@ -37,7 +46,7 @@
 
   function readToken() {
     try {
-      return window.localStorage.getItem(STORE_KEY.token) || "";
+      return window.sessionStorage.getItem(STORE_KEY.token) || "";
     } catch (error) {
       return "";
     }
@@ -45,7 +54,7 @@
 
   function readVerifiedAt() {
     try {
-      return number(window.localStorage.getItem(STORE_KEY.verifiedAt), 0);
+      return number(window.sessionStorage.getItem(STORE_KEY.verifiedAt), 0);
     } catch (error) {
       return 0;
     }
@@ -53,7 +62,7 @@
 
   function readTimeout() {
     try {
-      var stored = number(window.localStorage.getItem(STORE_KEY.timeout), 0);
+      var stored = number(window.sessionStorage.getItem(STORE_KEY.timeout), 0);
       return stored > 0 ? stored : number(config.timeout_minutes, 60);
     } catch (error) {
       return number(config.timeout_minutes, 60);
@@ -62,9 +71,9 @@
 
   function storeVerified(token, timeoutMinutes) {
     try {
-      window.localStorage.setItem(STORE_KEY.token, token || "");
-      window.localStorage.setItem(STORE_KEY.verifiedAt, String(Date.now()));
-      window.localStorage.setItem(STORE_KEY.timeout, String(timeoutMinutes || 60));
+      window.sessionStorage.setItem(STORE_KEY.token, token || "");
+      window.sessionStorage.setItem(STORE_KEY.verifiedAt, String(Date.now()));
+      window.sessionStorage.setItem(STORE_KEY.timeout, String(timeoutMinutes || 60));
     } catch (error) {
       /* 隐身模式下写不进 localStorage：当前页面照常可用，刷新会再问一次 */
     }
@@ -72,8 +81,8 @@
 
   function clearVerified() {
     try {
-      window.localStorage.removeItem(STORE_KEY.token);
-      window.localStorage.removeItem(STORE_KEY.verifiedAt);
+      window.sessionStorage.removeItem(STORE_KEY.token);
+      window.sessionStorage.removeItem(STORE_KEY.verifiedAt);
     } catch (error) {
       /* ignore */
     }
@@ -307,7 +316,7 @@
     window.fetch = function (input, init) {
       var args = withToken(input, init);
       return nativeFetch(args[0], args[1]).then(function (response) {
-        if (response.status === 401 && config.protected) {
+        if (response.status === 401 && config.protected && isAdminPage()) {
           // 只认后端明确说「需要输入访问密码」的那种 401：
           // 设置面板的 reauth_required 要让后台自己弹框，不能直接盖上遮罩
           response
@@ -364,6 +373,10 @@
         };
         if (!config.protected) {
           clearVerified();
+          return;
+        }
+        if (!isAdminPage()) {
+          // 用户端（首页 / 资产 / 账单 / 我的）不需要密码：不建遮罩、不开超时上锁
           return;
         }
         if (isValid()) {

@@ -204,26 +204,25 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 """
 
 
-NOTIFICATION_PROMPT = """你是记账应用的「更新通知撰稿人」。用户会给你一个主题（例如「新增截图记账与访问密码」），并附上「最新真实开发日志」，你要把日志里真实发生的改动润色成一条面向普通用户的中文更新通知，只输出一个 JSON 对象。
+NOTIFICATION_PROMPT = """你是记账应用「AI记账管家」的更新公告撰稿人。用户不会给你主题，你要为指定版本号写一条面向普通用户的中文更新公告，唯一依据是随消息附带的「该版本真实开发日志」。只输出一个 JSON 对象。
 
 【绝对依据】
-- 你只能基于附带的真实开发日志写内容：日志里提到了什么改动，就写什么，用普通用户能听懂的话解释「他能在哪里用到、怎么用」。
+- 只能基于附带的真实开发日志写：日志里提到什么改动就写什么，用普通用户能听懂的话解释「在哪里能看到、怎么用」。
 - 严禁编造日志里没有的功能；严禁写「修复了若干已知问题」「优化了性能」「提升稳定性」这类没有日志依据的空话。
-- 如果主题和日志内容关系不大，就围绕主题写日志中确实相关的那部分改动，不硬凑。
+- 日志里确实没有面向用户的变化时，就写最保守的内部维护说明，不要硬凑功能。
 
-【写作规范】
-- title：不超过 30 个汉字，直接点明这次更新做了什么，不要用「重磅」「震撼」这类营销词。
-- content：纯文本，不带 Markdown、不带 HTML 标签、不用表情或符号装饰，语气平实克制。
-- 结构必须是带序号的条目：用 1. 2. 3. 分行写，每条一句到两句话，讲清楚「改了什么、用户能怎么用、注意什么」。
+【标题规范（必须严格遵守）】
+- title 必须严格以「版本号 版本更新：」开头，版本号原样使用给定的值，不要加方括号。
+- 例如：v0.11.3-DEV 版本更新：后台密码与首页趋势图
+- 冒号后接一句不超过 20 个汉字的概括，不要用「重磅」「震撼」这类营销词。
+
+【正文规范】
+- content：纯文本，不带 Markdown、不带 HTML 标签、不用表情或符号装饰，语气平实客观。
+- 分点列出：用 1. 2. 3. 分行，每条一到两句话，讲清楚「改了什么、用户能怎么用、注意什么」。
 - 3 到 5 条，总字数控制在 200 字以内；不夸大、不编造没提到的功能。
-- 输出的 JSON 只有两个键：title（字符串）、content（字符串，条目之间用 \n 分隔）。
 
-【示例】
-主题：截图记账上线
-输出：{"title": "新增截图记账功能", "content": "1. 现在可以直接上传支付截图记账，AI 会自动识别金额、分类与账户。\n2. 识别结果会先在右下角显示进度，成功后点气泡即可查看账单详情。\n3. 截图会保存在本机相册，可在「我的」页面查看原图或删除图片。"}
-
-主题：可以忽略
-输出：{"title": "更新说明", "content": "1. 本次更新优化了操作体验。"}
+【输出】
+- 只输出两个键：title（字符串）、content（字符串，条目之间用 \\n 分隔）。
 """
 
 
@@ -259,6 +258,43 @@ def latest_dev_log_entry() -> str:
 
     block = []
     for line in lines[starts[-1]:]:
+        if block and _VERSION_LINE_RE.match(line.strip()):
+            break
+        block.append(line)
+    while block and (not block[-1] or set(block[-1]) <= set("—-")):
+        block.pop()
+
+    entry = "\n".join(block).strip()
+    return entry[:DEV_LOG_ENTRY_MAX_CHARS]
+
+
+def dev_log_entry_for_version(version: str) -> str:
+    """读取 docs/dev-log.md 中指定版本号的段落原文（v0.11.3）。
+
+    generate_notification 用它拿「这个版本到底改了什么」当唯一写作依据；
+    找不到该版本段落时返回空字符串，由调用方回落到最新一段。
+    """
+    target = (version or "").strip()
+    if not target:
+        return ""
+    try:
+        with open(DEV_LOG_PATH, "r", encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return ""
+
+    lines = [line.rstrip() for line in text.splitlines()]
+    pattern = re.compile(r"^" + re.escape(target) + r"(?:\s|$)")
+    start = None
+    for index, line in enumerate(lines):
+        if pattern.match(line.strip()):
+            start = index
+            break
+    if start is None:
+        return ""
+
+    block = []
+    for line in lines[start:]:
         if block and _VERSION_LINE_RE.match(line.strip()):
             break
         block.append(line)
@@ -604,32 +640,51 @@ def parse_image(
     return _normalize_intent(payload, moment)
 
 
-def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[str, Any]:
-    """根据主题起草一条更新通知（纯文本、带序号），返回 {"title", "content"}。
+def generate_notification(
+    version: str, hint: str = "", now: Optional[datetime] = None
+) -> dict[str, Any]:
+    """为指定版本起草更新公告，返回 {"title", "content"}（v0.11.3 全自动）。
 
-    content 保持纯文本（\n 分行），由调用方决定怎么入库或转成后台编辑器格式；
-    模型返回里混进来 HTML 或 Markdown 的，这里统一剥掉，保证「纯文本」这条规范。
+    版本号由调用方从 detect_version() 读出来传进来；这里自己去 docs/dev-log.md
+    取该版本的真实日志，拼进 Prompt 当唯一依据。前端不再传主题。
+    content 保持纯文本（\\n 分行）；标题强制以「版本号 版本更新：」开头。
     """
-    cleaned = (topic or "").strip()
-    if not cleaned:
-        raise AIServiceError("先写一个更新主题，比如「新增截图记账功能」")
-    if len(cleaned) > 200:
-        raise AIServiceError("主题太长了，控制在 200 字以内")
+    version = (version or "").strip()
+    if not version:
+        raise AIServiceError("读不到当前版本号，无法起草更新公告")
+    hint = (hint or "").strip()
 
     now = now or datetime.now()
     client = _client()
 
-    reference = latest_dev_log_entry()
+    reference = dev_log_entry_for_version(version)
     if reference:
         reference_block = (
-            "\n\n【最新真实开发日志（唯一依据，不得编造日志之外的内容）】\n"
+            "\n\n【该版本真实开发日志（唯一依据，不得编造日志之外的内容）】\n"
             + reference
         )
     else:
-        reference_block = (
-            "\n\n【最新真实开发日志】\n（没有读到开发日志：请只根据主题做最保守的概括，"
-            "不要编造具体功能与「修复已知问题」类空话）"
-        )
+        latest = latest_dev_log_entry()
+        if latest:
+            reference_block = (
+                "\n\n【最新真实开发日志（没有找到 " + version + " 的独立段落，先以最新一段为参考）】\n"
+                + latest
+            )
+        else:
+            reference_block = (
+                "\n\n【真实开发日志】\n（没有读到开发日志：请只做最保守的概括，"
+                "不要编造具体功能与「修复已知问题」类空话）"
+            )
+
+    ask = (
+        "\n\n请基于真实日志，为版本 "
+        + version
+        + " 撰写更新公告。标题必须严格以“"
+        + version
+        + " 版本更新：”开头，正文纯文本、无表情、平实客观、分点列出。"
+    )
+    if hint:
+        ask += "\n\n补充重点（可选，只能写日志里已有的事实）：" + hint
 
     kwargs: dict[str, Any] = {
         "model": MODEL,
@@ -638,10 +693,9 @@ def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[st
                 "role": "user",
                 "content": NOTIFICATION_PROMPT
                 + reference_block
+                + ask
                 + "\n\n现在日期："
-                + now.strftime("%Y-%m-%d")
-                + "\n主题："
-                + cleaned,
+                + now.strftime("%Y-%m-%d"),
             }
         ],
         "temperature": 0.6,
@@ -673,10 +727,23 @@ def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[st
 
     title = _as_text(payload.get("title"))
     body = _as_text(payload.get("content"))
-    if not title:
-        title = cleaned[:30]
+
+    # 标题规范：强制「版本号 版本更新：」开头，模型自己加的版本号/方括号都剥掉
+    prefix = version + " 版本更新："
+    rest = title.strip()
+    rest = re.sub(
+        r"^[\[\(（【]?" + re.escape(version) + r"[\]\)）】]?\s*版本更新[：:]\s*",
+        "",
+        rest,
+    )
+    rest = re.sub(r"^版本更新[：:]\s*", "", rest)
+    rest = re.sub(r"^[\[\(（【]?" + re.escape(version) + r"[\]\)）】]\s*", "", rest)
+    rest = rest.strip(" ：:")
+    title = (prefix + rest).strip()
     if len(title) > 80:
         title = title[:80]
+    if len(title) <= len(prefix):
+        title = prefix + "本次更新说明"
 
     # 纯文本规范：去掉 HTML 标签与 Markdown 强调符号，压掉多余空行
     body = re.sub(r"<[^>]+>", "", body)
@@ -685,7 +752,7 @@ def generate_notification(topic: str, now: Optional[datetime] = None) -> dict[st
     lines = [line for line in lines if line]
     body = "\n".join(lines)
     if not body:
-        raise AIServiceError("模型没有写出正文，请换个主题重试")
+        raise AIServiceError("模型没有写出正文，请稍后重试")
     if len(body) > 1200:
         body = body[:1200]
 

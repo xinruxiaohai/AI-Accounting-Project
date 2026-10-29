@@ -1412,33 +1412,52 @@ function monthExpenseByCategory() {
 }
 
 /** 近 N 天每天的支出合计（没有账单的日子补 0，折线才连续） */
-function dailyExpenseSeries(days) {
+/** 近 N 天趋势（v0.11.3）：每天分别算支出 / 收入 / 结余（收入减支出） */
+function dailyTrendSeries(days) {
   const todayKey = todayText();
   const startKey = shiftDateKey(todayKey, -(days - 1));
-  const totals = {};
-  let total = 0;
+  const expense = {};
+  const income = {};
+  let expenseTotal = 0;
+  let incomeTotal = 0;
 
   state.calendarRecords.forEach(function (record) {
-    if (record.type !== "expense") {
-      return;
-    }
     const key = dateKeyOf(record);
     if (key < startKey || key > todayKey) {
       return;
     }
     const amount = Number(record.amount || 0);
-    totals[key] = (totals[key] || 0) + amount;
-    total += amount;
+    if (record.type === "expense") {
+      expense[key] = (expense[key] || 0) + amount;
+      expenseTotal += amount;
+    } else if (record.type === "income") {
+      income[key] = (income[key] || 0) + amount;
+      incomeTotal += amount;
+    }
   });
 
   const labels = [];
-  const values = [];
+  const expenseValues = [];
+  const incomeValues = [];
+  const netValues = [];
   for (let i = 0; i < days; i += 1) {
     const key = shiftDateKey(startKey, i);
     labels.push(key.slice(5).replace("-", "/"));
-    values.push(cents(totals[key] || 0));
+    const dayExpense = cents(expense[key] || 0);
+    const dayIncome = cents(income[key] || 0);
+    expenseValues.push(dayExpense);
+    incomeValues.push(dayIncome);
+    netValues.push(cents(dayIncome - dayExpense));
   }
-  return { labels: labels, values: values, total: cents(total) };
+  return {
+    labels: labels,
+    expense: expenseValues,
+    income: incomeValues,
+    net: netValues,
+    total: cents(expenseTotal + incomeTotal),
+    expenseTotal: cents(expenseTotal),
+    incomeTotal: cents(incomeTotal),
+  };
 }
 
 /** Toolbox：保存图片 + 刷新（restore），按需求两件都开 */
@@ -1569,29 +1588,52 @@ function pieOption(list, count) {
 
 function trendOption(series) {
   const palette = chartPalette();
+  const dark = isDarkMode();
   const empty = series.total <= 0;
+  const colors = {
+    expense: dark ? "#f87171" : "#dc2626",
+    income: dark ? "#34d399" : "#059669",
+    net: dark ? "#94a3b8" : "#9ca3af",
+  };
 
   return {
     tooltip: {
       trigger: "axis",
       formatter: function (params) {
-        const point = params[0] || {};
-        return point.axisValue + "<br/>支出 " + money(point.value || 0);
+        const list = Array.isArray(params) ? params : [params];
+        const lines = [list[0] ? list[0].axisValue : ""];
+        list.forEach(function (point) {
+          if (!point) {
+            return;
+          }
+          lines.push(
+            point.marker + point.seriesName + " " + money(point.value || 0)
+          );
+        });
+        return lines.join("<br/>");
       },
       backgroundColor: palette.surface,
       borderColor: palette.line,
       textStyle: { color: palette.strong },
     },
+    legend: {
+      top: 0,
+      right: 44,
+      itemWidth: 14,
+      itemHeight: 8,
+      textStyle: { color: palette.text, fontSize: 10 },
+      data: ["支出", "收入", "结余"],
+    },
     toolbox: chartToolbox(),
     title: empty
       ? {
-          text: "近 30 天还没有支出",
+          text: "近 30 天还没有收支",
           left: "center",
           top: "44%",
           textStyle: { color: palette.text, fontSize: 12, fontWeight: "normal" },
         }
       : undefined,
-    grid: { left: 8, right: 12, top: 22, bottom: 6, containLabel: true },
+    grid: { left: 8, right: 12, top: 30, bottom: 6, containLabel: true },
     xAxis: {
       type: "category",
       boundaryGap: false,
@@ -1628,15 +1670,37 @@ function trendOption(series) {
         smooth: true,
         showSymbol: false,
         symbolSize: 6,
-        data: series.values,
-        lineStyle: { width: 2.2, color: palette.brand },
-        itemStyle: { color: palette.brand },
+        data: series.expense,
+        lineStyle: { width: 2.2, color: colors.expense },
+        itemStyle: { color: colors.expense },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: "rgba(37, 99, 235, .28)" },
-            { offset: 1, color: "rgba(37, 99, 235, .02)" },
+            { offset: 0, color: dark ? "rgba(248,113,113,.22)" : "rgba(220,38,38,.18)" },
+            { offset: 1, color: "rgba(220,38,38,.02)" },
           ]),
         },
+        emphasis: { focus: "series" },
+      },
+      {
+        name: "收入",
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        symbolSize: 6,
+        data: series.income,
+        lineStyle: { width: 2.2, color: colors.income },
+        itemStyle: { color: colors.income },
+        emphasis: { focus: "series" },
+      },
+      {
+        name: "结余",
+        type: "line",
+        smooth: true,
+        showSymbol: false,
+        symbolSize: 6,
+        data: series.net,
+        lineStyle: { width: 1.8, color: colors.net },
+        itemStyle: { color: colors.net },
         emphasis: { focus: "series" },
       },
     ],
@@ -1717,7 +1781,7 @@ function renderCharts() {
     return;
   }
   const pie = monthExpenseByCategory();
-  const trend = dailyExpenseSeries(30);
+  const trend = dailyTrendSeries(30);
 
   pieChart.setOption(pieOption(pie.list, pie.count), true);
   trendChart.setOption(trendOption(trend), true);
@@ -1726,8 +1790,10 @@ function renderCharts() {
     $("charts-sub").textContent =
       "本月支出 " +
       pie.count +
-      " 笔 · 近 30 天合计 " +
-      money(trend.total);
+      " 笔 · 近 30 天 支出 " +
+      money(trend.expenseTotal) +
+      " · 收入 " +
+      money(trend.incomeTotal);
   }
 }
 
@@ -5184,7 +5250,7 @@ async function loadVersion() {
       return;
     }
     if ($("sidebar-version")) {
-      $("sidebar-version").textContent = version + " · 开发中";
+      $("sidebar-version").textContent = version;
     }
     if ($("profile-version")) {
       $("profile-version").textContent = version;
