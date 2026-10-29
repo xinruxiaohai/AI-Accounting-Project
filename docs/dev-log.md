@@ -337,3 +337,15 @@ v0.11.3-DEV 2026-10-29 后台限定密码 / 三线趋势图 / 版本号自动公
 版本公告全自动：/api/notifications/draft 不再要求主题，服务端用 detect_version() 取当前 tag，ai_service.dev_log_entry_for_version() 从 docs/dev-log.md 精确抓该版本段落，拼进「版本公告撰稿人」Prompt，要求标题严格以「[版本号] 版本更新：」开头、纯文本无表情分点 3-5 条、只能基于真实日志不得编造；后端再兜底重写标题前缀。admin 起草区从「输入主题 + 起草」换成单个大按钮【一键起草当前版本更新公告】，空请求、成功后刷新草稿箱。
 
 踩坑与验证：版本号来源单一，detect_version() 依赖 git tag，没打 tag 时一键起草会拿到上一版，所以必须先 tag 再验证；Bootstrap 弹窗层级不能靠 DOM 顺序，必须给 .modal 与 .modal-backdrop 显式 100000/99999；sessionStorage 下「刷新保留、关标签失效」，测试关标签等价于清空 sessionStorage 再 reload；AI 会自作主张在标题加方括号或换格式，后端必须剥旧前缀再拼。后端脚本 28/28 通过（版本号公开、用户端读接口免 token、通知写与设置接口 401、手动通知落 draft 且公开列表不可见、发布后可见、一键起草标题「v0.11.3-DEV 版本更新：后台安全与趋势图优化」且正文分点引用真实日志、测试后通知 15 条/草稿 0/密码与会话逐字回基线）；真实 Chrome E2E 23/23 通过（首页无遮罩无 localStorage token、侧栏「v0.11.3-DEV」无「开发中」、趋势图 3 条 series 支出#dc2626/收入#059669/结余#9ca3af 各 30 点、/admin 弹遮罩、验证后 token 只进 sessionStorage、清空 sessionStorage 重载再次要密码、查看密码弹窗 z-index 100000 且 backdrop 99999、elementFromPoint 命中 reveal-password、一键起草出「v0.11.3-DEV 版本更新：后台密码与趋势图优化」并清理、页面无 JS 报错、余额 -8272 与通知 15 条不变）。
+
+v0.11.4-DEV 2026-10-30 趋势图可读性 / AI 同义词与置信度 / 多图串行识别 / 防重与 AI 记忆库
+
+四组改动一起封版。首页近 30 天趋势图把 legend 放到 top:30、toolbox 收到右上角，grid.top 留到 60；收入、支出两条实线，结余改用 dashed 虚线并压到 z:1 底层，补半透明渐变 areaStyle，三线统一 opacity 0.8，图例不再压线、三条线不再糊成一团。
+
+AI 预处理层：ai_service 新增 CATEGORY_MAPPING（滴滴/打撤→交通、星巴克/奶茶→餐饮、淘宝→购物、房租/水电→居住等），在归一化阶段强制把商户名式分类改写成标准分类；SYSTEM_PROMPT 字段扩到 16 个并要求每次返回 confidence（0-100 整数），同时明确「分类必须是标准分类名、不要把商户名当分类」；/api/records/ai 与 /api/records/ai/stream 接收 previous_record_id，命中时往 Prompt 注入「用户正在补充修改账单，请覆盖原数据」并走覆盖更新分支，返回体带 confidence；解析前还会取最近 3 条 ai_memory 当 few-shot 注入。
+
+前端交互：截图入口 input 改 multiple，上传改成 for...of + await 的串行队列（严禁 Promise.all），每张最长边压到 800px 后逐张 POST，独立气泡显示「识别中 i/N」；成功气泡按 confidence<80 变黄并提示核对；气泡内嵌迷你输入框，用户输入「改成微信」后带账单 ID 调纠错接口，文案提示「已改为 X（已记入 AI 记忆）」；详情弹窗新增【AI 纠错】按钮走同一纠错接口。防重：保存前用 /api/records/duplicate-check 预检最近 10 分钟金额相同、商户/账户相似的账目，命中弹自定义确认框，SSE/JSON/截图三条路径都接 409 duplicate 与 force 重发。
+
+AI 记忆库：新建 ai_memory 表（original_text / raw_category / corrected_category / note / created_at），纠错成功即落一条，解析前取最近 3 条注入 Prompt；/admin 新增「AI 纠错记忆」Tab，可查看、手动补一条、删除。
+
+踩坑与验证：本机沙箱一度把项目目录设成只读（写 records.db 报 readonly），端到端测试前必须先确认目录可写；纠错接口返回记忆对象形如 {"memory":..,"record":..}，而 /api/ai-memory POST 直接返回记忆本体，前端两个调用要分开解析。后端脚本 14/14 通过（三文件语法、首页与管理页 200 且新弹窗/多选结构命中、ai_memory 增删查、纠错接口 其他→交通且写记忆、防重命中与不同金额不命中、分类映射、confidence 夹取），node --check 通过，测试数据全部按唯一备注清理、数据库回到原状；未做真实浏览器点测（本机未起服务）。

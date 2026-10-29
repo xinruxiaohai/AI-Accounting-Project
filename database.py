@@ -1,5 +1,6 @@
 import datetime
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -298,7 +299,8 @@ def init_db():
                     reimbursement_contact_id INTEGER,
                     reimbursed_amount REAL NOT NULL DEFAULT 0,
                     total_reimbursement REAL NOT NULL DEFAULT 0,
-                    image_path TEXT NOT NULL DEFAULT ''
+                    image_path TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT ''
                 )
                 """
             )
@@ -350,6 +352,15 @@ def init_db():
                 conn.execute(
                     "ALTER TABLE records ADD COLUMN image_path TEXT NOT NULL DEFAULT ''"
                 )
+            # v0.11.4 新增：入库时间，10 分钟防重复检测靠它判断「最近刚记过没有」。
+            # 老数据补空串，表示「时间未知」，不会被误判成刚才记的。
+            if "created_at" not in columns:
+                conn.execute(
+                    "ALTER TABLE records ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_records_created ON records (created_at)"
+            )
 
             # 账户表：name 主键，balance 当前余额，group_name 大类（资金/储蓄/投资）
             # sort_order 供「账户管理」里拖拽排序，新账户一律排到同组最后
@@ -507,6 +518,22 @@ def init_db():
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_ai_feedback_status "
                 "ON ai_feedback (status)"
+            )
+
+            # AI 纠错记忆库（v0.11.4）：用户人工纠正分类后留一条，
+            # 下次解析前取最近 3 条注入 Prompt，让模型「记住」这位用户的叫法。
+            # 和 ai_feedback 分开存：feedback 是待消化的原始反馈，memory 是已经确认的纠错结论。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_memory (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    original_text      TEXT    NOT NULL,
+                    raw_category       TEXT,
+                    corrected_category TEXT    NOT NULL,
+                    note               TEXT,
+                    created_at         TEXT    DEFAULT CURRENT_TIMESTAMP
+                )
+                """
             )
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
@@ -936,8 +963,8 @@ def add_record(
                        (amount, category, category_id, note, date, account, type,
                         formula, to_account, fee, is_reimbursable,
                         reimbursement_contact_id, reimbursed_amount, total_reimbursement,
-                        image_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        image_path, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
                 """,
                 (
                     amount,
@@ -1981,6 +2008,186 @@ def update_feedback_status(feedback_id, status):
         return _row_to_feedback(row), None
     finally:
         conn.close()
+
+
+# ---------------- AI 纠错记忆库（v0.11.4） ----------------
+
+
+def _row_to_memory(row):
+    return {
+        "id": row["id"],
+        "original_text": row["original_text"],
+        "raw_category": row["raw_category"],
+        "corrected_category": row["corrected_category"],
+        "note": row["note"],
+        "created_at": row["created_at"],
+    }
+
+
+def add_ai_memory(original_text, raw_category, corrected_category, note=""):
+    """记一条人工纠错，返回入库后的完整字典（含 id）。
+
+    这是「用户教 AI」的持久记忆：下次解析前取最近几条塞进 Prompt 当 few-shot。
+    纠正后的分类必填，原始文本可以为空（比如详情页只改了分类没留原话）。
+    """
+    original_text = (original_text or "").strip()
+    corrected_category = (corrected_category or "").strip()
+    if not corrected_category:
+        raise RecordError("纠正后的分类不能为空")
+    if len(original_text) > 2000:
+        raise RecordError("原始文本最多 2000 个字符")
+
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO ai_memory "
+                "       (original_text, raw_category, corrected_category, note) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    original_text,
+                    (raw_category or "").strip() or None,
+                    corrected_category,
+                    (note or "").strip()[:200] or None,
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, original_text, raw_category, corrected_category, note, created_at "
+            "FROM ai_memory WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_memory(row)
+    finally:
+        conn.close()
+
+
+def list_ai_memories(limit=50):
+    """列出纠错记忆，新的在前；limit 夹在 1~200 之间，避免一次拉全库。"""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(200, limit))
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, original_text, raw_category, corrected_category, note, created_at "
+            "FROM ai_memory ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_memory(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def list_recent_ai_memories(limit=3):
+    """取最近几条纠错给 Prompt 当 few-shot；条数固定很小，避免提示词被撑爆。"""
+    return list_ai_memories(limit)
+
+
+def delete_ai_memory(memory_id):
+    """删一条纠错记忆，返回是否真的删到了。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute("DELETE FROM ai_memory WHERE id = ?", (memory_id,))
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------- 10 分钟防重检测（v0.11.4） ----------------
+
+# 商户/备注相似度用最长公共子串衡量：不引入分词依赖，两个字的公共片段就够像
+DUPLICATE_MINUTES = 10
+DUPLICATE_MIN_COMMON = 2
+
+
+def _longest_common_substring(left, right):
+    """两个字符串的最长公共子串长度（经典 DP，只保留上一行，空间 O(n)）。"""
+    if not left or not right:
+        return 0
+    best = 0
+    previous_row = [0] * (len(right) + 1)
+    for char in left:
+        current_row = [0]
+        for index, other in enumerate(right, start=1):
+            if char == other:
+                value = previous_row[index - 1] + 1
+                current_row.append(value)
+                if value > best:
+                    best = value
+            else:
+                current_row.append(0)
+        previous_row = current_row
+    return best
+
+
+def _texts_similar(left, right):
+    """备注/商户名是否相似：去空白后互相包含，或公共子串达到 2 个字。"""
+    a = re.sub(r"\s+", "", (left or "").lower())
+    b = re.sub(r"\s+", "", (right or "").lower())
+    if not a or not b:
+        return False
+    if a in b or b in a:
+        return True
+    return _longest_common_substring(a, b) >= DUPLICATE_MIN_COMMON
+
+
+def find_recent_duplicate(
+    amount,
+    account="",
+    note="",
+    minutes=DUPLICATE_MINUTES,
+    exclude_id=None,
+):
+    """保存前查最近 minutes 分钟内金额相同、商户/账户相似的账目。
+
+    命中返回整条账目 dict，否则 None。只比较入库时间 created_at：
+    老数据 created_at 是空串（升级前没有这个字段），一律不参与防重，
+    宁可漏判，也不要把几年前的旧账翻出来弹窗。
+    """
+    try:
+        amount_value = round(float(amount), 2)
+    except (TypeError, ValueError):
+        return None
+    try:
+        minutes = max(1, int(minutes))
+    except (TypeError, ValueError):
+        minutes = DUPLICATE_MINUTES
+
+    sql = (
+        _RECORD_SELECT
+        + " WHERE r.deleted_at IS NULL"
+        + "   AND ABS(r.amount - ?) < 0.005"
+        + "   AND r.created_at <> ''"
+        + "   AND r.created_at >= datetime('now','localtime', ?)"
+    )
+    params = [amount_value, "-%d minutes" % minutes]
+    if exclude_id:
+        sql += " AND r.id <> ?"
+        params.append(exclude_id)
+    sql += " ORDER BY r.id DESC LIMIT 20"
+
+    conn = get_conn()
+    try:
+        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+    account = (account or "").strip()
+    note = (note or "").strip()
+    for record in rows:
+        record_note = (record.get("note") or "").strip()
+        same_account = bool(account) and account == (record.get("account") or "")
+        if _texts_similar(note, record_note):
+            return record
+        # 两边都没写商户名时，只能靠「同账户 + 同金额 + 10 分钟内」兜底
+        if same_account and (not note or not record_note):
+            return record
+    return None
 
 
 # ---------------- 站点访问密码与验证会话（v0.11.1） ----------------

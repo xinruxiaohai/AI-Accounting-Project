@@ -986,6 +986,11 @@ body {
   background: #dc2626;
 }
 
+/* v0.11.4：提醒类提示（取消记账、请核对）用黄色，别和成功/失败混淆 */
+.toast-warn {
+  background: #d97706;
+}
+
 /* ==================== v0.06：公式实时结果 ==================== */
 .formula-hint {
   min-height: 16px;
@@ -6653,5 +6658,242 @@ html.access-locked body {
 /* v0.11.1：暗色模式下相册缩略图保持清晰 */
 [data-theme="dark"] .ai-thumb img {
   background: #0f172a;
+}
+
+/* ================= v0.11.4：多图预览 / 防重提醒 / AI 纠错 / 气泡增强 ================= */
+
+/* AI 快记：多张截图缩略图 + 序号，发送后按队列逐张识别 */
+.ai-thumb-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-thumb-cell {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 9px;
+  overflow: hidden;
+  background: #e2e8f0;
+}
+
+.ai-thumb-grid .ai-thumb-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 0;
+  display: block;
+}
+
+.ai-thumb-index {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #ffffff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 气泡黄牌：置信度不足 80 的识别结果，温和提醒核对 */
+.bubble.is-warn {
+  border-left-color: #f59e0b;
+  background: #fffbeb;
+}
+
+.bubble.is-warn .bubble-icon {
+  background: rgba(245, 158, 11, 0.16);
+  color: #b45309;
+}
+
+[data-theme="dark"] .bubble.is-warn {
+  background: #2a2113;
+  border-color: #4a3a1c;
+  border-left-color: #f59e0b;
+}
+
+[data-theme="dark"] .bubble.is-warn .bubble-title {
+  color: #fcd34d;
+}
+
+/* 成功气泡内的「修改」迷你表单：原地多轮纠错，不再跳弹窗 */
+.bubble-revise {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bubble-revise-input {
+  flex: 1 1 130px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 12.5px;
+}
+
+.bubble-revise-input::placeholder {
+  color: var(--text-muted);
+}
+
+.bubble-revise-input:focus {
+  outline: none;
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16);
+}
+
+.bubble-revise-btn {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--brand-blue);
+  color: #ffffff;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.bubble-revise-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.bubble-revise-error {
+  flex: 1 1 100%;
+  margin: 0;
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+[data-theme="dark"] .bubble-revise-error {
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .bubble-revise-input {
+  background: #131c2b;
+}
+
+/* 防重复提醒：左右两栏对比「本次要记」和「刚记过的」 */
+.duplicate-hint {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.duplicate-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.duplicate-col {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-soft, #f8fafc);
+}
+
+.duplicate-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.duplicate-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12.5px;
+}
+
+.duplicate-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.duplicate-list li:last-child {
+  border-bottom: 0;
+}
+
+.duplicate-list span {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.duplicate-list b {
+  min-width: 0;
+  color: var(--text-main);
+  font-weight: 600;
+  text-align: right;
+  word-break: break-word;
+}
+
+.duplicate-error {
+  margin: 10px 0 0;
+  color: #dc2626;
+  font-size: 12.5px;
+}
+
+[data-theme="dark"] .duplicate-col {
+  background: var(--bg-soft, #182234);
+}
+
+/* AI 纠错弹窗 */
+.correct-hint {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.correct-current {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bg-soft, #f8fafc);
+  color: var(--text-main);
+  font-size: 13px;
+}
+
+.correct-error {
+  margin: 8px 0 0;
+  color: #dc2626;
+  font-size: 12.5px;
+}
+
+[data-theme="dark"] .correct-current {
+  background: var(--bg-soft, #182234);
+}
+
+[data-theme="dark"] .correct-error,
+[data-theme="dark"] .duplicate-error {
+  color: #fca5a5;
+}
+
+@media (max-width: 575px) {
+  .duplicate-compare {
+    grid-template-columns: 1fr;
+  }
 }
 

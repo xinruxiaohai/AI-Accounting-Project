@@ -44,7 +44,13 @@ ACCESS_PUBLIC_PATHS = {"/api/access/config", "/api/access/verify"}
 #   /api/access/*        设置面板（config / verify 除外）
 #   /api/upload          后台发通知时传封面图
 #   /api/notifications*  写操作与 ?include=drafts 的草稿列表（已发布列表对用户公开）
-ACCESS_PROTECTED_PREFIXES = ("/api/access/", "/api/notifications", "/api/upload")
+ACCESS_PROTECTED_PREFIXES = (
+    "/api/access/",
+    "/api/notifications",
+    "/api/upload",
+    # v0.11.4：AI 记忆库属于后台管理数据，只有管理端看得到
+    "/api/ai-memory",
+)
 
 
 def _needs_access(path, method):
@@ -320,6 +326,116 @@ AI_ACTION_MESSAGES = {
     "add_contact": "联系人已添加",
 }
 
+# ---------------- v0.11.4：AI 记忆库 / 补充修改 / 防重 ----------------
+
+
+def _recent_ai_memories(limit=3):
+    """最近几条人工纠错，解析前当 few-shot 注入 Prompt；读库失败就当没有记忆。"""
+    try:
+        return database.list_recent_ai_memories(limit)
+    except Exception:  # noqa: BLE001 - 记忆只是锦上添花，坏了不能影响记账
+        return []
+
+
+def _previous_record(data):
+    """取请求里 previous_record_id / record_id 指向的原账单，返回 (账单, 错误信息)。"""
+    raw = data.get("previous_record_id", data.get("record_id"))
+    if raw in (None, "", 0, "0"):
+        return None, None
+    try:
+        record_id = int(raw)
+    except (TypeError, ValueError):
+        return None, "previous_record_id 必须是账目 id"
+    record = database.get_record(record_id)
+    if record is None:
+        return None, "原账单不存在（可能已被删除），请刷新后重试"
+    return record, None
+
+
+def _duplicate_candidate(parsed, account="", note="", exclude_id=None):
+    """记账前查最近 10 分钟内金额相同、商户相似的账目；命中返回那一条。"""
+    if parsed.get("action") != "record":
+        return None
+    return database.find_recent_duplicate(
+        parsed.get("amount"),
+        account=account or parsed.get("account") or database.DEFAULT_ACCOUNT,
+        note=note if note else (parsed.get("note") or ""),
+        exclude_id=exclude_id,
+    )
+
+
+def _apply_ai_correction(previous_record, parsed, text):
+    """AI 补充修改原账单：覆盖原数据而不是新建，分类变了就顺手记一条记忆。"""
+    record_type = parsed.get("type") or previous_record.get("type") or database.DEFAULT_TYPE
+    category = parsed.get("category") or previous_record.get("category") or "其他"
+    category_id = previous_record.get("category_id")
+    if record_type in ("expense", "income"):
+        try:
+            category_id = database.ensure_category(category)["id"]
+        except database.RecordError:
+            category_id = None
+    elif record_type == "transfer":
+        category_id = None
+
+    amount = parsed.get("amount")
+    if amount is None:
+        amount = previous_record.get("amount")
+    date = parsed.get("date") or previous_record.get("date")
+    note = parsed.get("note")
+    if note is None:
+        note = previous_record.get("note")
+    account = parsed.get("account") or previous_record.get("account") or database.DEFAULT_ACCOUNT
+    to_account = parsed.get("to_account")
+    if to_account is None:
+        to_account = previous_record.get("to_account")
+    fee = parsed.get("fee")
+    if fee is None:
+        fee = previous_record.get("fee") or 0
+
+    updated, error_message = database.update_record(
+        previous_record["id"],
+        amount,
+        category,
+        note or "",
+        date,
+        account,
+        record_type,
+        category_id,
+        previous_record.get("formula") or "",
+        to_account or "",
+        fee or 0,
+    )
+    if error_message is not None:
+        return {"error": error_message}, 400
+    if not updated:
+        return {"error": "原账单不存在（可能已被删除）"}, 404
+
+    # 分类被纠正了就写进记忆库：下次遇到同样说法的商户，AI 会按新分类来
+    if (
+        record_type in ("expense", "income")
+        and (previous_record.get("category") or "") != category
+    ):
+        try:
+            database.add_ai_memory(
+                text,
+                previous_record.get("category") or "",
+                category,
+                note="AI 补充修改自动记录",
+            )
+        except database.RecordError:
+            pass
+
+    fresh = database.get_record(previous_record["id"])
+    return {
+        "id": previous_record["id"],
+        "source": "ai",
+        "action": "record",
+        "updated": True,
+        "text": text.strip(),
+        "record": fresh,
+        "confidence": parsed.get("confidence"),
+    }, 200
+
 
 def _apply_ai_intent(parsed, text):
     """把 AI 解析出的意图真正落库，返回 (响应体 dict, HTTP 状态码)。
@@ -465,14 +581,25 @@ def create_record_by_ai():
 
     模型只负责理解与抽字段，金额/类型/日期到本地还会再校验一遍；写库统一走
     _apply_ai_intent，和流式接口 /api/records/ai/stream 用的是同一份逻辑。
+
+    v0.11.4：带 previous_record_id 时是「补充修改原账单」，覆盖更新而不是新建；
+    保存前会查 10 分钟内相似账目，命中返回 409，前端确认后带 force=true 重发。
     """
     data = request.get_json(silent=True) or {}
     text = data.get("text")
     if not isinstance(text, str) or not text.strip():
         return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
 
+    previous_record, error_message = _previous_record(data)
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+
     try:
-        parsed = ai_service.parse_intent(text)
+        parsed = ai_service.parse_intent(
+            text,
+            previous_record=previous_record,
+            memories=_recent_ai_memories(),
+        )
     except ai_service.AIServiceError as exc:
         # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
         return jsonify(error=str(exc)), 502
@@ -480,7 +607,26 @@ def create_record_by_ai():
     if parsed["action"] == "unknown":
         return jsonify(error="AI 无法理解您的指令"), 400
 
+    if previous_record is not None:
+        body, status = _apply_ai_correction(previous_record, parsed, text)
+        return jsonify(body), status
+
+    if not data.get("force"):
+        duplicate = _duplicate_candidate(parsed)
+        if duplicate is not None:
+            return (
+                jsonify(
+                    duplicate=True,
+                    message="10 分钟内有一笔金额相同、商户相似的账目，请先确认是否重复记账",
+                    candidate=duplicate,
+                    parsed=parsed,
+                ),
+                409,
+            )
+
     body, status = _apply_ai_intent(parsed, text)
+    if status < 400:
+        body["confidence"] = parsed.get("confidence")
     return jsonify(body), status
 
 
@@ -492,11 +638,17 @@ def create_record_by_ai_stream():
     - unknown 也回 200，推 {"status":"unknown"} 事件
     - 任何异常都推 {"status":"error"} 事件，绝不让流断在半路
     - 写库仍走 _apply_ai_intent，落库字段与普通接口一致
+    - v0.11.4：带 previous_record_id 时覆盖更新原账单；命中防重时推 duplicate 事件
     """
     data = request.get_json(silent=True) or {}
     text = data.get("text")
     if not isinstance(text, str) or not text.strip():
         return jsonify(error="先输入一句话，比如「昨天打车花了 30」"), 400
+
+    previous_record, error_message = _previous_record(data)
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+    force = bool(data.get("force"))
 
     def event(payload):
         # SSE 规定每条事件以空行结束；ensure_ascii=False 让中文在 curl 里可读
@@ -507,7 +659,11 @@ def create_record_by_ai_stream():
             yield event({"status": "thinking", "msg": "正在理解您的指令..."})
 
             try:
-                parsed = ai_service.parse_intent(text)
+                parsed = ai_service.parse_intent(
+                    text,
+                    previous_record=previous_record,
+                    memories=_recent_ai_memories(),
+                )
             except ai_service.AIServiceError as exc:
                 yield event({"status": "error", "action": "unknown", "msg": str(exc), "message": str(exc)})
                 return
@@ -524,6 +680,41 @@ def create_record_by_ai_stream():
                 })
                 return
 
+            # 补充修改原账单：覆盖更新，不再走「新建 + 防重」
+            if previous_record is not None:
+                yield event({"status": "extracting_amount", "msg": "正在识别修改内容..."})
+                yield event({"status": "resolving_category", "msg": "正在匹配分类..."})
+                yield event({"status": "saving", "msg": "正在更新原账单..."})
+                body, status_code = _apply_ai_correction(previous_record, parsed, text)
+                if status_code >= 400:
+                    message = body.get("error", "更新失败")
+                    yield event({"status": "error", "msg": message, "message": message})
+                    return
+                yield event(
+                    {
+                        "status": "done",
+                        "action": "record",
+                        "updated": True,
+                        "message": "已更新原账单",
+                        "payload": body,
+                        "confidence": parsed.get("confidence"),
+                    }
+                )
+                return
+
+            # 防重复：保存前查最近 10 分钟相似账目，前端弹窗确认后带 force=true 重发
+            if not force:
+                duplicate = _duplicate_candidate(parsed)
+                if duplicate is not None:
+                    yield event({
+                        "status": "duplicate",
+                        "action": action,
+                        "message": "10 分钟内有一笔金额相同、商户相似的账目，请先确认",
+                        "candidate": duplicate,
+                        "parsed": parsed,
+                    })
+                    return
+
             # 字段在 parse_intent 里已经本地校验过，这里的分阶段提示对应真实处理顺序：
             # 金额/分类在 _apply_ai_intent 里补建分类时用到，saving 之后才真正写库
             yield event({"status": "extracting_amount", "msg": "正在识别金额..."})
@@ -536,12 +727,14 @@ def create_record_by_ai_stream():
                 yield event({"status": "error", "msg": message, "message": message})
                 return
 
+            body["confidence"] = parsed.get("confidence")
             yield event(
                 {
                     "status": "done",
                     "action": action,
                     "message": AI_ACTION_MESSAGES.get(action, "处理完成"),
                     "payload": body,
+                    "confidence": parsed.get("confidence"),
                 }
             )
         except Exception as exc:  # noqa: BLE001 - 流一旦开始就不能崩，兜底转成 error 事件
@@ -650,7 +843,11 @@ def create_record_by_ai_image():
         return jsonify(error=error_message), 400
 
     try:
-        parsed = ai_service.parse_image(image, mime or ai_service.IMAGE_MIME_FALLBACK)
+        parsed = ai_service.parse_image(
+            image,
+            mime or ai_service.IMAGE_MIME_FALLBACK,
+            memories=_recent_ai_memories(),
+        )
     except ai_service.AIServiceError as exc:
         # 密钥失效 / 超时 / 模型返回坏 JSON 都算上游失败，502 让前端提示重试
         return jsonify(error=str(exc)), 502
@@ -662,6 +859,20 @@ def create_record_by_ai_image():
         return jsonify(
             error="这张截图看起来是借贷或联系人信息，截图记账暂时只支持消费/收入账单"
         ), 422
+
+    # 防重复：跟一句话记账同一套判断，前端确认后带 force=true 重发
+    if not data.get("force"):
+        duplicate = _duplicate_candidate(parsed)
+        if duplicate is not None:
+            return (
+                jsonify(
+                    duplicate=True,
+                    message="10 分钟内有一笔金额相同、商户相似的账目，请先确认是否重复记账",
+                    candidate=duplicate,
+                    parsed=parsed,
+                ),
+                409,
+            )
 
     # 先落盘再入库：图片路径要跟着账目一起写，避免「账记了、图丢了」
     image_path, error_message = _save_ai_image_to_disk(raw, mime)
@@ -685,6 +896,7 @@ def create_record_by_ai_image():
     body["record"]["image_path"] = image_path
     # 相册/详情直接拿这个地址渲染 <img>，前端省一次拼接
     body["record"]["image_url"] = image_path
+    body["confidence"] = parsed.get("confidence")
     return jsonify(body), status
 
 
@@ -769,6 +981,138 @@ def update_feedback(feedback_id):
     if feedback is None:
         return jsonify(error="反馈不存在"), 404
     return jsonify(feedback)
+
+
+@app.route("/api/records/<int:record_id>/correction", methods=["POST"])
+def correct_record_category(record_id):
+    """详情弹窗【AI 纠错】：把账单分类改成用户选的分类，并记一条 AI 记忆。
+
+    body {"corrected_category": "餐饮", "original_text": "可选原话",
+          "raw_category": "可选 AI 原来错的分类", "note": "可选备注"}
+    记忆写入 ai_memory，之后解析相似商户时会当 few-shot 带上。
+    """
+    record = database.get_record(record_id)
+    if record is None:
+        return jsonify(error="账目不存在（可能已被删除）"), 404
+    if (record.get("type") or "") == "transfer":
+        return jsonify(error="转账账目没有分类，请直接编辑账单"), 400
+
+    data = request.get_json(silent=True) or {}
+    corrected = data.get("corrected_category")
+    if not isinstance(corrected, str) or not corrected.strip():
+        return jsonify(error="corrected_category 必须是非空字符串"), 400
+    corrected = corrected.strip()
+
+    try:
+        category = database.ensure_category(corrected)
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+
+    raw_category = data.get("raw_category")
+    if not isinstance(raw_category, str) or not raw_category.strip():
+        raw_category = record.get("category") or ""
+    original_text = data.get("original_text")
+    if not isinstance(original_text, str) or not original_text.strip():
+        original_text = record.get("note") or ""
+
+    try:
+        memory = database.add_ai_memory(
+            original_text,
+            raw_category,
+            category["name"],
+            note=(data.get("note") if isinstance(data.get("note"), str) else "") or "详情弹窗 AI 纠错",
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+
+    updated, error_message = database.update_record(
+        record_id,
+        record["amount"],
+        category["name"],
+        record.get("note") or "",
+        record["date"],
+        record.get("account") or database.DEFAULT_ACCOUNT,
+        record.get("type") or database.DEFAULT_TYPE,
+        category["id"],
+        record.get("formula") or "",
+        record.get("to_account") or "",
+        record.get("fee") or 0,
+    )
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+    if not updated:
+        return jsonify(error="账目不存在（可能已被删除）"), 404
+
+    return jsonify(memory=memory, record=database.get_record(record_id))
+
+
+@app.route("/api/records/duplicate-check", methods=["GET"])
+def check_record_duplicate():
+    """手工记账保存前的防重预检：?amount=30&account=支付宝&note=滴滴&exclude_id=5
+
+    返回 {duplicate, candidate}；candidate 为最近 10 分钟内金额相同、商户相似的账目。
+    前端命中后弹自定义「仍然记账」确认框，确认了再正常 POST /api/records。
+    """
+    raw_amount = request.args.get("amount", "")
+    try:
+        amount = round(float(raw_amount), 2)
+    except (TypeError, ValueError):
+        return jsonify(error="amount 必须是数字"), 400
+
+    raw_exclude = request.args.get("exclude_id", "")
+    exclude_id = None
+    if raw_exclude not in ("", None):
+        try:
+            exclude_id = int(raw_exclude)
+        except (TypeError, ValueError):
+            return jsonify(error="exclude_id 必须是整数"), 400
+
+    candidate = database.find_recent_duplicate(
+        amount,
+        account=request.args.get("account", ""),
+        note=request.args.get("note", ""),
+        exclude_id=exclude_id,
+    )
+    return jsonify(duplicate=candidate is not None, candidate=candidate)
+
+
+# ---------------- AI 记忆库管理（v0.11.4，后台 Tab 用） ----------------
+
+
+@app.route("/api/ai-memory", methods=["GET"])
+def list_ai_memory():
+    """AI 纠错记忆列表，新的在前；?limit=N 控制条数（1~200）。"""
+    raw_limit = request.args.get("limit", "50")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify(error="limit 必须是整数"), 400
+    items = database.list_ai_memories(limit)
+    return jsonify(items=items, total=len(items))
+
+
+@app.route("/api/ai-memory", methods=["POST"])
+def create_ai_memory():
+    """管理端手动补一条纠错记忆（body：corrected_category 必填）。"""
+    data = request.get_json(silent=True) or {}
+    try:
+        memory = database.add_ai_memory(
+            data.get("original_text"),
+            data.get("raw_category"),
+            data.get("corrected_category"),
+            note=data.get("note") if isinstance(data.get("note"), str) else "",
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(memory), 201
+
+
+@app.route("/api/ai-memory/<int:memory_id>", methods=["DELETE"])
+def remove_ai_memory(memory_id):
+    """删一条纠错记忆；删掉后下次解析就不再带这条 few-shot。"""
+    if not database.delete_ai_memory(memory_id):
+        return jsonify(error="记忆不存在或已被删除"), 404
+    return jsonify(removed=True, id=memory_id)
 
 
 @app.route("/api/records", methods=["GET"])
@@ -1414,7 +1758,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.07.1-DEV"
+APP_VERSION_FALLBACK = "v0.11.4-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

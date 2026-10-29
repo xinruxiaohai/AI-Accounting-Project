@@ -51,6 +51,37 @@ IMAGE_MIME_FALLBACK = "image/jpeg"
 ACTIONS = ("record", "debt", "add_contact", "unknown")
 RECORD_TYPES = ("expense", "income", "transfer")
 
+# v0.11.4 同义词纠错：模型经常把商户名/口语直接当分类返回（「滴滴」「星巴克」），
+# 这里在归一化阶段强制改写成标准分类，避免给用户凭空建出一堆商户分类。
+CATEGORY_MAPPING = {
+    "滴滴": "交通",
+    "滴滴出行": "交通",
+    "打撤": "交通",
+    "打车": "交通",
+    "出租车": "交通",
+    "网约车": "交通",
+    "地铁": "交通",
+    "公交": "交通",
+    "加油": "交通",
+    "星巴克": "餐饮",
+    "瑞幸": "餐饮",
+    "麦当劳": "餐饮",
+    "肯德基": "餐饮",
+    "美团": "餐饮",
+    "饿了么": "餐饮",
+    "外卖": "餐饮",
+    "奶茶": "餐饮",
+    "咖啡": "餐饮",
+    "淘宝": "购物",
+    "京东": "购物",
+    "拼多多": "购物",
+    "超市": "购物",
+    "房租": "居住",
+    "水电": "居住",
+    "话费": "居住",
+    "物业": "居住",
+}
+
 # 模型可能写中文，统一映射到数据库的 lend / borrow
 DEBT_TYPE_ALIASES = {
     "lend": "lend",
@@ -75,7 +106,7 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段键名固定为下面 14 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 ""、0 或 false：
+- 字段键名固定为下面 16 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 ""、0 或 false：
   action          字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"unknown"（听不懂）
   amount          数字，金额，必须大于 0，不带货币符号
   type            记账时只能是 "expense"/"income"/"transfer"；借贷时只能是 "lend"（我借出）/ "borrow"（我借入）
@@ -91,6 +122,11 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
   phone           字符串，联系人电话
   wechat          字符串，联系人微信
   name            字符串，添加联系人时的姓名
+  confidence      整数 0-100，你对本次解析结果的确定程度：金额、分类、时间都能从原话明确确定时给 90 以上；有猜测成分、语句含糊、字段靠默认值补齐时给低分（低于 80）
+
+【置信度规则】
+- 每一次输出都必须带 confidence，任何意图都不能省略。
+- 这只是「模型自评」，用于前端提醒用户核对；不要因为怕错就一律写低分。
 
 【金额提取强约束（历史踩坑最多，务必遵守）】
 - 金额只认「带货币单位」或明显在花钱语境里的数字：数字后面紧跟 元 / 块 / ￥ / ¥，或句子里有「花了、买了、付了、垫付、代买、报销、借、还」等动作时代表钱的那个数。
@@ -110,6 +146,7 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【record 规则】
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
+- 分类必须是标准分类名（交通/餐饮/购物/居住/工资/其他 等），绝对不要把商户名当分类（「滴滴」「星巴克」是商户，不是分类）。
 - 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
 - 时间：今天是 {today}（{weekday}），当前时间 {now}；「昨天/前天/上周五」换算成具体日期；没提时间用 {now}；只提日期时刻填 00:00。
 - 报销（代买/垫付）：用户替别人或公司花钱、之后要收回来时，is_reimbursable 填 true；
@@ -130,31 +167,31 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【示例】
 用户：昨天打车花了30
-输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：工资到账 8000
-输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：帮同事小明代买咖啡30
-输出：{{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "帮小明代买咖啡", "is_reimbursable": true, "contact_name": "小明", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "帮小明代买咖啡", "is_reimbursable": true, "contact_name": "小明", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：给公司垫付打车50，记得报销
-输出：{{"action": "record", "amount": 50, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "垫付打车报销", "is_reimbursable": true, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 50, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "垫付打车报销", "is_reimbursable": true, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：测试乙41215 买了奶茶20元
-输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：借给小王20元
-输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "is_reimbursable": false, "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "is_reimbursable": false, "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：向小李借了100
-输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "is_reimbursable": false, "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "is_reimbursable": false, "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 
 用户：添加小王，他是亲戚，电话13800000000
 输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "is_reimbursable": false, "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王"}}
 
 用户：今天天气不错
-输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}}
+输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
 """
 
 
@@ -164,7 +201,7 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段键名固定为下面 14 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
+- 字段键名固定为下面 15 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
   action          字符串，只能是 "record"（记账）、"debt"（借贷）、"unknown"（不是账单/看不清）
   amount          数字，本笔交易金额，必须大于 0，不带货币符号
   type            只能是 "expense"（支出）、"income"（收入/退款）、"transfer"（账户转账）
@@ -180,6 +217,7 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
   phone           字符串，联系人电话，没有填 ""
   wechat          字符串，联系人微信，没有填 ""
   name            字符串，添加联系人时的姓名，没有填 ""
+  confidence      整数 0-100，你对这张图识别结果的确定程度：金额和分类都清晰可辨时给 90 以上；图糊、金额靠猜、分类靠推断时给低分（低于 80）
 
 【金额识别强约束】
 - 只取「实付/支付/消费/收款/转账」那笔交易金额，例如「-30.00」「实付 ¥30.00」「收款 100.00」。
@@ -197,7 +235,7 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 
 【示例】
 截图内容：支付成功 / 麦当劳 / 实付 ¥30.00 / 2026-10-28 12:31
-输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳 午餐", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": ""}
+输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳 午餐", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
 
 截图内容：一张猫的照片
 输出：{"action": "unknown"}
@@ -324,7 +362,70 @@ def _client(timeout: float = REQUEST_TIMEOUT) -> OpenAI:
     return OpenAI(api_key=key, base_url=BASE_URL, timeout=timeout)
 
 
-def _build_messages(text: str, now: datetime) -> list[dict[str, str]]:
+def _memory_block(memories: Optional[list[dict[str, Any]]]) -> str:
+    """把最近几条人工纠错拼成 few-shot 提示段（v0.11.4 AI 记忆库）。
+
+    只取 corrected_category 非空的条目，最多 3 条；没有记忆时返回空串，Prompt 不受影响。
+    """
+    lines: list[str] = []
+    for item in (memories or [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        corrected = (item.get("corrected_category") or "").strip()
+        if not corrected:
+            continue
+        raw_category = (item.get("raw_category") or "").strip()
+        original = (item.get("original_text") or "").strip()
+        piece = "- "
+        if original:
+            piece += "用户原话「%s」" % original[:60]
+        if raw_category:
+            piece += "，AI 曾错分成「%s」" % raw_category
+        piece += "，正确分类应为「%s」" % corrected
+        lines.append(piece)
+    if not lines:
+        return ""
+    return (
+        "\n\n【用户历史纠错记忆（越新越重要：遇到相同商户、相同叫法时，"
+        "必须按这里的结论给分类，不要再重复同样的错误）】\n" + "\n".join(lines)
+    )
+
+
+def _previous_record_block(previous_record: Optional[dict[str, Any]]) -> str:
+    """补充修改账单时把原账单快照注入 Prompt（v0.11.4 多轮上下文）。"""
+    if not previous_record:
+        return ""
+    snapshot = {
+        key: previous_record.get(key)
+        for key in (
+            "id",
+            "amount",
+            "type",
+            "category",
+            "account",
+            "to_account",
+            "fee",
+            "date",
+            "note",
+        )
+        if key in previous_record
+    }
+    return (
+        "\n\n【补充修改账单上下文】\n"
+        "用户正在补充修改账单，请覆盖原数据。\n"
+        "原账单 JSON：" + json.dumps(snapshot, ensure_ascii=False) + "\n"
+        "用户这次说的话是对上面这笔账单的补充或修改（补商户、改分类、改金额、"
+        "改支付账户等）。请输出修改后的最终完整结果，action 仍为 record；"
+        "用户没提到的字段沿用原账单的值，不要清空。"
+    )
+
+
+def _build_messages(
+    text: str,
+    now: datetime,
+    previous_record: Optional[dict[str, Any]] = None,
+    memories: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, str]]:
     weekday = "一二三四五六日"[now.weekday()]
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     system = SYSTEM_PROMPT.format(
@@ -333,6 +434,7 @@ def _build_messages(text: str, now: datetime) -> list[dict[str, str]]:
         now=now.strftime("%Y-%m-%d %H:%M"),
         yesterday=yesterday,
     )
+    system += _memory_block(memories) + _previous_record_block(previous_record)
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": text.strip()},
@@ -388,6 +490,33 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _as_confidence(value: Any, default: int = 80) -> int:
+    """把模型自评的 confidence 夹到 0-100 的整数；模型漏给或写坏时按 80 处理。"""
+    try:
+        number = int(round(float(str(value).replace("%", "").strip())))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(100, number))
+
+
+# 标准分类的兜底：先按 AI 给的分类名精确映射，再按「包含关系」取最长命中的键，
+# 这样「滴滴出行-快车」「星巴克咖啡」也能落到交通/餐饮，不会在库里长出商户分类。
+def _normalize_category(value: Any) -> str:
+    name = _as_text(value)
+    if not name:
+        return ""
+    if name in CATEGORY_MAPPING:
+        return CATEGORY_MAPPING[name]
+    compact = re.sub(r"\s+", "", name)
+    best_key = ""
+    best_target = ""
+    for key, target in CATEGORY_MAPPING.items():
+        if key in compact and len(key) > len(best_key):
+            best_key = key
+            best_target = target
+    return best_target or name
+
+
 def _normalize_date(value: Any, now: datetime) -> str:
     raw = _as_text(value)
     if not raw:
@@ -419,7 +548,7 @@ def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
     return {
         "amount": amount,
         "type": record_type,
-        "category": _as_text(payload.get("category")),
+        "category": _normalize_category(payload.get("category")),
         "account": _as_text(payload.get("account")),
         "to_account": to_account,
         "fee": fee,
@@ -471,22 +600,28 @@ def _normalize_intent(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AIServiceError("模型返回的不是 JSON 对象")
 
+    confidence = _as_confidence(payload.get("confidence"))
     action = _as_text(payload.get("action")).lower()
     if action not in ACTIONS:
         # 模型漏了 action 或写了别的词，一律当听不懂，不猜意图
-        return {"action": "unknown"}
+        return {"action": "unknown", "confidence": confidence}
     if action == "unknown":
-        return {"action": "unknown"}
+        return {"action": "unknown", "confidence": confidence}
 
     result = _normalize_record(payload, now) if action == "record" else None
     if action == "debt":
         result = _normalize_debt(payload, now)
     elif action == "add_contact":
         result = _normalize_contact(payload)
-    return {"action": action, **result}
+    return {"action": action, "confidence": confidence, **result}
 
 
-def _chat(text: str, now: datetime) -> dict[str, Any]:
+def _chat(
+    text: str,
+    now: datetime,
+    previous_record: Optional[dict[str, Any]] = None,
+    memories: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if not cleaned:
         raise AIServiceError("说一句话再解析，比如「昨天打车花了 30」")
@@ -496,7 +631,7 @@ def _chat(text: str, now: datetime) -> dict[str, Any]:
     client = _client()
     kwargs: dict[str, Any] = {
         "model": MODEL,
-        "messages": _build_messages(cleaned, now),
+        "messages": _build_messages(cleaned, now, previous_record, memories),
         "temperature": 0.1,
         "max_tokens": 400,
     }
@@ -527,9 +662,18 @@ def _chat(text: str, now: datetime) -> dict[str, Any]:
     return _normalize_intent(payload, now)
 
 
-def parse_intent(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
-    """理解一句话的意图，返回带 action 的字段；失败抛 AIServiceError。"""
-    return _chat(text, now or datetime.now())
+def parse_intent(
+    text: str,
+    now: Optional[datetime] = None,
+    previous_record: Optional[dict[str, Any]] = None,
+    memories: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """理解一句话的意图，返回带 action 与 confidence 的字段；失败抛 AIServiceError。
+
+    previous_record 非空表示「补充修改账单」，会把原账单快照注入 Prompt；
+    memories 是最近几条人工纠错（AI 记忆库），当 few-shot 注入。
+    """
+    return _chat(text, now or datetime.now(), previous_record, memories)
 
 
 def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
@@ -552,12 +696,16 @@ def _split_data_url(image: str) -> tuple[str, str]:
 
 
 def _build_vision_messages(
-    image_base64: str, mime: str, now: datetime
+    image_base64: str,
+    mime: str,
+    now: datetime,
+    memories: Optional[list[dict[str, Any]]] = None,
 ) -> list[dict[str, Any]]:
     # 提示词里本身就有大量 JSON 花括号，不能用 str.format，改用占位符替换
     prompt = VISION_PROMPT.replace(
         "__TODAY__", now.strftime("%Y-%m-%d")
     ).replace("__NOW__", now.strftime("%Y-%m-%d %H:%M"))
+    prompt += _memory_block(memories)
     return [
         {
             "role": "user",
@@ -578,6 +726,7 @@ def parse_image(
     image_base64: str,
     mime: str = IMAGE_MIME_FALLBACK,
     now: Optional[datetime] = None,
+    memories: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """识别一张账单截图，返回与 parse_intent 同结构的字段；不是账单返回 {"action": "unknown"}。
 
@@ -608,7 +757,7 @@ def parse_image(
     try:
         completion = client.chat.completions.create(
             model=VISION_MODEL,
-            messages=_build_vision_messages(raw_base64, mime, moment),
+            messages=_build_vision_messages(raw_base64, mime, moment, memories),
             temperature=0.1,
             max_tokens=500,
         )

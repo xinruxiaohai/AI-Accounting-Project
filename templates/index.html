@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.11.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.4">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.11.3-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.11.4-DEV</div>
     </div>
   </aside>
 
@@ -912,9 +912,73 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">关闭</button>
+        <!-- v0.11.4：AI 纠错，把正确分类记进反馈库，后续 AI 参考 -->
+        <button type="button" class="btn btn-outline-primary" id="detail-correct-btn">AI 纠错</button>
         <!-- 幽灵按钮：不刺眼，也不误触；Enter 等价于点「编辑」 -->
         <button type="button" class="btn btn-outline-danger" id="detail-delete-btn">删除</button>
         <button type="button" class="btn btn-outline-warning" id="detail-edit-btn">编辑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.11.4：10 分钟内相似账目提醒（防重复） ================= -->
+<div class="modal fade" id="duplicate-modal" tabindex="-1" aria-labelledby="duplicate-modal-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="duplicate-modal-title">10 分钟内有一笔相似账目</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="duplicate-hint">这笔账还没有保存，先对比一下再决定：确实是另一笔就点「仍然记账」。</p>
+        <div class="duplicate-compare">
+          <div class="duplicate-col">
+            <span class="duplicate-label">本次要记</span>
+            <ul class="duplicate-list" id="duplicate-new-list"></ul>
+          </div>
+          <div class="duplicate-col">
+            <span class="duplicate-label">刚记过的</span>
+            <ul class="duplicate-list" id="duplicate-old-list"></ul>
+          </div>
+        </div>
+        <p class="duplicate-error" id="duplicate-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" id="duplicate-cancel-btn" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="duplicate-force-btn">仍然记账</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.11.4：AI 纠错（改分类） ================= -->
+<div class="modal fade" id="correct-modal" tabindex="-1" aria-labelledby="correct-modal-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="correct-modal-title">AI 纠错</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="correct-hint">选对分类后提交，AI 会记住这次纠正，下次识别得更准。</p>
+        <div class="correct-current" id="correct-current"></div>
+        <div class="mb-3">
+          <label class="form-label" for="correct-category">改成</label>
+          <select class="form-select" id="correct-category"></select>
+        </div>
+        <div class="mb-0">
+          <label class="form-label" for="correct-category-text">或直接输入新的分类名</label>
+          <input class="form-control" type="text" id="correct-category-text" maxlength="40"
+                 placeholder="例如：餐饮、交通（留空则用上面的下拉选择）">
+        </div>
+        <p class="correct-error" id="correct-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" id="correct-submit-btn">提交纠正</button>
       </div>
     </div>
   </div>
@@ -949,11 +1013,12 @@
           </button>
           <span class="ai-image-hint" id="ai-image-hint">支付截图、小票都能识别；带图时优先按图记账</span>
         </div>
-        <input type="file" id="ai-image-file" accept="image/*" class="visually-hidden">
+        <!-- v0.11.4：一次可选多张截图，发送后按队列逐张串行识别 -->
+        <input type="file" id="ai-image-file" accept="image/*" multiple class="visually-hidden">
         <div class="ai-thumb" id="ai-image-preview">
-          <img id="ai-image-preview-img" alt="待识别的截图">
+          <div class="ai-thumb-grid" id="ai-image-preview-grid"></div>
           <div class="ai-thumb-meta" id="ai-image-meta"></div>
-          <button class="ai-thumb-del" type="button" id="ai-image-clear" title="移除这张图">×</button>
+          <button class="ai-thumb-del" type="button" id="ai-image-clear" title="移除全部图片">×</button>
         </div>
         <p class="ai-modal-hint">记账、借贷、添加联系人三合一；带图片时发给 AI 识别截图；Ctrl + Enter 发送，Esc 关闭。</p>
       </div>
@@ -1131,7 +1196,8 @@
         <path d="M12 17.2h.01"></path>
       </svg>
     </button>
-    <input type="file" id="fab-shot-file" accept="image/*" class="visually-hidden">
+    <!-- v0.11.4：截图入口支持一次选多张，按队列逐张识别 -->
+    <input type="file" id="fab-shot-file" accept="image/*" multiple class="visually-hidden">
   </div>
   <button class="fab-ball" type="button" id="fab-ball"
           aria-expanded="false" aria-controls="fab-actions" aria-label="快捷记账">
@@ -1176,9 +1242,9 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/access-guard.js?v=0.11.3"></script>
+<script src="/static/access-guard.js?v=0.11.4"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.11.3"></script>
+<script src="/static/script.js?v=0.11.4"></script>
 
 </body>
 </html>

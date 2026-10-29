@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.11.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.4">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -609,6 +609,9 @@
               aria-selected="true">通知发布</button>
       <button type="button" class="admin-tab" role="tab" data-tab="feedback"
               aria-selected="false">AI 反馈与记忆</button>
+      <!-- v0.11.4：ai_memory 纠错记忆，解析前取最近 3 条注入 Prompt -->
+      <button type="button" class="admin-tab" role="tab" data-tab="memory"
+              aria-selected="false">AI 记忆库</button>
     </div>
 
     <section id="pane-notices">
@@ -724,6 +727,24 @@
         <div id="feedback-list"></div>
       </div>
     </section>
+
+    <!-- AI 纠错记忆库（v0.11.4）：ai_memory 表，每次 AI 解析前取最近 3 条当 few-shot -->
+    <section id="pane-memory" hidden>
+      <div class="admin-card">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+          <h2 class="admin-card-title mb-0">
+            AI 纠错记忆库
+            <span class="badge text-bg-secondary" id="memory-total">0</span>
+          </h2>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="memory-refresh">刷新</button>
+        </div>
+        <p class="admin-hint mb-3">
+          用户在账单详情点「AI 纠错」时写入一条；每次解析前取最近 3 条注入 Prompt（few-shot）。
+          删掉某条后，下次解析立刻不再参考它。
+        </p>
+        <div id="memory-list"></div>
+      </div>
+    </section>
   </main>
 
   <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
@@ -805,7 +826,7 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/access-guard.js?v=0.11.3"></script>
+  <script src="/static/access-guard.js?v=0.11.4"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1642,6 +1663,8 @@
 
       var $ = function (id) { return document.getElementById(id); };
       var state = { items: [], loaded: false, loading: false };
+      // v0.11.4：AI 记忆库单独一份状态，和反馈列表互不影响
+      var memoryState = { items: [], loaded: false, loading: false };
 
       function toast(message, isError) {
         var box = $("admin-toast");
@@ -1686,8 +1709,10 @@
         });
         $("pane-notices").hidden = name !== "notices";
         $("pane-feedback").hidden = name !== "feedback";
-        // 第一次进反馈 Tab 才拉数据，避免每次进 /admin 都多打一个请求
+        $("pane-memory").hidden = name !== "memory";
+        // 第一次进反馈 / 记忆 Tab 才拉数据，避免每次进 /admin 都多打一个请求
         if (name === "feedback" && !state.loaded) { loadFeedback(); }
+        if (name === "memory" && !memoryState.loaded) { loadMemory(); }
       }
 
       tabs.forEach(function (tab) {
@@ -1794,6 +1819,76 @@
           .then(function () {
             toast("反馈 #" + id + " 已标记为已处理");
             return loadFeedback();
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            toast(error.message, true);
+          });
+      });
+
+      /* ---------- AI 记忆库（v0.11.4） ---------- */
+
+      function renderMemory() {
+        var box = $("memory-list");
+        $("memory-total").textContent = String(memoryState.items.length);
+        if (!memoryState.items.length) {
+          box.innerHTML =
+            '<div class="admin-empty">还没有纠错记忆。用户在账单详情点「AI 纠错」后，这里就会出现一条。</div>';
+          return;
+        }
+        box.innerHTML =
+          '<div class="feedback-scroll"><table class="feedback-table">' +
+            '<colgroup><col style="width:26%"><col style="width:16%"><col style="width:16%">' +
+            '<col style="width:26%"><col style="width:16%"></colgroup>' +
+            '<thead><tr><th>原话 / 备注</th><th>AI 原分类</th><th>纠正为</th><th>备注</th><th>操作</th></tr></thead><tbody>' +
+            memoryState.items.map(function (item) {
+              var created = item.created_at ? String(item.created_at).slice(0, 16) : "";
+              return (
+                '<tr data-memory-id="' + item.id + '">' +
+                  "<td>" +
+                    '<div class="feedback-raw">' + escapeHtml(item.original_text || "—") + "</div>" +
+                    '<div class="feedback-source">#' + item.id + (created ? " · " + escapeHtml(created) : "") + "</div>" +
+                  "</td>" +
+                  '<td><span class="feedback-status is-pending">' + escapeHtml(item.raw_category || "—") + "</span></td>" +
+                  '<td><span class="feedback-status is-processed">' + escapeHtml(item.corrected_category) + "</span></td>" +
+                  '<td><div class="feedback-raw ' + (item.note ? "" : "text-muted") + '">' + escapeHtml(item.note || "—") + "</div></td>" +
+                  '<td><button type="button" class="btn btn-sm btn-outline-danger" data-memory-delete="' + item.id + '">删除</button></td>' +
+                "</tr>"
+              );
+            }).join("") +
+          "</tbody></table></div>";
+      }
+
+      function loadMemory() {
+        if (memoryState.loading) { return Promise.resolve(); }
+        memoryState.loading = true;
+        return request("/api/ai-memory?limit=100")
+          .then(function (data) {
+            memoryState.items = data.items || [];
+            memoryState.loaded = true;
+            renderMemory();
+          })
+          .catch(function (error) {
+            $("memory-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () { memoryState.loading = false; });
+      }
+
+      $("memory-refresh").addEventListener("click", function () {
+        memoryState.loaded = false;
+        loadMemory().then(function () { toast("AI 记忆库已刷新"); });
+      });
+
+      $("memory-list").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-memory-delete]");
+        if (!button) { return; }
+        var id = button.getAttribute("data-memory-delete");
+        button.disabled = true;
+        request("/api/ai-memory/" + id, { method: "DELETE" })
+          .then(function () {
+            toast("记忆 #" + id + " 已删除，下次解析不再参考");
+            return loadMemory();
           })
           .catch(function (error) {
             button.disabled = false;

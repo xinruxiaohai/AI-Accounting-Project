@@ -130,7 +130,9 @@ function toast(message, type) {
     return;
   }
   const item = document.createElement("div");
-  item.className = "toast-item " + (type === "error" ? "toast-error" : "toast-success");
+  item.className =
+    "toast-item " +
+    (type === "error" ? "toast-error" : type === "warn" ? "toast-warn" : "toast-success");
   item.textContent = String(message || "");
   stack.appendChild(item);
 
@@ -1595,6 +1597,11 @@ function trendOption(series) {
     income: dark ? "#34d399" : "#059669",
     net: dark ? "#94a3b8" : "#9ca3af",
   };
+  // v0.11.4：图例独占一行（top:30），toolbox 退到右上角（top:4），
+  // grid.top 再让出两条标题带，保证图例 / 工具栏 / 折线三者不重叠
+  const toolbox = chartToolbox();
+  toolbox.right = 8;
+  toolbox.top = 4;
 
   return {
     tooltip: {
@@ -1617,14 +1624,14 @@ function trendOption(series) {
       textStyle: { color: palette.strong },
     },
     legend: {
-      top: 0,
+      top: 30,
       right: 44,
       itemWidth: 14,
       itemHeight: 8,
       textStyle: { color: palette.text, fontSize: 10 },
       data: ["支出", "收入", "结余"],
     },
-    toolbox: chartToolbox(),
+    toolbox: toolbox,
     title: empty
       ? {
           text: "近 30 天还没有收支",
@@ -1633,7 +1640,7 @@ function trendOption(series) {
           textStyle: { color: palette.text, fontSize: 12, fontWeight: "normal" },
         }
       : undefined,
-    grid: { left: 8, right: 12, top: 30, bottom: 6, containLabel: true },
+    grid: { left: 8, right: 12, top: 60, bottom: 6, containLabel: true },
     xAxis: {
       type: "category",
       boundaryGap: false,
@@ -1671,8 +1678,9 @@ function trendOption(series) {
         showSymbol: false,
         symbolSize: 6,
         data: series.expense,
-        lineStyle: { width: 2.2, color: colors.expense },
-        itemStyle: { color: colors.expense },
+        // 支出 / 收入实线，80% 不透明度让三条线叠在一起也能看清
+        lineStyle: { width: 2.2, color: colors.expense, type: "solid", opacity: 0.8 },
+        itemStyle: { color: colors.expense, opacity: 0.8 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
             { offset: 0, color: dark ? "rgba(248,113,113,.22)" : "rgba(220,38,38,.18)" },
@@ -1688,8 +1696,8 @@ function trendOption(series) {
         showSymbol: false,
         symbolSize: 6,
         data: series.income,
-        lineStyle: { width: 2.2, color: colors.income },
-        itemStyle: { color: colors.income },
+        lineStyle: { width: 2.2, color: colors.income, type: "solid", opacity: 0.8 },
+        itemStyle: { color: colors.income, opacity: 0.8 },
         emphasis: { focus: "series" },
       },
       {
@@ -1699,8 +1707,16 @@ function trendOption(series) {
         showSymbol: false,
         symbolSize: 6,
         data: series.net,
-        lineStyle: { width: 1.8, color: colors.net },
-        itemStyle: { color: colors.net },
+        // 结余用虚线 + 半透明面积，压在最底层，不遮挡支出 / 收入
+        z: 1,
+        lineStyle: { width: 1.8, color: colors.net, type: "dashed", opacity: 0.8 },
+        itemStyle: { color: colors.net, opacity: 0.8 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: dark ? "rgba(148,163,184,.18)" : "rgba(156,163,175,.18)" },
+            { offset: 1, color: "rgba(148,163,184,.01)" },
+          ]),
+        },
         emphasis: { focus: "series" },
       },
     ],
@@ -3572,6 +3588,31 @@ async function saveRecord() {
       await api("/api/records/" + state.editingId, jsonOptions("PUT", payload));
       toast("已保存修改", "success");
     } else {
+      // v0.11.4 防重复：保存前先查 10 分钟内有没有相似账目，确认后才真正写入
+      if (values.type !== "transfer") {
+        const duplicateData = await checkDuplicateBeforeSave(values);
+        if (duplicateData) {
+          const categorySelect = $("category");
+          const categoryName =
+            categorySelect && categorySelect.selectedOptions && categorySelect.selectedOptions[0]
+              ? String(categorySelect.selectedOptions[0].textContent || "").trim()
+              : "";
+          const accepted = await openDuplicateModal(
+            duplicateData.duplicate,
+            duplicateData.parsed || {
+              amount: values.amount,
+              note: values.note,
+              category: categoryName,
+              account: values.account,
+              date: values.date,
+            }
+          );
+          if (!accepted) {
+            // 取消：finally 会复位保存按钮与并发锁，这笔账不保存
+            return;
+          }
+        }
+      }
       await api("/api/records", jsonOptions("POST", payload));
       toast("记账成功", "success");
       // 新账目按时间倒序排在第一页，回到首页才看得见
@@ -4124,17 +4165,46 @@ function handleFabAction(action) {
 
 function onFabShotPicked(event) {
   const input = event.target;
-  const file = input.files && input.files[0];
-  if (!file) {
-    return;
-  }
+  const files = input.files ? Array.from(input.files) : [];
   // 立刻清空，同一张图再选一次也能触发 change
   input.value = "";
-  if (!/^image\//.test(String(file.type || ""))) {
+  if (!files.length) {
+    return;
+  }
+  uploadShotQueue(files);
+}
+
+/** 多图串行队列（v0.11.4）：一张一张识别，绝不 Promise.all 并发轰接口 */
+async function uploadShotQueue(files) {
+  const list = Array.from(files || []).filter(function (file) {
+    return /^image\//.test(String((file && file.type) || ""));
+  });
+  if (!list.length) {
     toast("只能选图片文件（jpg / png / webp）", "error");
     return;
   }
-  uploadShotForAi(file);
+  let successCount = 0;
+  // 串行：上一张识别完再压下一张，每张各自一个气泡，单张失败不影响后面的
+  for (let i = 0; i < list.length; i += 1) {
+    try {
+      const ok = await uploadShotForAi(list[i], i + 1, list.length);
+      if (ok) {
+        successCount += 1;
+      }
+    } catch (error) {
+      // uploadShotForAi 内部已兜底，这里再兜一层，保证队列一定往下走
+      const message = (error && error.message) || "这一张识别失败，已跳过";
+      toast("第 " + (i + 1) + " 张：" + message, "error");
+    }
+  }
+  await refresh();
+  // 相册正开着就顺手刷新，免得用户看到旧图
+  if ($("album-modal") && $("album-modal").classList.contains("show")) {
+    loadAlbum();
+  }
+  if (list.length > 1) {
+    toast("共 " + list.length + " 张，成功识别 " + successCount + " 张", successCount ? "success" : "warn");
+  }
 }
 
 /** 用 Canvas 把用户选的图等比缩到最长边 800px（小图不放大） */
@@ -4193,45 +4263,86 @@ function compressImageFile(file) {
 const SHOT_MAX_SIDE = 800;
 const SHOT_JPEG_QUALITY = 0.82;
 
-async function uploadShotForAi(file) {
-  // 复用全局气泡：先建立「正在识别截图...」的思考气泡，识别完原地变成成功/失败气泡
+/** 截图识别接口：force=true 表示用户已确认「仍然记账」，跳过 10 分钟防重 */
+function postShotImage(compressed, force) {
+  const body = { image: compressed.dataUrl, mime: compressed.mime };
+  if (force) {
+    body.force = true;
+  }
+  return apiRecordRequest("/api/records/ai/image", jsonOptions("POST", body), SHOT_REQUEST_TIMEOUT_MS);
+}
+
+/**
+ * 识别一张截图（v0.11.4）
+ * @param {File} file 用户选的图
+ * @param {number} index 第几张（从 1 开始）
+ * @param {number} total 一共几张
+ * @returns {Promise<boolean>} 是否记账成功
+ */
+async function uploadShotForAi(file, index, total) {
+  const count = Math.max(1, Number(total) || 1);
+  const position = Math.min(count, Math.max(1, Number(index) || 1));
+  const progressText = count > 1 ? " " + position + "/" + count : "";
+  // 每张图各自一个气泡：先建立「识别中」气泡，识别完原地变成成功/失败气泡
   const bubble = createBubble("shot");
   if (bubble) {
-    bubbleStatus(bubble, "正在识别截图...");
+    bubbleStatus(bubble, "识别中" + progressText + "…");
   }
   try {
     const compressed = await compressImageFile(file);
     if (bubble) {
-      bubbleStatus(bubble, "正在识别截图（" + compressed.width + "×" + compressed.height + "）...");
+      bubbleStatus(bubble, "识别中" + progressText + "（" + compressed.width + "×" + compressed.height + "）…");
     }
-    const data = await api(
-      "/api/records/ai/image",
-      jsonOptions("POST", { image: compressed.dataUrl, mime: compressed.mime }),
-      SHOT_REQUEST_TIMEOUT_MS
-    );
-    const record = data.record || {};
-    const summary = [money(record.amount), record.category || "其他", record.account || "现金"].join(" · ");
+    let data = await postShotImage(compressed, false);
+    // 防重：后端判定 10 分钟内相似账目时不保存，弹窗确认后带 force 重发同一张图
+    if (data && data.status === "duplicate") {
+      const accepted = await openDuplicateModal(data.duplicate, data.parsed);
+      if (!accepted) {
+        if (bubble) {
+          bubbleFinish(bubble, { title: "已取消截图记账", message: "这张截图没有保存", error: true });
+        }
+        return false;
+      }
+      if (bubble) {
+        bubbleStatus(bubble, "已确认，重新识别" + progressText + "…");
+      }
+      data = await postShotImage(compressed, true);
+      if (data && data.status === "duplicate") {
+        throw new Error("后端仍判定为重复账目，请稍后再试");
+      }
+    }
+    const record = (data && data.record) || {};
+    const recordId = (data && data.id) || record.id;
+    const confidence = aiConfidenceOf(data);
+    const warn = confidence !== null && confidence < AI_CONFIDENCE_WARN;
+    const summary = aiRecordSummary(record);
     if (bubble) {
       bubbleFinish(bubble, {
-        title: "截图记账成功",
-        message: summary + "，点这里看账单详情",
-        recordId: data.id,
+        title: warn ? "识别成功，请核对" : "截图记账成功",
+        message:
+          summary +
+          (warn ? "，置信度 " + confidence + "%，请核对分类与金额" : "") +
+          "，点这里看账单详情",
+        recordId: recordId,
+        warn: warn,
       });
+      attachBubbleRevise(bubble, recordId);
     } else {
-      toast("截图记账成功：" + summary, "success");
+      toast("截图记账成功：" + summary, warn ? "warn" : "success");
     }
-    await refresh();
-    // 相册正开着就顺手刷新，免得用户看到旧图
-    if ($("album-modal") && $("album-modal").classList.contains("show")) {
-      loadAlbum();
-    }
+    return true;
   } catch (error) {
     const message = (error && error.message) || "截图识别失败，请重试";
     if (bubble) {
-      bubbleFinish(bubble, { title: "无法识别该截图", message: message, error: true });
+      bubbleFinish(bubble, {
+        title: count > 1 ? "第 " + position + " 张无法识别" : "无法识别该截图",
+        message: message,
+        error: true,
+      });
     } else {
       toast(message, "error");
     }
+    return false;
   }
 }
 
@@ -5004,6 +5115,10 @@ function bindEvents() {
   if ($("detail-delete-btn")) {
     $("detail-delete-btn").addEventListener("click", deleteFromDetail);
   }
+  // v0.11.4：详情里的 AI 纠错
+  if ($("detail-correct-btn")) {
+    $("detail-correct-btn").addEventListener("click", openRecordCorrectModal);
+  }
 
   // 日历：上/下月（年视图里是上/下一年）、按年查看、点某天、点某月
   $("cal-prev").addEventListener("click", function () {
@@ -5299,8 +5414,8 @@ async function sendAiQuick() {
     return;
   }
   const text = String(input.value || "").trim();
-  const imageFile = aiPendingImage;
-  if (!text && !imageFile) {
+  const imageFiles = aiPendingImages.slice();
+  if (!text && !imageFiles.length) {
     return;
   }
   input.value = "";
@@ -5308,9 +5423,9 @@ async function sendAiQuick() {
     hideModalSafe(aiModal, $("ai-modal"));
   }
   // 带图时优先按图识别：截图里已经有金额和商户，文本只当作备注不提交
-  if (imageFile) {
+  if (imageFiles.length) {
     clearAiImage();
-    uploadShotForAi(imageFile);
+    uploadShotQueue(imageFiles);
     return;
   }
   const quick = aiQuickCommand(text);
@@ -5323,20 +5438,20 @@ async function sendAiQuick() {
 
 /* ==================== AI 快记：图片识别（v0.11.1） ==================== */
 
-// 待识别的图片文件：弹窗里选了图就存在这，点发送时优先走 /api/records/ai/image
-var aiPendingImage = null;
+// 待识别的图片文件列表（v0.11.4 支持一次选多张）：弹窗里选好就存在这，点发送时按队列逐张识别
+var aiPendingImages = [];
 
 function clearAiImage() {
-  aiPendingImage = null;
+  aiPendingImages = [];
   const preview = $("ai-image-preview");
-  const image = $("ai-image-preview-img");
+  const grid = $("ai-image-preview-grid");
   const meta = $("ai-image-meta");
   const fileInput = $("ai-image-file");
   if (preview) {
     preview.classList.remove("is-show");
   }
-  if (image) {
-    image.removeAttribute("src");
+  if (grid) {
+    grid.innerHTML = "";
   }
   if (meta) {
     meta.textContent = "";
@@ -5346,45 +5461,69 @@ function clearAiImage() {
   }
 }
 
-function setAiImage(file) {
-  if (!file) {
+/** 多图预览：每张一个小缩略图 + 序号，文案里告诉用户会逐张识别 */
+function renderAiImagePreview() {
+  const preview = $("ai-image-preview");
+  const grid = $("ai-image-preview-grid");
+  const meta = $("ai-image-meta");
+  if (!grid) {
     return;
   }
-  if (!/^image\//.test(String(file.type || ""))) {
+  grid.innerHTML = "";
+  aiPendingImages.forEach(function (file, index) {
+    const cell = document.createElement("div");
+    cell.className = "ai-thumb-cell";
+    cell.innerHTML =
+      '<img alt="第 ' + (index + 1) + ' 张截图"><span class="ai-thumb-index">' + (index + 1) + "</span>";
+    const image = cell.querySelector("img");
+    const reader = new FileReader();
+    reader.onload = function () {
+      if (image) {
+        image.src = String(reader.result || "");
+      }
+    };
+    reader.readAsDataURL(file);
+    grid.appendChild(cell);
+  });
+  if (meta) {
+    const totalKb = aiPendingImages.reduce(function (sum, file) {
+      return sum + Math.max(1, Math.round(Number((file && file.size) || 0) / 1024));
+    }, 0);
+    meta.textContent = aiPendingImages.length
+      ? "已选 " +
+        aiPendingImages.length +
+        " 张 · 约 " +
+        totalKb +
+        " KB；发送后逐张识别，自动压到最长边 800px"
+      : "";
+  }
+  if (preview) {
+    preview.classList.toggle("is-show", aiPendingImages.length > 0);
+  }
+}
+
+/** 追加选择的图片（再次点「图片」不会覆盖上一次选的） */
+function appendAiImages(files) {
+  const list = Array.from(files || []).filter(function (file) {
+    return /^image\//.test(String((file && file.type) || ""));
+  });
+  if (!list.length) {
     toast("只能选图片文件（jpg / png / webp）", "error");
     return;
   }
-  aiPendingImage = file;
-  const preview = $("ai-image-preview");
-  const image = $("ai-image-preview-img");
-  const meta = $("ai-image-meta");
-  const sizeKb = Math.max(1, Math.round(Number(file.size || 0) / 1024));
-  if (meta) {
-    meta.textContent =
-      (file.name || "待识别截图") +
-      " · 约 " +
-      sizeKb +
-      " KB；发送时会自动压到最长边 800px";
-  }
-  if (image) {
-    const reader = new FileReader();
-    reader.onload = function () {
-      image.src = String(reader.result || "");
-    };
-    reader.readAsDataURL(file);
-  }
-  if (preview) {
-    preview.classList.add("is-show");
-  }
+  list.forEach(function (file) {
+    aiPendingImages.push(file);
+  });
+  renderAiImagePreview();
 }
 
 function onAiImagePicked(event) {
   const input = event.target;
-  const file = input.files && input.files[0];
+  const files = input.files ? Array.from(input.files) : [];
   // 立刻清空，下一张同名图也能重新触发 change
   input.value = "";
-  if (file) {
-    setAiImage(file);
+  if (files.length) {
+    appendAiImages(files);
   }
 }
 
@@ -6749,6 +6888,115 @@ function bubbleStatus(bubble, text) {
   bubbleWriteText(bubble, text, true);
 }
 
+/**
+ * 成功气泡内挂一个迷你「修改」表单（v0.11.4）
+ * 用户直接在气泡里说「金额改成 30」「分类改成交通」，原地多轮改账，不用再开弹窗。
+ */
+function attachBubbleRevise(bubble, recordId) {
+  if (!bubble || bubble.removed || !recordId || !bubble.element) {
+    return;
+  }
+  const main = bubble.element.querySelector(".bubble-main");
+  if (!main || main.querySelector(".bubble-revise")) {
+    return;
+  }
+  bubble.noFade = true;
+  if (bubble.countdownTimer) {
+    window.clearTimeout(bubble.countdownTimer);
+    bubble.countdownTimer = null;
+  }
+  const progress = bubble.element.querySelector(".bubble-progress");
+  if (progress) {
+    progress.classList.add("d-none");
+  }
+  const form = document.createElement("div");
+  form.className = "bubble-revise";
+  form.innerHTML =
+    '<input class="bubble-revise-input" type="text" maxlength="200" placeholder="分类不对？直接改，如：改成交通">' +
+    '<button class="bubble-revise-btn" type="button">修改</button>' +
+    '<p class="bubble-revise-error" hidden></p>';
+  main.appendChild(form);
+  const input = form.querySelector(".bubble-revise-input");
+  const button = form.querySelector(".bubble-revise-btn");
+  const errorElement = form.querySelector(".bubble-revise-error");
+  let targetId = recordId;
+  // 气泡浮在页面底部：点输入框不能触发「打开账单详情」，也不能被全局快捷键截走
+  form.addEventListener("click", function (event) {
+    event.stopPropagation();
+  });
+  form.addEventListener("mousedown", function (event) {
+    event.stopPropagation();
+  });
+  form.addEventListener("keydown", function (event) {
+    event.stopPropagation();
+  });
+
+  async function submitRevise() {
+    const text = String(input.value || "").trim();
+    if (!text) {
+      input.focus();
+      return;
+    }
+    // 只取分类名：用户常说「改成交通」「分类改为餐饮」，前缀剥掉再提交
+    const corrected = extractCorrectedCategory(text);
+    button.disabled = true;
+    button.textContent = "提交中";
+    errorElement.hidden = true;
+    errorElement.textContent = "";
+    try {
+      if (!corrected) {
+        throw new Error("没听出要改成哪个分类，直接输入分类名试试");
+      }
+      const current = findRecordById(targetId) || {};
+      const data = await apiRecordRequest(
+        "/api/records/" + targetId + "/correction",
+        jsonOptions("POST", {
+          corrected_category: corrected,
+          original_text: text,
+          raw_category: current.category || "",
+        })
+      );
+      const record = (data && data.record) || {};
+      const updatedId = (data && data.id) || record.id || targetId;
+      targetId = updatedId;
+      bubble.element.classList.remove("is-error", "is-done", "is-warn");
+      bubble.element.classList.add("is-done");
+      bubble.element.dataset.recordId = String(updatedId);
+      bubble.element.classList.add("is-clickable");
+      const titleElement = bubble.element.querySelector(".bubble-title");
+      if (titleElement) {
+        titleElement.textContent = "已更新这笔账";
+      }
+      // 文案用后端记录里的新分类，拿不到就用用户输入的分类名
+      const finalCategory = record.category || corrected;
+      bubbleWriteText(bubble, "已改为 " + finalCategory + "（已记入 AI 记忆）", false);
+      input.value = "";
+      toast("已改为 " + finalCategory + "，下次 AI 会参考", "success");
+      refresh().catch(function () {});
+    } catch (error) {
+      errorElement.hidden = false;
+      errorElement.textContent = (error && error.message) || "修改失败，请重试";
+    } finally {
+      button.disabled = false;
+      button.textContent = "修改";
+    }
+  }
+
+  button.addEventListener("click", function (event) {
+    event.preventDefault();
+    submitRevise();
+  });
+  input.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      submitRevise();
+    }
+  });
+  // 有修改入口的气泡常驻，不自动淡出
+  bubble.ready = true;
+  bubble.noFade = true;
+}
+
 function bubbleFinish(bubble, config) {
   config = config || {};
   if (!bubble || bubble.removed) {
@@ -6761,6 +7009,10 @@ function bubbleFinish(bubble, config) {
   }
   if (config.error) {
     element.classList.add("is-error");
+  } else if (config.warn) {
+    // 置信度不足：黄色提醒，让用户核对分类与金额
+    element.classList.remove("is-done", "is-error");
+    element.classList.add("is-warn");
   } else {
     element.classList.add("is-done");
   }
@@ -6774,7 +7026,8 @@ function bubbleFinish(bubble, config) {
 }
 
 function bubbleStartCountdown(bubble, delay) {
-  if (!bubble || bubble.removed || !bubble.ready) {
+  // noFade：气泡里挂了「修改」表单或需要用户操作，不能三秒就消失
+  if (!bubble || bubble.removed || !bubble.ready || bubble.noFade) {
     return;
   }
   if (bubble.countdownTimer) {
@@ -6806,7 +7059,7 @@ function pauseBubbleCountdowns() {
 
 function resumeBubbleCountdowns() {
   activeBubbles.forEach(function (bubble) {
-    if (bubble.ready && !bubble.countdownTimer && !bubble.removed) {
+    if (bubble.ready && !bubble.noFade && !bubble.countdownTimer && !bubble.removed) {
       bubbleStartCountdown(bubble, 1600);
     }
   });
@@ -6954,7 +7207,25 @@ function restoreAiInput(text) {
   }
 }
 
-async function runAiStream(text) {
+/** 防重命中：先弹窗让用户确认，确认后用 force 重发整个流程 */
+async function handleAiDuplicate(bubble, text, payload) {
+  // 兼容两种负载：{duplicate: {账单}} 或 {duplicate: true, candidate: {账单}}
+  const candidate = payload && (payload.duplicate && typeof payload.duplicate === "object" ? payload.duplicate : payload.candidate);
+  const accepted = await openDuplicateModal(candidate, payload && payload.parsed);
+  if (!accepted) {
+    bubbleFinish(bubble, {
+      title: "已取消记账",
+      message: "这笔账没有保存；如果确实是新账，可以再发一次",
+      error: true,
+    });
+    return;
+  }
+  bubbleStatus(bubble, "已确认重复，正在重新记账…");
+  removeBubble(bubble, true);
+  runAiStream(text, true);
+}
+
+async function runAiStream(text, force) {
   const bubble = createBubble("ai");
   if (!bubble) {
     return;
@@ -6962,8 +7233,13 @@ async function runAiStream(text) {
   bubbleStatus(bubble, "正在理解您的指令…");
 
   let terminal = null;
+  let duplicatePayload = null;
   try {
-    const response = await fetch("/api/records/ai/stream", jsonOptions("POST", { text: text }));
+    const body = { text: text };
+    if (force) {
+      body.force = true;
+    }
+    const response = await fetch("/api/records/ai/stream", jsonOptions("POST", body));
     const contentType = String(response.headers.get("content-type") || "");
     if (!response.ok || !response.body || contentType.indexOf("text/event-stream") === -1) {
       throw new Error("stream-unsupported");
@@ -6971,7 +7247,7 @@ async function runAiStream(text) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
-    while (true) {
+    streamLoop: while (true) {
       const chunk = await reader.read();
       if (chunk.done) {
         break;
@@ -7003,6 +7279,14 @@ async function runAiStream(text) {
           continue;
         }
         const status = String(payload.status || "");
+        // 防重：后端此时没有保存，停止读流，弹窗确认后带 force 重发
+        if (status === "duplicate") {
+          duplicatePayload = payload;
+          if (reader && typeof reader.cancel === "function") {
+            reader.cancel().catch(function () {});
+          }
+          break streamLoop;
+        }
         if (
           status === "done" ||
           status === "success" ||
@@ -7018,12 +7302,17 @@ async function runAiStream(text) {
       }
     }
   } catch (error) {
-    fallbackAiRequest(bubble, text);
+    fallbackAiRequest(bubble, text, force);
+    return;
+  }
+
+  if (duplicatePayload) {
+    await handleAiDuplicate(bubble, text, duplicatePayload);
     return;
   }
 
   if (!terminal) {
-    fallbackAiRequest(bubble, text);
+    fallbackAiRequest(bubble, text, force);
     return;
   }
 
@@ -7048,28 +7337,61 @@ async function runAiStream(text) {
     return;
   }
 
+  // v0.11.4：done 事件顶层也带 confidence，低于 80 分给黄牌提醒核对
+  const confidence = aiConfidenceOf(terminal);
+  const warn = confidence !== null && confidence < AI_CONFIDENCE_WARN;
+  const recordId = action === "record" ? aiResultRecordId(terminal) : null;
   bubbleFinish(bubble, {
-    title: aiActionTitle(action),
-    message: terminal.message || terminal.msg || "已写入账本",
-    recordId: action === "record" ? aiResultRecordId(terminal) : null,
+    title: warn ? "识别成功，请核对" : aiActionTitle(action),
+    message:
+      (terminal.message || terminal.msg || "已写入账本") +
+      (warn ? "，置信度 " + confidence + "%，请核对分类与金额" : ""),
+    recordId: recordId,
+    warn: warn,
   });
+  if (action === "record") {
+    attachBubbleRevise(bubble, recordId);
+  }
   refresh().catch(function () {});
 }
 
-async function fallbackAiRequest(bubble, text) {
+async function fallbackAiRequest(bubble, text, force) {
   if (!bubble || bubble.removed) {
     return;
   }
   bubbleStatus(bubble, "流式接口不可用，改用普通解析…");
   try {
-    const data = await api("/api/records/ai", jsonOptions("POST", { text: text }));
+    const body = { text: text };
+    if (force) {
+      body.force = true;
+    }
+    const data = await apiRecordRequest("/api/records/ai", jsonOptions("POST", body));
+    // 普通接口的防重是 HTTP 200 + status=="duplicate"，同样未保存
+    if (data && data.status === "duplicate") {
+      const accepted = await openDuplicateModal(data.duplicate, data.parsed);
+      if (!accepted) {
+        bubbleFinish(bubble, { title: "已取消记账", message: "这笔账没有保存", error: true });
+        return;
+      }
+      bubbleStatus(bubble, "已确认重复，正在重新记账…");
+      removeBubble(bubble, true);
+      runAiStream(text, true);
+      return;
+    }
     const action = data.action || "record";
     const record = data.record || data;
+    const recordId = action === "record" ? (record && record.id) || data.id : null;
+    const confidence = aiConfidenceOf(data);
+    const warn = confidence !== null && confidence < AI_CONFIDENCE_WARN;
     bubbleFinish(bubble, {
-      title: aiActionTitle(action),
-      message: "已写入账本",
-      recordId: action === "record" ? (record && record.id) || data.id : null,
+      title: warn ? "识别成功，请核对" : aiActionTitle(action),
+      message: "已写入账本" + (warn ? "，置信度 " + confidence + "%，请核对分类与金额" : ""),
+      recordId: recordId,
+      warn: warn,
     });
+    if (action === "record") {
+      attachBubbleRevise(bubble, recordId);
+    }
     refresh().catch(function () {});
   } catch (error) {
     bubbleFinish(bubble, {
@@ -7078,6 +7400,462 @@ async function fallbackAiRequest(bubble, text) {
       error: true,
     });
     restoreAiInput(text);
+  }
+}
+
+/* ==================== v0.11.4：置信度 / 防重复 / AI 纠错 ==================== */
+
+// 置信度低于 80 分就给黄牌，提醒用户核对分类与金额
+const AI_CONFIDENCE_WARN = 80;
+
+/** 从任意一层数据里取 confidence：顶层 → record → payload → payload.record */
+function aiConfidenceOf(data) {
+  if (!data) {
+    return null;
+  }
+  const candidates = [
+    data.confidence,
+    data.record && data.record.confidence,
+    data.payload && data.payload.confidence,
+    data.payload && data.payload.record && data.payload.record.confidence,
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const value = Number(candidates[i]);
+    if (Number.isFinite(value) && value >= 0) {
+      return Math.round(value);
+    }
+  }
+  return null;
+}
+
+/**
+ * 从气泡 / 纠错弹窗的自由文本里剥出分类名：
+ * 「改成交通」「分类改为餐饮」「请帮我改成购物」→ 交通 / 餐饮 / 购物。
+ */
+function extractCorrectedCategory(text) {
+  let value = String(text || "").trim();
+  const prefixes = [
+    "请帮我改成",
+    "请帮我改为",
+    "帮我改成",
+    "帮我改为",
+    "请改成",
+    "请改为",
+    "分类改成",
+    "分类改为",
+    "分类是",
+    "改成",
+    "修改成",
+    "改为",
+    "修改为",
+    "换成",
+    "应该是",
+  ];
+  let matched = true;
+  while (matched && value) {
+    matched = false;
+    for (let i = 0; i < prefixes.length; i += 1) {
+      if (value.indexOf(prefixes[i]) === 0) {
+        value = value.slice(prefixes[i].length).trim();
+        matched = true;
+        break;
+      }
+    }
+  }
+  // 去掉开头的冒号 / 逗号和首尾成对的引号、书名号
+  value = value
+    .replace(/^[：:，,\s]+/, "")
+    .replace(/^[「『"'“]/, "")
+    .replace(/[」』"'”]$/, "")
+    .trim();
+  return value;
+}
+
+/** 气泡 / Toast 里的一句话账单摘要：金额 · 分类 · 商户（没有商户就用备注 / 账户） */
+function aiRecordSummary(record) {
+  const row = record || {};
+  const parts = [];
+  if (row.amount !== undefined && row.amount !== null && row.amount !== "") {
+    parts.push(money(row.amount));
+  }
+  const category = row.category || row.category_name || "";
+  if (category) {
+    parts.push(category);
+  }
+  const merchant = row.merchant || row.note || row.account || "";
+  if (merchant) {
+    parts.push(merchant);
+  }
+  return parts.length ? parts.join(" · ") : "已写入账本";
+}
+
+/**
+ * 记账类接口专用请求（v0.11.4）
+ * 后端命中防重时返回 HTTP 409 {duplicate:true,candidate,parsed}；
+ * 普通 api() 会把非 2xx 当错误并丢掉响应体，这里把「重复」当成一种正常结果返回，
+ * 由调用方弹窗确认。返回 {status:"duplicate", duplicate, parsed} 或正常响应体。
+ */
+async function apiRecordRequest(path, options, timeoutMs) {
+  const waitMs = Number(timeoutMs) || REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = window.setTimeout(function () {
+    controller.abort();
+  }, waitMs);
+  let response;
+  try {
+    response = await fetch(path, Object.assign({}, options, { signal: controller.signal }));
+  } catch (error) {
+    if (error && error.name === "AbortError") {
+      throw new Error("请求超时（" + Math.round(waitMs / 1000) + " 秒），请检查网络后重试");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("网络连接失败，请确认后端服务已启动");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (error) {
+    data = null;
+  }
+  const candidate =
+    data &&
+    (data.candidate ||
+      (data.duplicate && typeof data.duplicate === "object" ? data.duplicate : null));
+  const duplicated =
+    Boolean(candidate) ||
+    Boolean(data && (data.duplicate === true || data.status === "duplicate"));
+  if (duplicated) {
+    return {
+      status: "duplicate",
+      duplicate: candidate,
+      parsed: data.parsed,
+    };
+  }
+  if (!response.ok) {
+    const message = (data && data.error) || "请求失败（HTTP " + response.status + "）";
+    throw new Error(message);
+  }
+  return data;
+}
+
+/* ---------- 10 分钟内相似账目：确认后仍然记账 ---------- */
+
+let duplicateModalInstance = null;
+let duplicateResolver = null;
+
+function ensureDuplicateModal() {
+  if (duplicateModalInstance) {
+    return duplicateModalInstance;
+  }
+  const element = $("duplicate-modal");
+  if (!element || !window.bootstrap) {
+    return null;
+  }
+  duplicateModalInstance = new window.bootstrap.Modal(element, { backdrop: "static" });
+  bindEscClose(element, duplicateModalInstance);
+  // 回车 = 仍然记账（弹窗内 Enter 提交规范；焦点在按钮上时走按钮自己的默认行为）
+  element.addEventListener("keydown", function (event) {
+    if (event.key !== "Enter" || event.isComposing) {
+      return;
+    }
+    const tag = String((event.target && event.target.tagName) || "").toLowerCase();
+    if (tag === "button" || tag === "a") {
+      return;
+    }
+    event.preventDefault();
+    resolveDuplicateChoice(true);
+  });
+  // 点 X / Esc / 点取消都会走到这里：没明确选「仍然记账」就按取消处理
+  element.addEventListener("hidden.bs.modal", function () {
+    if (duplicateResolver) {
+      const resolve = duplicateResolver;
+      duplicateResolver = null;
+      resolve(false);
+    }
+  });
+  if ($("duplicate-force-btn")) {
+    $("duplicate-force-btn").addEventListener("click", function () {
+      resolveDuplicateChoice(true);
+    });
+  }
+  if ($("duplicate-cancel-btn")) {
+    $("duplicate-cancel-btn").addEventListener("click", function () {
+      resolveDuplicateChoice(false);
+    });
+  }
+  return duplicateModalInstance;
+}
+
+function resolveDuplicateChoice(accepted) {
+  const resolve = duplicateResolver;
+  duplicateResolver = null;
+  if (duplicateModalInstance) {
+    duplicateModalInstance.hide();
+  }
+  if (resolve) {
+    resolve(Boolean(accepted));
+  }
+}
+
+function duplicateRowHtml(label, valueHtml) {
+  return "<li><span>" + escapeHtml(label) + "</span><b>" + valueHtml + "</b></li>";
+}
+
+/** 左右两栏对比：本次要记 vs 刚记过的 */
+function fillDuplicateCompare(duplicate, parsed) {
+  const current = parsed && typeof parsed === "object" ? parsed : {};
+  const old = duplicate && typeof duplicate === "object" ? duplicate : {};
+  const newList = $("duplicate-new-list");
+  const oldList = $("duplicate-old-list");
+  function amountText(row) {
+    return row && row.amount !== undefined && row.amount !== null && row.amount !== ""
+      ? escapeHtml(money(row.amount))
+      : "—";
+  }
+  function noteText(row) {
+    const value = (row && (row.merchant || row.note)) || "";
+    return value ? escapeHtml(value) : "—";
+  }
+  function categoryText(row) {
+    const value = (row && (row.category || row.category_name)) || "";
+    return value ? escapeHtml(value) : "—";
+  }
+  function accountText(row) {
+    const value = (row && row.account) || "";
+    return value ? escapeHtml(value) : "—";
+  }
+  function dateText(row) {
+    const value = (row && row.date) || "";
+    return value ? escapeHtml(displayDate(value)) : "—";
+  }
+  if (newList) {
+    newList.innerHTML = [
+      duplicateRowHtml("金额", amountText(current)),
+      duplicateRowHtml("商户/备注", noteText(current)),
+      duplicateRowHtml("分类", categoryText(current)),
+      duplicateRowHtml("账户", accountText(current)),
+      duplicateRowHtml("时间", dateText(current)),
+    ].join("");
+  }
+  if (oldList) {
+    oldList.innerHTML = [
+      duplicateRowHtml("金额", amountText(old)),
+      duplicateRowHtml("商户/备注", noteText(old)),
+      duplicateRowHtml("分类", categoryText(old)),
+      duplicateRowHtml("账户", accountText(old)),
+      duplicateRowHtml("时间", dateText(old)),
+    ].join("");
+  }
+}
+
+/**
+ * 弹出防重确认框，返回 Promise<boolean>：true = 仍然记账，false = 取消
+ * 账此刻还没保存，所以取消只是什么都不做。
+ */
+function openDuplicateModal(duplicate, parsed) {
+  const modal = ensureDuplicateModal();
+  if (!modal) {
+    toast("10 分钟内有一笔相似账目，这次没有保存", "warn");
+    return Promise.resolve(false);
+  }
+  fillDuplicateCompare(duplicate, parsed);
+  const errorElement = $("duplicate-error");
+  if (errorElement) {
+    errorElement.hidden = true;
+    errorElement.textContent = "";
+  }
+  // 极端情况下如果上一次还没结束，先按取消收尾，避免 Promise 悬空
+  if (duplicateResolver) {
+    const previous = duplicateResolver;
+    duplicateResolver = null;
+    previous(false);
+  }
+  return new Promise(function (resolve) {
+    duplicateResolver = resolve;
+    modal.show();
+  });
+}
+
+/**
+ * 手工记账保存前查一次重复（接口没上线 / 请求失败都直接放行，不能拦住正常记账）
+ * @returns {Promise<object|null>} 命中时返回 {duplicate, parsed}
+ */
+async function checkDuplicateBeforeSave(values) {
+  try {
+    const query =
+      "?amount=" +
+      encodeURIComponent(String((values && values.amount) || "")) +
+      "&note=" +
+      encodeURIComponent(String((values && values.note) || "")) +
+      "&account=" +
+      encodeURIComponent(String((values && values.account) || ""));
+    const data = await apiRecordRequest("/api/records/duplicate-check" + query, { method: "GET" }, 6000);
+    if (!data) {
+      return null;
+    }
+    // 契约（Lead m00176）：返回 {duplicate:bool, candidate}；也兼容 409 或 status=="duplicate"
+    if (data.status === "duplicate") {
+      return { duplicate: data.duplicate, parsed: data.parsed };
+    }
+    if (data.duplicate) {
+      return { duplicate: data.candidate || data.duplicate, parsed: data.parsed };
+    }
+  } catch (error) {
+    // 后端还没实现该接口 / 请求失败时静默放行，保留原有保存流程
+  }
+  return null;
+}
+
+/* ---------- AI 纠错：把正确分类记进反馈库 ---------- */
+
+let correctModalInstance = null;
+let correctRecordId = null;
+
+function ensureCorrectModal() {
+  if (correctModalInstance) {
+    return correctModalInstance;
+  }
+  const element = $("correct-modal");
+  if (!element || !window.bootstrap) {
+    return null;
+  }
+  correctModalInstance = new window.bootstrap.Modal(element);
+  bindEscClose(element, correctModalInstance);
+  bindEnterSubmit(element, submitCorrect);
+  element.addEventListener("hidden.bs.modal", function () {
+    correctRecordId = null;
+    const errorElement = $("correct-error");
+    if (errorElement) {
+      errorElement.hidden = true;
+      errorElement.textContent = "";
+    }
+  });
+  if ($("correct-submit-btn")) {
+    $("correct-submit-btn").addEventListener("click", submitCorrect);
+  }
+  return correctModalInstance;
+}
+
+/** 分类下拉：一级 + 二级都列出来，同名去重 */
+function fillCorrectCategoryOptions(currentCategory) {
+  const select = $("correct-category");
+  if (!select) {
+    return;
+  }
+  const names = [];
+  function addName(name) {
+    const text = String(name || "").trim();
+    if (text && names.indexOf(text) < 0) {
+      names.push(text);
+    }
+  }
+  (state.categories || []).forEach(function (top) {
+    addName(top.name);
+    (top.children || []).forEach(function (child) {
+      addName(child.name);
+    });
+  });
+  select.innerHTML = '<option value="">请选择分类…</option>';
+  names.forEach(function (name) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  if (currentCategory && names.indexOf(currentCategory) >= 0) {
+    select.value = currentCategory;
+  }
+}
+
+/** 详情弹窗点「AI 纠错」：先收起详情，再开纠错弹窗 */
+function openRecordCorrectModal() {
+  const recordId = state.detailRecordId;
+  const record = recordId ? findRecordById(recordId) : null;
+  if (!record) {
+    toast("找不到这条账单，请刷新后再试", "error");
+    return;
+  }
+  const modal = ensureCorrectModal();
+  if (!modal) {
+    return;
+  }
+  correctRecordId = record.id;
+  const current = $("correct-current");
+  if (current) {
+    current.innerHTML =
+      "当前分类：<b>" +
+      escapeHtml(record.category || "未分类") +
+      "</b>" +
+      (record.category_parent ? "（" + escapeHtml(record.category_parent) + "）" : "");
+  }
+  fillCorrectCategoryOptions(record.category);
+  const textInput = $("correct-category-text");
+  if (textInput) {
+    textInput.value = "";
+  }
+  const errorElement = $("correct-error");
+  if (errorElement) {
+    errorElement.hidden = true;
+    errorElement.textContent = "";
+  }
+  closeRecordDetail();
+  modal.show();
+}
+
+async function submitCorrect() {
+  if (!correctRecordId) {
+    return;
+  }
+  const textInput = $("correct-category-text");
+  const select = $("correct-category");
+  // 输入框优先：允许输入页面下拉里没有的新分类名
+  const typed = textInput ? String(textInput.value || "").trim() : "";
+  const selected = select ? String(select.value || "").trim() : "";
+  const corrected = typed || selected;
+  const errorElement = $("correct-error");
+  if (!corrected) {
+    if (errorElement) {
+      errorElement.hidden = false;
+      errorElement.textContent = "请先选择或输入正确的分类";
+    }
+    return;
+  }
+  const recordId = correctRecordId;
+  const current = findRecordById(recordId) || {};
+  const button = $("correct-submit-btn");
+  if (button) {
+    setButtonBusy(button, true, "提交中…");
+  }
+  try {
+    // 契约（Lead m00176）：POST /api/records/<id>/correction，返回 {record, memory}
+    const data = await apiRecordRequest(
+      "/api/records/" + recordId + "/correction",
+      jsonOptions("POST", {
+        corrected_category: corrected,
+        original_text: String(current.note || current.category || ""),
+        raw_category: String(current.category || ""),
+      })
+    );
+    const updated = (data && data.record) || current;
+    toast("已记住这次纠正，下次 AI 会参考", "success");
+    if (correctModalInstance) {
+      correctModalInstance.hide();
+    }
+    await refresh();
+    openRecordDetail((updated && updated.id) || recordId);
+  } catch (error) {
+    if (errorElement) {
+      errorElement.hidden = false;
+      errorElement.textContent = (error && error.message) || "提交失败，请重试";
+    }
+  } finally {
+    if (button) {
+      setButtonBusy(button, false);
+    }
   }
 }
 
@@ -7229,6 +8007,10 @@ function bindV010Events() {
   const stack = $("bubble-stack");
   if (stack) {
     stack.addEventListener("click", function (event) {
+      // v0.11.4：气泡里的「修改」输入框 / 按钮 / 错误提示不能当成本气泡点击（不然会弹详情）
+      if (event.target && event.target.closest && event.target.closest(".bubble-revise")) {
+        return;
+      }
       const bubbleElement = event.target.closest ? event.target.closest(".bubble.is-clickable") : null;
       if (!bubbleElement || !bubbleElement.dataset.recordId) {
         return;
