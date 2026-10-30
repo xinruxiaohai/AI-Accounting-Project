@@ -2877,7 +2877,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.12.3-DEV"
+APP_VERSION_FALLBACK = "v0.12.4-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

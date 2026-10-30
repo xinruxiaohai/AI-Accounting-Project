@@ -893,7 +893,7 @@
     if (nicknameInput && !nicknameInput.value) {
       nicknameInput.value = user.nickname || "";
     }
-    var resetEmail = document.getElementById("settings-reset-email");
+    var resetEmail = document.getElementById("reset-password-email");
     if (resetEmail && !resetEmail.value && user.email) {
       resetEmail.value = user.email;
     }
@@ -983,14 +983,14 @@
   }
 
   function sendResetCode() {
-    var emailInput = document.getElementById("settings-reset-email");
-    var button = document.getElementById("settings-reset-send-code");
+    var emailInput = document.getElementById("reset-password-email");
+    var button = document.getElementById("reset-password-send-code");
     if (!emailInput || !button) {
       return;
     }
     var email = emailInput.value.trim();
     if (!email) {
-      setSettingsMessage("settings-reset-error", "先填注册邮箱");
+      setSettingsMessage("reset-password-error", "先填注册邮箱");
       return;
     }
     button.disabled = true;
@@ -1007,12 +1007,12 @@
       })
       .then(function (result) {
         if (!result.ok) {
-          setSettingsMessage("settings-reset-error", result.data.error || "发送失败");
+          setSettingsMessage("reset-password-error", result.data.error || "发送失败");
           button.disabled = false;
           button.textContent = "发送验证码";
           return;
         }
-        setSettingsMessage("settings-reset-error", "验证码已发送（Mock 模式：请查看后端控制台）", true);
+        setSettingsMessage("reset-password-error", "验证码已发送（Mock 模式：请查看后端控制台）", true);
         var seconds = 60;
         button.textContent = seconds + "s 后重发";
         var timer = window.setInterval(function () {
@@ -1027,28 +1027,28 @@
         }, 1000);
       })
       .catch(function () {
-        setSettingsMessage("settings-reset-error", "网络异常，请重试");
+        setSettingsMessage("reset-password-error", "网络异常，请重试");
         button.disabled = false;
         button.textContent = "发送验证码";
       });
   }
 
   function resetPassword() {
-    var emailInput = document.getElementById("settings-reset-email");
-    var codeInput = document.getElementById("settings-reset-code");
-    var passwordInput = document.getElementById("settings-reset-password");
-    var confirmInput = document.getElementById("settings-reset-confirm");
+    var emailInput = document.getElementById("reset-password-email");
+    var codeInput = document.getElementById("reset-password-code");
+    var passwordInput = document.getElementById("reset-password-new");
+    var confirmInput = document.getElementById("reset-password-confirm");
     if (!emailInput || !codeInput || !passwordInput || !confirmInput) {
       return;
     }
-    setSettingsMessage("settings-reset-error", "");
+    setSettingsMessage("reset-password-error", "");
     var code = codeInput.value.trim();
     if (!/^\d{6}$/.test(code)) {
-      setSettingsMessage("settings-reset-error", "请填 6 位邮箱验证码");
+      setSettingsMessage("reset-password-error", "请填 6 位邮箱验证码");
       return;
     }
     if (passwordInput.value !== confirmInput.value) {
-      setSettingsMessage("settings-reset-error", "两次输入的新密码不一致");
+      setSettingsMessage("reset-password-error", "两次输入的新密码不一致");
       return;
     }
     fetch("/api/auth/reset-password", {
@@ -1068,16 +1068,16 @@
       })
       .then(function (result) {
         if (!result.ok) {
-          setSettingsMessage("settings-reset-error", result.data.error || "重置失败");
+          setSettingsMessage("reset-password-error", result.data.error || "重置失败");
           return;
         }
         codeInput.value = "";
         passwordInput.value = "";
         confirmInput.value = "";
-        setSettingsMessage("settings-reset-error", "密码已重置，请用新密码登录", true);
+        setSettingsMessage("reset-password-error", "密码已重置，请用新密码登录", true);
       })
       .catch(function () {
-        setSettingsMessage("settings-reset-error", "网络异常，请重试");
+        setSettingsMessage("reset-password-error", "网络异常，请重试");
       });
   }
 
@@ -1091,13 +1091,37 @@
     if (changeButton) {
       changeButton.addEventListener("click", changePassword);
     }
-    var sendButton = document.getElementById("settings-reset-send-code");
+    var sendButton = document.getElementById("reset-password-send-code");
     if (sendButton) {
       sendButton.addEventListener("click", sendResetCode);
     }
-    var resetButton = document.getElementById("settings-reset-submit");
+    var resetButton = document.getElementById("reset-password-submit");
     if (resetButton) {
       resetButton.addEventListener("click", resetPassword);
+    }
+    var forgotLink = document.getElementById("settings-forgot-link");
+    var resetModal = document.getElementById("reset-password-modal");
+    if (forgotLink && resetModal) {
+      // 打开独立 Modal 时把当前账号邮箱带进去，省得手输
+      forgotLink.addEventListener("click", function () {
+        window.setTimeout(function () {
+          var emailInput = document.getElementById("reset-password-email");
+          var user = getUser() || {};
+          if (emailInput && !emailInput.value && user.email) {
+            emailInput.value = user.email;
+          }
+          setSettingsMessage("reset-password-error", "");
+        }, 220);
+      });
+    }
+    if (resetModal) {
+      resetModal.addEventListener("shown.bs.modal", function () {
+        var emailInput = document.getElementById("reset-password-email");
+        var user = getUser() || {};
+        if (emailInput && !emailInput.value && user.email) {
+          emailInput.value = user.email;
+        }
+      });
     }
     var modal = document.getElementById("settings-modal");
     if (modal) {

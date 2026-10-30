@@ -6009,7 +6009,32 @@ function renderIconSettings() {
   choice.innerHTML = '<option value="">默认图标</option>' + iconLib.map(function (icon) {
     return '<option value="' + icon.id + '">' + escapeHtml(icon.name) + (icon.is_system ? "（系统）" : "") + "</option>";
   }).join("");
+  renderIconChoiceGrid();
   renderIconPreview();
+}
+
+/** v0.12.4：把下拉框换成可点选的图标网格，选中的绿框高亮 */
+function renderIconChoiceGrid() {
+  const grid = $("icon-choice-grid");
+  const choice = $("icon-choice");
+  if (!grid || !choice) {
+    return;
+  }
+  const current = choice.value;
+  const tiles = ['<button type="button" class="icon-choice-tile' + (current === "" ? " is-active" : "") +
+    '" data-icon-id="" role="option" aria-selected="' + (current === "" ? "true" : "false") + '">' +
+    '<span class="icon-choice-default">默认</span><span class="icon-choice-label">系统默认</span></button>'];
+  iconLib.forEach(function (icon) {
+    const active = String(current) === String(icon.id);
+    tiles.push(
+      '<button type="button" class="icon-choice-tile' + (active ? " is-active" : "") +
+      '" data-icon-id="' + icon.id + '" role="option" aria-selected="' + (active ? "true" : "false") +
+      '" title="' + escapeHtml(icon.name) + '">' +
+      '<img src="' + escapeHtml(icon.path) + '" alt="">' +
+      '<span class="icon-choice-label">' + escapeHtml(icon.name) + "</span></button>"
+    );
+  });
+  grid.innerHTML = tiles.join("");
 }
 
 function renderIconPreview() {
@@ -6045,7 +6070,8 @@ async function saveUserIcon() {
     await api("/api/user-icons", jsonOptions("PUT", { kind: kind, name: name, icon_id: Number(iconId) }));
     await loadIconLibrary();
     await refresh();
-    toast("图标已更新", "success");
+    renderIconPreview();
+    toast("图标已更新，左侧账户与账单列表已同步", "success");
   } catch (error) {
     iconError(error.message);
   }
@@ -6063,6 +6089,7 @@ async function resetUserIcon() {
     });
     await loadIconLibrary();
     await refresh();
+    renderIconPreview();
     toast("已恢复默认图标", "success");
   } catch (error) {
     iconError(error.message);
@@ -6105,8 +6132,23 @@ function bindIconSettings() {
     return;
   }
   $("icon-kind").addEventListener("change", renderIconSettings);
-  $("icon-target").addEventListener("change", renderIconPreview);
-  $("icon-choice").addEventListener("change", renderIconPreview);
+  $("icon-target").addEventListener("change", function () {
+    renderIconChoiceGrid();
+    renderIconPreview();
+  });
+  $("icon-choice").addEventListener("change", function () {
+    renderIconChoiceGrid();
+    renderIconPreview();
+  });
+  $("icon-choice-grid").addEventListener("click", function (event) {
+    const tile = event.target.closest("[data-icon-id]");
+    if (!tile) {
+      return;
+    }
+    $("icon-choice").value = tile.getAttribute("data-icon-id") || "";
+    renderIconChoiceGrid();
+    renderIconPreview();
+  });
   $("icon-save").addEventListener("click", saveUserIcon);
   $("icon-reset").addEventListener("click", resetUserIcon);
   $("icon-upload").addEventListener("change", function (event) {

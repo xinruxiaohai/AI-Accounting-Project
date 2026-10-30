@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.4">
 </head>
 <body>
 
@@ -95,7 +95,7 @@
         </button>
       </div>
       <div class="sidebar-user" id="sidebar-user-name" hidden></div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.3-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.4-DEV</div>
     </div>
   </aside>
 
@@ -1175,7 +1175,8 @@
                 <option value="account">账户</option>
               </select>
               <select class="form-select" id="icon-target"></select>
-              <select class="form-select" id="icon-choice"></select>
+              <select class="form-select d-none" id="icon-choice"></select>
+              <div class="icon-choice-grid" id="icon-choice-grid" role="listbox" aria-label="选择图标"></div>
             </div>
             <div class="settings-inline">
               <button class="btn btn-primary btn-sm" type="button" id="icon-save">应用图标</button>
@@ -1215,19 +1216,12 @@
           </div>
 
           <div class="settings-group">
-            <span class="settings-label">忘记旧密码？用邮箱验证码</span>
-            <div class="settings-inline">
-              <input class="form-control" id="settings-reset-email" type="email" placeholder="注册邮箱">
-              <button class="btn btn-outline-secondary" type="button" id="settings-reset-send-code">发送验证码</button>
-            </div>
-            <input class="form-control settings-field" id="settings-reset-code" type="text"
-                   inputmode="numeric" maxlength="6" placeholder="6 位邮箱验证码">
-            <input class="form-control settings-field" id="settings-reset-password" type="password"
-                   autocomplete="new-password" placeholder="新密码">
-            <input class="form-control settings-field" id="settings-reset-confirm" type="password"
-                   autocomplete="new-password" placeholder="确认新密码">
-            <button class="btn btn-outline-primary" type="button" id="settings-reset-submit">用验证码重设密码</button>
-            <p class="settings-error" id="settings-reset-error" hidden></p>
+            <span class="settings-label">忘记旧密码？</span>
+            <!-- v0.12.4：平铺输入框全部删掉，改成链接弹独立 Modal -->
+            <button class="settings-forgot-link" type="button" id="settings-forgot-link"
+                    data-bs-toggle="modal" data-bs-target="#reset-password-modal">
+              通过邮箱验证码重置密码 →
+            </button>
           </div>
 
           <div class="settings-group settings-danger">
@@ -1243,6 +1237,42 @@
         </div>
         <button class="btn btn-light ms-auto d-none" type="button" id="settings-account-close"
                 data-bs-dismiss="modal">关闭</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ================= v0.12.4：邮箱验证码重置密码（独立 Modal） ================= -->
+<div class="modal fade" id="reset-password-modal" tabindex="-1" aria-labelledby="reset-password-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="reset-password-title">重置密码</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint">输入注册邮箱获取 6 位验证码（Mock 模式：验证码会打印在后端控制台），验证通过后直接设置新密码。</p>
+        <label class="form-label" for="reset-password-email">注册邮箱</label>
+        <div class="settings-inline">
+          <input class="form-control" id="reset-password-email" type="email" placeholder="you@example.com">
+          <button class="btn btn-outline-secondary" type="button" id="reset-password-send-code">获取验证码</button>
+        </div>
+        <label class="form-label mt-3" for="reset-password-code">验证码</label>
+        <input class="form-control" id="reset-password-code" type="text" inputmode="numeric"
+               maxlength="6" placeholder="6 位数字">
+        <label class="form-label mt-3" for="reset-password-new">新密码</label>
+        <input class="form-control" id="reset-password-new" type="password" autocomplete="new-password"
+               placeholder="至少 6 位，含数字/字母/标点中的两种">
+        <label class="form-label mt-3" for="reset-password-confirm">确认新密码</label>
+        <input class="form-control" id="reset-password-confirm" type="password" autocomplete="new-password"
+               placeholder="再输一次">
+        <p class="settings-error" id="reset-password-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-primary" type="button" id="reset-password-submit">重置密码</button>
       </div>
     </div>
   </div>
@@ -1567,10 +1597,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.3"></script>
-<script src="/static/access-guard.js?v=0.12.3"></script>
+<script src="/static/auth-v012.js?v=0.12.4"></script>
+<script src="/static/access-guard.js?v=0.12.4"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.3"></script>
+<script src="/static/script.js?v=0.12.4"></script>
 
 </body>
 </html>

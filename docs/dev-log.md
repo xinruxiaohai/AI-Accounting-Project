@@ -408,3 +408,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 账单列表每行加极浅灰色分隔线。
 - 顺带修复 contacts 的 user_id 隔离（list/get/create 未带 user_id 导致新用户看不到自己的联系人）。
 - 自测：temp/test_v0123.py 27/27，test_v0122.py 31/31，test_v012_e2e.py 21/21；py_compile / node --check 通过。
+
+## v0.12.4-DEV（2026-10-30）
+
+- 【账户与密码】平铺的重置密码表单删除，改为链接 + 独立 #reset-password-modal（邮箱/验证码/新密码），打开自动带当前邮箱。
+- 账户与密码顶部实装昵称修改（PUT /api/auth/profile），保存后同步侧边栏。
+- 资产页右侧流水每行加 #eef0f3 分割线与斑马底；侧边栏 .sidebar-user 改纯白高对比。
+- 图标选择器改可视化网格（icon-choice-grid），点选高亮，应用后账户列表与账单表格图标即时重绘；恢复默认保留。
+- 修复管理员 123456 登录状态（迁移初始密码不经强密码校验，测试直接写回 hash）。
+- 自测：temp/test_v0124.py 21/21；回归 test_v0123 27/27、test_v0122 31/31、test_v0121 20/20、test_v012_e2e 21/21；py_compile / node --check 通过。
