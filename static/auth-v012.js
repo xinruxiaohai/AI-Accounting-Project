@@ -833,8 +833,13 @@
       slot.hidden = true;
       return;
     }
-    slot.textContent = name;
-    slot.title = user.email || "";
+    // v0.12.5：昵称旁边显示 UID，验证 1-9 号预留逻辑
+    var uidText = user.id === undefined || user.id === null ? "" : "UID " + user.id;
+    slot.innerHTML =
+      '<span class="sidebar-nickname"></span>' +
+      (uidText ? '<span class="sidebar-uid">' + uidText + "</span>" : "");
+    slot.querySelector(".sidebar-nickname").textContent = name;
+    slot.title = (user.email || "") + (uidText ? " · " + uidText : "");
     slot.hidden = false;
   }
 
@@ -887,7 +892,8 @@
     var user = getUser() || {};
     var emailLabel = document.getElementById("settings-account-email");
     if (emailLabel) {
-      emailLabel.textContent = "当前账号：" + (user.email || "—");
+      var uid = user.id === undefined || user.id === null ? "—" : user.id;
+      emailLabel.textContent = "当前账号：" + (user.email || "—") + " · UID：" + uid;
     }
     var nicknameInput = document.getElementById("settings-nickname");
     if (nicknameInput && !nicknameInput.value) {
@@ -935,22 +941,22 @@
   }
 
   function changePassword() {
-    var oldInput = document.getElementById("settings-old-password");
-    var newInput = document.getElementById("settings-new-password");
-    var confirmInput = document.getElementById("settings-confirm-password");
+    var oldInput = document.getElementById("change-old-password");
+    var newInput = document.getElementById("change-new-password");
+    var confirmInput = document.getElementById("change-confirm-password");
     if (!oldInput || !newInput || !confirmInput) {
       return;
     }
     var oldPassword = oldInput.value;
     var newPassword = newInput.value;
     var confirmPassword = confirmInput.value;
-    setSettingsMessage("settings-password-error", "");
+    setSettingsMessage("change-password-error", "");
     if (!oldPassword || !newPassword) {
-      setSettingsMessage("settings-password-error", "旧密码和新密码都要填");
+      setSettingsMessage("change-password-error", "旧密码和新密码都要填");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setSettingsMessage("settings-password-error", "两次输入的新密码不一致");
+      setSettingsMessage("change-password-error", "两次输入的新密码不一致");
       return;
     }
     fetch("/api/auth/change-password", {
@@ -969,16 +975,23 @@
       })
       .then(function (result) {
         if (!result.ok) {
-          setSettingsMessage("settings-password-error", result.data.error || "修改失败");
+          setSettingsMessage("change-password-error", result.data.error || "修改失败");
           return;
         }
         oldInput.value = "";
         newInput.value = "";
         confirmInput.value = "";
-        setSettingsMessage("settings-password-error", "密码已更新，下次请用新密码登录", true);
+        var modalElement = document.getElementById("change-password-modal");
+        if (modalElement && window.bootstrap) {
+          var instance = window.bootstrap.Modal.getInstance(modalElement);
+          if (instance) {
+            instance.hide();
+          }
+        }
+        showFunnyToast("密码已更新，下次请用新密码登录");
       })
       .catch(function () {
-        setSettingsMessage("settings-password-error", "网络异常，请重试");
+        setSettingsMessage("change-password-error", "网络异常，请重试");
       });
   }
 
@@ -1087,9 +1100,21 @@
     if (nicknameButton) {
       nicknameButton.addEventListener("click", saveNickname);
     }
-    var changeButton = document.getElementById("settings-change-password-btn");
-    if (changeButton) {
-      changeButton.addEventListener("click", changePassword);
+    var changeSubmit = document.getElementById("change-password-submit");
+    if (changeSubmit) {
+      changeSubmit.addEventListener("click", changePassword);
+    }
+    var changeModal = document.getElementById("change-password-modal");
+    if (changeModal) {
+      changeModal.addEventListener("shown.bs.modal", function () {
+        ["change-old-password", "change-new-password", "change-confirm-password"].forEach(function (id) {
+          var input = document.getElementById(id);
+          if (input) {
+            input.value = "";
+          }
+        });
+        setSettingsMessage("change-password-error", "");
+      });
     }
     var sendButton = document.getElementById("reset-password-send-code");
     if (sendButton) {

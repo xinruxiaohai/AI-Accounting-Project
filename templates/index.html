@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.4">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.5">
 </head>
 <body>
 
@@ -95,7 +95,7 @@
         </button>
       </div>
       <div class="sidebar-user" id="sidebar-user-name" hidden></div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.4-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.5-DEV</div>
     </div>
   </aside>
 
@@ -1167,21 +1167,27 @@
             <span class="settings-label">首页卡片显示</span>
             <div class="card-visibility" id="card-visibility"></div>
           </div>
-          <div class="settings-group">
+          <div class="settings-group icon-picker">
             <span class="settings-label">分类 / 账户图标</span>
-            <div class="settings-inline">
-              <select class="form-select" id="icon-kind">
-                <option value="category">分类</option>
-                <option value="account">账户</option>
-              </select>
-              <select class="form-select" id="icon-target"></select>
-              <select class="form-select d-none" id="icon-choice"></select>
-              <div class="icon-choice-grid" id="icon-choice-grid" role="listbox" aria-label="选择图标"></div>
+            <div class="icon-picker-row">
+              <label class="icon-picker-field">
+                <span>类型</span>
+                <select class="form-select form-select-sm" id="icon-kind">
+                  <option value="category">分类</option>
+                  <option value="account">账户</option>
+                </select>
+              </label>
+              <label class="icon-picker-field">
+                <span>对象</span>
+                <select class="form-select form-select-sm" id="icon-target"></select>
+              </label>
             </div>
-            <div class="settings-inline">
+            <select class="d-none" id="icon-choice"></select>
+            <div class="icon-choice-grid" id="icon-choice-grid" role="listbox" aria-label="选择图标"></div>
+            <div class="icon-picker-actions">
               <button class="btn btn-primary btn-sm" type="button" id="icon-save">应用图标</button>
               <button class="btn btn-outline-secondary btn-sm" type="button" id="icon-reset">恢复默认</button>
-              <label class="btn btn-outline-secondary btn-sm mb-0">上传图标
+              <label class="btn btn-outline-secondary btn-sm mb-0 icon-upload-btn">上传图标
                 <input id="icon-upload" type="file" accept="image/*" hidden>
               </label>
             </div>
@@ -1205,14 +1211,10 @@
 
           <div class="settings-group">
             <span class="settings-label">修改密码</span>
-            <input class="form-control settings-field" id="settings-old-password" type="password"
-                   autocomplete="current-password" placeholder="旧密码">
-            <input class="form-control settings-field" id="settings-new-password" type="password"
-                   autocomplete="new-password" placeholder="新密码（至少 6 位，含数字/字母/标点中的两种）">
-            <input class="form-control settings-field" id="settings-confirm-password" type="password"
-                   autocomplete="new-password" placeholder="确认新密码">
-            <button class="btn btn-primary" type="button" id="settings-change-password-btn">保存新密码</button>
-            <p class="settings-error" id="settings-password-error" hidden></p>
+            <!-- v0.12.5：平铺输入框删除，改成按钮弹独立 Modal -->
+            <button class="btn btn-outline-primary w-100" type="button" id="settings-change-password-btn"
+                    data-bs-toggle="modal" data-bs-target="#change-password-modal">修改密码</button>
+            <p class="settings-hint">点开后输入旧密码与新密码，浏览器不会自动填充旧密码。</p>
           </div>
 
           <div class="settings-group">
@@ -1273,6 +1275,36 @@
       <div class="modal-footer">
         <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
         <button class="btn btn-primary" type="button" id="reset-password-submit">重置密码</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.12.5：修改密码（独立 Modal） ================= -->
+<div class="modal fade" id="change-password-modal" tabindex="-1" aria-labelledby="change-password-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="change-password-title">修改密码</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint">输入旧密码验证身份，再设置新密码（至少 6 位，数字 / 字母 / 标点至少占两种）。</p>
+        <label class="form-label" for="change-old-password">旧密码</label>
+        <input class="form-control" id="change-old-password" type="password" autocomplete="off"
+               name="dsh-change-old-password" placeholder="当前密码">
+        <label class="form-label mt-3" for="change-new-password">新密码</label>
+        <input class="form-control" id="change-new-password" type="password" autocomplete="new-password"
+               name="dsh-change-new-password" placeholder="至少 6 位，含两种字符类型">
+        <label class="form-label mt-3" for="change-confirm-password">确认新密码</label>
+        <input class="form-control" id="change-confirm-password" type="password" autocomplete="new-password"
+               name="dsh-change-confirm-password" placeholder="再输一次">
+        <p class="settings-error" id="change-password-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-primary" type="button" id="change-password-submit">保存新密码</button>
       </div>
     </div>
   </div>
@@ -1597,10 +1629,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.4"></script>
-<script src="/static/access-guard.js?v=0.12.4"></script>
+<script src="/static/auth-v012.js?v=0.12.5"></script>
+<script src="/static/access-guard.js?v=0.12.5"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.4"></script>
+<script src="/static/script.js?v=0.12.5"></script>
 
 </body>
 </html>
