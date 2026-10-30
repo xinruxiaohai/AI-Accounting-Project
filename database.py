@@ -906,6 +906,147 @@ def delete_account(name):
         conn.close()
 
 
+def rename_account(old_name, new_name):
+    """账户改名（v0.11.6）：accounts 主键 + 所有引用这个账户名的账目/借贷一起改。
+
+    account / to_account / debts.account 都是纯文本列（没有外键），所以改名必须
+    在这里一次性同步，否则旧名字的账目会变成「幽灵账户」。
+    返回 (账户字典, 错误信息)。
+    """
+    old_name = str(old_name or "").strip()
+    new_name = str(new_name or "").strip()
+    if not old_name:
+        return None, "原账户名不能为空"
+    if not new_name:
+        return None, "新账户名不能为空"
+
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT name, balance, group_name FROM accounts WHERE name = ?",
+                (old_name,),
+            ).fetchone()
+            if row is None:
+                return None, "账户不存在"
+            if new_name == old_name:
+                return {
+                    "name": old_name,
+                    "balance": round(row["balance"], 2),
+                    "group_name": row["group_name"],
+                }, None
+            exists = conn.execute(
+                "SELECT name FROM accounts WHERE name = ?", (new_name,)
+            ).fetchone()
+            if exists is not None:
+                return None, "账户名「%s」已存在" % new_name
+
+            conn.execute(
+                "UPDATE accounts SET name = ? WHERE name = ?", (new_name, old_name)
+            )
+            conn.execute(
+                "UPDATE records SET account = ? WHERE account = ?", (new_name, old_name)
+            )
+            conn.execute(
+                "UPDATE records SET to_account = ? WHERE to_account = ?",
+                (new_name, old_name),
+            )
+            conn.execute(
+                "UPDATE debts SET account = ? WHERE account = ?", (new_name, old_name)
+            )
+            return {
+                "name": new_name,
+                "balance": round(row["balance"], 2),
+                "group_name": row["group_name"],
+            }, None
+    finally:
+        conn.close()
+
+
+def merge_account(source, target):
+    """把 source 账户合并进 target（v0.11.6）：余额相加、账目/借贷迁移，再删掉 source。
+
+    用于 AI 自动建户后用户发现「这其实是我已有的账户」：合并后不会生成任何
+    未记账的差额，因为源账户余额原样加进目标账户。
+    返回 (合并后的目标账户字典, 错误信息)。
+    """
+    source = str(source or "").strip()
+    target = str(target or "").strip()
+    if not source or not target:
+        return None, "源账户与目标账户都不能为空"
+    if source == target:
+        return None, "不能合并到它自己"
+
+    conn = get_conn()
+    try:
+        with conn:
+            src = conn.execute(
+                "SELECT name, balance, group_name FROM accounts WHERE name = ?", (source,)
+            ).fetchone()
+            if src is None:
+                return None, "账户「%s」不存在" % source
+            tgt = conn.execute(
+                "SELECT name, balance, group_name FROM accounts WHERE name = ?", (target,)
+            ).fetchone()
+            if tgt is None:
+                return None, "账户「%s」不存在" % target
+
+            new_balance = round(float(src["balance"] or 0) + float(tgt["balance"] or 0), 2)
+            conn.execute(
+                "UPDATE accounts SET balance = ? WHERE name = ?", (new_balance, target)
+            )
+            conn.execute(
+                "UPDATE records SET account = ? WHERE account = ?", (target, source)
+            )
+            conn.execute(
+                "UPDATE records SET to_account = ? WHERE to_account = ?", (target, source)
+            )
+            conn.execute(
+                "UPDATE debts SET account = ? WHERE account = ?", (target, source)
+            )
+            conn.execute("DELETE FROM accounts WHERE name = ?", (source,))
+            return {
+                "name": target,
+                "balance": new_balance,
+                "group_name": tgt["group_name"],
+            }, None
+    finally:
+        conn.close()
+
+
+def set_records_category(record_ids, category_name):
+    """批量改分类（v0.11.6）：只动 category / category_id，不重算余额、不校验账户。
+
+    返回 (成功改动的条数, 错误信息)。分类不存在会自动建一个二级分类。
+    """
+    if not isinstance(record_ids, (list, tuple)) or not record_ids:
+        return 0, "record_ids 必须是非空数组"
+    try:
+        ids = [int(item) for item in record_ids]
+    except (TypeError, ValueError):
+        return 0, "record_ids 里必须都是整数"
+
+    try:
+        category = ensure_category(category_name)
+    except RecordError as error:
+        return 0, str(error)
+
+    conn = get_conn()
+    try:
+        with conn:
+            changed = 0
+            for record_id in ids:
+                cursor = conn.execute(
+                    "UPDATE records SET category = ?, category_id = ? "
+                    "WHERE id = ? AND deleted_at IS NULL",
+                    (category["name"], category["id"], record_id),
+                )
+                changed += cursor.rowcount
+            return changed, None
+    finally:
+        conn.close()
+
+
 def reorder_accounts(names):
     """按拖拽后的顺序重排账户（跨大类一起排），返回错误信息（成功为 None）。
 

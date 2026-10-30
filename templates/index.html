@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.11.5">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.6">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.11.5-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.11.6-DEV</div>
     </div>
   </aside>
 
@@ -167,7 +167,7 @@
           <div class="dash-center">
 
             <!-- 巨型主卡：本月支出最大，收入 / 结余做陪衬 -->
-            <div class="panel hero-card">
+            <div class="panel hero-card" id="home-hero-card">
               <div class="hero-head">
                 <span class="hero-caption">本月支出</span>
                 <span class="hero-month" id="hero-month-label">2026 年 10 月</span>
@@ -184,7 +184,7 @@
             </div>
 
             <!-- 预算卡：左圆弧进度（固定宽、垂直居中）+ 右三行信息，整体紧凑无冗余留白 -->
-            <div class="panel budget-card">
+            <div class="panel budget-card" id="home-budget-card">
               <div class="budget-left">
                 <div class="budget-ring-wrap">
                   <svg class="budget-ring" viewBox="0 0 120 120" aria-hidden="true">
@@ -225,7 +225,7 @@
             </div>
 
 <!-- 数据可视化：本月支出分类饼图 + 近 30 天支出折线（ECharts 本地引入） -->
-            <div class="panel charts-panel">
+            <div class="panel charts-panel" id="home-charts-panel">
               <div class="panel-head">
                 <span class="panel-title">数据可视化</span>
                 <span class="panel-sub" id="charts-sub">本月支出结构 · 近 30 天趋势</span>
@@ -243,7 +243,7 @@
             </div>
 
             <!-- 近 7 天账单：按天分组的卡片列表，取代旧的大表格 -->
-            <div class="panel recent-panel">
+            <div class="panel recent-panel" id="home-recent-panel">
               <div class="panel-head">
                 <span class="panel-title">近 7 天账单</span>
                 <span class="panel-sub" id="recent-summary">按天分组，点任意一条看详情</span>
@@ -254,7 +254,7 @@
             </div>
 
             <!-- 全部账单：保留表格视图，支持账户筛选与搜索；行点击弹详情 -->
-            <div class="panel">
+            <div class="panel" id="home-records-panel">
               <div class="panel-head">
                 <span class="panel-title">全部账单</span>
                 <div class="panel-tools">
@@ -293,7 +293,7 @@
           <!-- ---------- 右栏：日历 + 月结余 / 日均 + 当日明细 ---------- -->
           <div class="dash-rail">
 
-            <div class="panel calendar-panel">
+            <div class="panel calendar-panel" id="home-calendar-panel">
               <div class="panel-head calendar-head">
                 <div class="calendar-toolbar">
                   <button class="btn btn-sm btn-outline-secondary" type="button" id="cal-prev-year"
@@ -347,7 +347,7 @@
             </div>
 
             <!-- 当日 / 当月账单明细：小列表，点行看详情 -->
-            <div class="panel day-panel">
+            <div class="panel day-panel" id="home-day-panel">
               <div class="panel-head">
                 <span class="panel-title" id="day-title">账单明细</span>
                 <span class="panel-sub" id="day-sub">点日历上的某一天</span>
@@ -423,6 +423,7 @@
               <div class="panel-head">
                 <span class="panel-title">我的账户</span>
                 <div class="panel-tools">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="accounts-batch-toggle">批量管理</button>
                   <button class="btn btn-sm btn-outline-secondary" type="button" id="open-category-btn">分类管理</button>
                   <button class="btn btn-sm btn-primary" type="button" id="open-account-btn">+ 新增账户</button>
                 </div>
@@ -441,6 +442,14 @@
               <div class="panel-tools">
                 <button class="btn btn-sm btn-primary" type="button" id="quick-add-btn" disabled>在此账户下记一笔</button>
               </div>
+            </div>
+            <!-- v0.11.6：选中账户的余额卡片（金色渐变，零钱通风格） -->
+            <div class="account-balance-card" id="account-balance-card" aria-live="polite">
+              <div class="account-balance-head">
+                <span class="account-balance-label">账户余额</span>
+                <span class="account-balance-name" id="account-balance-name">请选择账户</span>
+              </div>
+              <strong class="account-balance-value" id="account-balance-value">¥0.00</strong>
             </div>
             <div class="bill-feed bill-feed-scroll" id="account-records" role="list">
               <div class="feed-empty">点左侧账户，这里会显示它的流水</div>
@@ -499,10 +508,17 @@
             </div>
 
             <div class="panel bills-table-panel">
+              <div class="panel-head bills-table-head">
+                <span class="panel-title">账单明细</span>
+                <div class="panel-tools">
+                  <button class="btn btn-sm btn-outline-secondary" type="button" id="bills-batch-toggle">批量管理</button>
+                </div>
+              </div>
               <div class="table-responsive bills-table-wrap">
                 <table class="table bills-table">
                   <thead>
                     <tr>
+                      <th scope="col" class="bills-col-check is-batch-hidden" id="bills-check-col" aria-label="选择">选</th>
                       <th scope="col" class="bills-col-date">日期</th>
                       <th scope="col">时间</th>
                       <th scope="col">类型</th>
@@ -514,7 +530,7 @@
                     </tr>
                   </thead>
                   <tbody id="bills-tbody">
-                    <tr><td colspan="8" class="empty-cell">正在加载…</td></tr>
+                    <tr><td colspan="9" class="empty-cell">正在加载…</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -595,6 +611,31 @@
           <p class="trash-hint">删除的账单会先进回收站，支持恢复与彻底删除；这里会显示最近删除的条目。</p>
           <div class="profile-actions">
             <button class="btn btn-light btn-sm" type="button" id="open-trash-btn" data-bs-toggle="modal" data-bs-target="#trash-modal">查看回收站</button>
+          </div>
+        </div>
+
+        <!-- ============ v0.11.6：显示与主题设置中心 ============ -->
+        <div class="panel settings-card" id="settings-card">
+          <div class="export-head">
+            <h3>显示与主题</h3>
+            <span class="export-badge">本机设置</span>
+          </div>
+          <p class="settings-hint">只影响当前设备，不会写入账本数据。</p>
+          <div class="settings-group">
+            <span class="settings-label">主题</span>
+            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题">
+              <label class="theme-option"><input type="radio" name="dsh-theme" value="light"><span>浅色</span></label>
+              <label class="theme-option"><input type="radio" name="dsh-theme" value="dark"><span>深色</span></label>
+              <label class="theme-option"><input type="radio" name="dsh-theme" value="system"><span>跟随系统</span></label>
+            </div>
+          </div>
+          <div class="settings-group">
+            <span class="settings-label">首页卡片显示</span>
+            <div class="card-visibility" id="card-visibility"></div>
+          </div>
+          <div class="settings-actions">
+            <button class="btn btn-primary btn-sm" type="button" id="settings-save-btn">保存设置</button>
+            <button class="btn btn-light btn-sm" type="button" id="settings-reset-btn">恢复默认</button>
           </div>
         </div>
         </div>
@@ -694,6 +735,71 @@
             </div>
             <div class="modal-footer">
               <button class="btn btn-light" type="button" data-bs-dismiss="modal">关闭</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- v0.11.6：批量操作二次确认（Promise 风格，不使用 alert） -->
+      <div class="modal fade batch-confirm-modal" id="batch-confirm-modal" tabindex="-1" aria-labelledby="batch-confirm-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="batch-confirm-title">确认操作</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="batch-confirm-text" id="batch-confirm-text">确定要执行该操作吗？</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+              <button class="btn btn-danger" type="button" id="batch-confirm-ok">确认删除</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- v0.11.6：账单批量改分类 -->
+      <div class="modal fade batch-category-modal" id="batch-category-modal" tabindex="-1"
+           aria-labelledby="batch-category-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="batch-category-title">批量改分类</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="batch-confirm-text">选中账单的分类会统一改成下面这个，金额与余额不受影响。</p>
+              <label class="form-label" for="batch-category-select">新分类</label>
+              <select class="form-select" id="batch-category-select" aria-label="新分类"></select>
+              <p class="batch-category-error d-none" id="batch-category-error"></p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+              <button class="btn btn-primary" type="button" id="batch-category-confirm">确认修改</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- v0.11.6：AI 自动建户后的合并目标选择 -->
+      <div class="modal fade ai-merge-modal" id="ai-merge-modal" tabindex="-1" aria-labelledby="ai-merge-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="ai-merge-title">合并到已有账户</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="ai-merge-text" id="ai-merge-source-text">选择要合并到的已有账户，余额会相加、账目会一起迁移。</p>
+              <label class="form-label" for="ai-merge-target">目标账户</label>
+              <select class="form-select" id="ai-merge-target" aria-label="目标账户"></select>
+              <p class="ai-merge-error d-none" id="ai-merge-error"></p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+              <button class="btn btn-primary" type="button" id="ai-merge-confirm">确认合并</button>
             </div>
           </div>
         </div>
@@ -1242,9 +1348,9 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/access-guard.js?v=0.11.5"></script>
+<script src="/static/access-guard.js?v=0.11.6"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.11.5"></script>
+<script src="/static/script.js?v=0.11.6"></script>
 
 </body>
 </html>

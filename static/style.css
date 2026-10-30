@@ -6966,3 +6966,283 @@ html.access-locked body {
 .center-log-conf {
   color: #b07d00;
 }
+
+/* ==================== v0.11.6：账户编辑 / 余额卡 / 批量管理 / 设置中心 / PWA 兜底 ==================== */
+
+/* 账户行编辑按钮：平时淡出，悬停/聚焦才亮 */
+.account-row-edit {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.account-row-edit svg {
+  width: 15px;
+  height: 15px;
+}
+
+.account-row:hover .account-row-edit,
+.account-row-edit:focus-visible {
+  opacity: 1;
+}
+
+.account-row-edit:hover {
+  background: var(--surface-2);
+  color: var(--brand-blue);
+}
+
+.account-row.is-editing {
+  background: var(--surface-2);
+  border-color: var(--line);
+}
+
+.account-edit-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+
+.account-edit-form .account-edit-name {
+  flex: 1.4;
+  min-width: 90px;
+}
+
+.account-edit-form .account-edit-balance {
+  flex: 1;
+  max-width: 120px;
+}
+
+.account-row.is-batch {
+  gap: 8px;
+}
+
+.batch-check {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  accent-color: var(--brand-blue, #2563eb);
+  cursor: pointer;
+}
+
+.account-row.is-batch-selected,
+.bills-table tbody tr.is-batch-selected td {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+/* 右栏金色渐变余额卡 */
+.account-balance-card {
+  margin: 12px 16px 4px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #ffe08a 0%, #f5c451 42%, #e6a92f 100%);
+  color: #5b3d00;
+  box-shadow: 0 8px 22px rgba(214, 158, 28, 0.28);
+}
+
+.account-balance-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-balance-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  opacity: 0.72;
+}
+
+.account-balance-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-balance-value {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: #3d2800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 底部批量操作栏 */
+.batch-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  z-index: 1080;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 14px 40px rgba(15, 23, 42, 0.22);
+}
+
+.batch-bar-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.batch-bar .btn.is-active {
+  box-shadow: inset 0 0 0 2px var(--brand-blue, #2563eb);
+}
+
+.bills-col-check.is-batch-hidden,
+.bills-batch-cell.is-batch-hidden {
+  display: none;
+}
+
+.bills-col-check,
+.bills-batch-cell {
+  width: 38px;
+  text-align: center;
+}
+
+.batch-category-error {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: #d14343;
+}
+
+.bubble-merge-btn {
+  margin-top: 8px;
+}
+
+/* 「我的」页显示与主题设置中心 */
+.settings-card .settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.settings-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.theme-choice {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  background: var(--surface-2);
+}
+
+.theme-option input {
+  accent-color: var(--brand-blue, #2563eb);
+}
+
+.theme-option:has(input:checked) {
+  border-color: var(--brand-blue, #2563eb);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.card-visibility {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.card-visibility-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.8px;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.card-visibility-item input {
+  accent-color: var(--brand-blue, #2563eb);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.is-card-hidden {
+  display: none !important;
+}
+
+/* PWA 顶栏遮挡兜底：独立窗口 / 窗口控件叠加时，给系统按钮留出安全区 */
+@media (display-mode: standalone) {
+  .topbar {
+    padding-right: 140px !important;
+    padding-top: 30px !important;
+    height: auto !important;
+    min-height: calc(var(--topbar-h) + 30px);
+  }
+}
+
+@media (display-mode: window-controls-overlay) {
+  .topbar {
+    padding-right: 140px !important;
+    padding-top: 30px !important;
+    height: auto !important;
+    min-height: calc(var(--topbar-h) + 30px);
+  }
+}
+
+/* 移动端：批量栏贴底，避开 home indicator */
+@media (max-width: 720px) {
+  .batch-bar {
+    left: 12px;
+    right: 12px;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    transform: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .batch-bar-actions {
+    justify-content: space-between;
+  }
+
+  .account-balance-card {
+    margin: 10px 12px 2px;
+  }
+}

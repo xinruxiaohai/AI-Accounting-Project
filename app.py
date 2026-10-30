@@ -347,6 +347,29 @@ def _ai_contact_names():
         return []
 
 
+def _ensure_ai_account(name):
+    """AI 识别出的账户在库里不存在就自动建一个空账户（v0.11.6）。
+
+    返回 (最终账户名, 是否新建)。建户失败不阻断记账，退回默认账户并保持不新建。
+    """
+    name = (name or "").strip()
+    if not name:
+        return database.DEFAULT_ACCOUNT, False
+    try:
+        existing = [item["name"] for item in database.list_accounts() if item.get("name")]
+    except Exception:  # noqa: BLE001
+        return name, False
+    if name in existing:
+        return name, False
+    try:
+        account, error_message = database.create_account(name, database.DEFAULT_GROUP, 0)
+    except Exception:  # noqa: BLE001
+        return name, False
+    if error_message is not None or account is None:
+        return name, False
+    return name, True
+
+
 def _memory_hints(text):
     """按用户这次说的话，从 ai_memory 里挑最相关的 3 条当 few-shot（v0.11.5 RAG）。
 
@@ -476,7 +499,9 @@ def _apply_ai_correction(previous_record, parsed, text, source="ai"):
     note = parsed.get("note")
     if note is None:
         note = previous_record.get("note")
-    account = parsed.get("account") or previous_record.get("account") or database.DEFAULT_ACCOUNT
+    account, is_new_account = _ensure_ai_account(
+        parsed.get("account") or previous_record.get("account") or database.DEFAULT_ACCOUNT
+    )
     to_account = parsed.get("to_account")
     if to_account is None:
         to_account = previous_record.get("to_account")
@@ -577,6 +602,9 @@ def _apply_ai_correction(previous_record, parsed, text, source="ai"):
         "confidence": parsed.get("confidence"),
     }
     body = _attach_auto_corrected(body, parsed)
+    if is_new_account:
+        body["is_new_account"] = True
+        body["new_account_name"] = account
     if warnings:
         body["warnings"] = warnings
     return body, 200
@@ -643,12 +671,16 @@ def _apply_ai_intent(parsed, text):
                     "pending_contact": True,
                 }
 
+        # v0.11.6：AI 识别出的账户库里没有就自动建户，并在响应里告诉前端
+        account_name, is_new_account = _ensure_ai_account(
+            parsed.get("account") or database.DEFAULT_ACCOUNT
+        )
         new_id, error_message = database.add_record(
             parsed["amount"],
             category,
             parsed.get("note", ""),
             parsed["date"],
-            parsed.get("account") or database.DEFAULT_ACCOUNT,
+            account_name,
             record_type,
             category_id,
             "",
@@ -670,6 +702,9 @@ def _apply_ai_intent(parsed, text):
             "record": {key: value for key, value in parsed.items() if key != "action"},
         }
         body = _attach_auto_corrected(body, parsed)
+        if is_new_account:
+            body["is_new_account"] = True
+            body["new_account_name"] = account_name
         if reimbursement is not None:
             body["reimbursement"] = reimbursement
         return body, 201
@@ -1587,8 +1622,20 @@ def update_account(name):
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
 
-    if "balance" not in data and "group_name" not in data:
-        return jsonify(error="至少要传 balance 或 group_name 之一"), 400
+    if "balance" not in data and "group_name" not in data and "new_name" not in data:
+        return jsonify(error="至少要传 new_name / balance / group_name 之一"), 400
+
+    # v0.11.6：账户改名（改名后后续余额/大类修改都作用在新名字上）
+    final_name = name
+    if "new_name" in data:
+        new_name = data.get("new_name")
+        if not isinstance(new_name, str) or not new_name.strip():
+            return jsonify(error="new_name 必须是非空字符串"), 400
+        renamed, rename_error = database.rename_account(name, new_name.strip())
+        if rename_error is not None:
+            status = 409 if "已存在" in rename_error else 400
+            return jsonify(error=rename_error), status
+        final_name = renamed["name"]
 
     balance = None
     if "balance" in data:
@@ -1606,7 +1653,7 @@ def update_account(name):
                 error="group_name 只能是 " + " / ".join(database.ACCOUNT_GROUPS)
             ), 400
 
-    account, error = database.update_account(name, balance, group_name)
+    account, error = database.update_account(final_name, balance, group_name)
     if error is not None:
         return jsonify(error=error), 404 if "不存在" in error else 400
     return jsonify(account)
@@ -1619,6 +1666,94 @@ def remove_account(name):
     if not deleted:
         return jsonify(error=error), 404 if "不存在" in error else 409
     return jsonify(deleted=name)
+
+
+@app.route("/api/accounts/merge", methods=["POST"])
+def merge_accounts():
+    """把 AI 自动建出来的账户合并进用户已有的账户（v0.11.6）。
+
+    body {"source": "微信零钱通", "target": "微信"}：余额相加、账目/借贷迁移后删掉 source。
+    """
+    data = request.get_json(silent=True) or {}
+    source = data.get("source")
+    target = data.get("target")
+    if not isinstance(source, str) or not source.strip():
+        return jsonify(error="source 必须是非空字符串"), 400
+    if not isinstance(target, str) or not target.strip():
+        return jsonify(error="target 必须是非空字符串"), 400
+
+    account, error_message = database.merge_account(source.strip(), target.strip())
+    if error_message is not None:
+        status = 404 if "不存在" in error_message else 400
+        return jsonify(error=error_message), status
+    return jsonify(merged=True, account=account)
+
+
+@app.route("/api/accounts/batch/delete", methods=["POST"])
+def batch_delete_accounts():
+    """批量删除账户（v0.11.6）：逐个删，仍挂账目的账户会被跳过并回报原因。"""
+    data = request.get_json(silent=True) or {}
+    names = data.get("names")
+    if not isinstance(names, list) or not names:
+        return jsonify(error="names 必须是非空数组"), 400
+
+    deleted = []
+    failed = []
+    for raw in names:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        name = raw.strip()
+        ok, error_message = database.delete_account(name)
+        if ok:
+            deleted.append(name)
+        else:
+            failed.append({"name": name, "error": error_message})
+    return jsonify(deleted=len(deleted), names=deleted, failed=failed)
+
+
+@app.route("/api/records/batch/delete", methods=["POST"])
+def batch_delete_records():
+    """批量删账单（v0.11.6）：走软删除，每条都按原有规则回滚账户余额。"""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids")
+    if not isinstance(ids, list) or not ids:
+        return jsonify(error="ids 必须是非空数组"), 400
+
+    deleted = 0
+    failed = []
+    for raw in ids:
+        try:
+            record_id = int(raw)
+        except (TypeError, ValueError):
+            failed.append({"id": raw, "error": "id 必须是整数"})
+            continue
+        try:
+            ok = database.delete_record(record_id)
+        except database.RecordError as exc:
+            failed.append({"id": record_id, "error": str(exc)})
+            continue
+        if ok:
+            deleted += 1
+        else:
+            failed.append({"id": record_id, "error": "账单不存在或已删除"})
+    return jsonify(deleted=deleted, failed=failed)
+
+
+@app.route("/api/records/batch/category", methods=["PUT"])
+def batch_update_record_category():
+    """批量改分类（v0.11.6）：只动分类字段，不重算余额。"""
+    data = request.get_json(silent=True) or {}
+    ids = data.get("ids")
+    category = data.get("category")
+    if not isinstance(ids, list) or not ids:
+        return jsonify(error="ids 必须是非空数组"), 400
+    if not isinstance(category, str) or not category.strip():
+        return jsonify(error="category 必须是非空字符串"), 400
+
+    changed, error_message = database.set_records_category(ids, category.strip())
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+    return jsonify(updated=changed)
 
 
 @app.route("/api/statistics", methods=["GET"])
@@ -1970,7 +2105,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.11.5-DEV"
+APP_VERSION_FALLBACK = "v0.11.6-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

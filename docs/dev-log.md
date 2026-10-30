@@ -359,3 +359,9 @@ v0.11.5-DEV 2026-10-30 AI 账户/联系人精准匹配 / 气泡多轮全量覆�
 前端与后台：气泡收到 auto_corrected_msg 用灰色小字展示，confidence<80 保持黄牌提示核对；气泡内迷你输入框从「只改分类」升级为自然语言改任意字段，改调 /ai-revise，成功后展示新的账单摘要；/admin 新增「AI 纠错与反馈中心」Tab，左栏 ai_memory 记录可滚动、可删除，右栏近期纠错审计按字段展示改前 → 改后差异与置信度，两个列表串行加载避免并发压库。
 
 踩坑与验证：别名表替换必须放在「子账户后缀」判断之后并校验品牌是否本来就写对，否则「微信零钱通」会被别名表吞成「微信」；parse_intent 新增的 accounts/contacts 参数必须在 /ai、/ai/stream、/ai/image、/ai-revise 四处都传，漏一处就整条链路失去纠正；防重逻辑会干扰测试，mock 解析后要先把测试账单撤掉再测 /api/records/ai。后端脚本 17/17 通过（Prompt 注入账户列表与 few-shot、威信零钱通→微信且带提示语、微信零钱不被误吞、confidence 透传、ai-revise 全量覆盖 30→50 且微信/微信零钱余额双向回滚、审计日志写入与接口可用、AI 接口透传 auto_corrected_msg、清理后余额复原），node --check 与 py_compile 通过；真实模型三场景联调全部 PASS（「用微信零钱付午饭30」→ 餐饮 30 微信 置信度 95；「用威信零钱通付午饭30」→ 强制纠正为微信并带「识别到相似账户，已自动匹配为「微信」」；带原账单「改成微信零钱，金额50」→ 金额 50、账户微信零钱、分类/备注继承原值）。
+
+v0.11.6-DEV 2026-10-30 账户编辑与余额卡 / AI 跨账户纠错与自动建户 / 批量管理与设置中心
+
+三模块一起封版。账户体验：资产页账户列表每行悬停出现编辑图标，点开变成内联表单（名称 + 余额 + 保存/取消），改名走 PUT /api/accounts/<name> 的 new_name，后端在同一个事务里同步 accounts 主键和 records.account / to_account / debts.account，重名返回 409；资产页右栏流水顶部新增金色渐变的账户余额卡，选中账户即刷新名称与余额。AI 纠错：ai-revise 的跨账户场景（微信 → 支付宝）复用全量 UPDATE，余额先撤旧账再落新账，实测旧账户退回、新账户扣款都对；AI 识别出的账户在库里不存在时自动建空账户，响应带 is_new_account / new_account_name，气泡高亮提示「已为您自动创建新账户：xxx」并提供「合并到已有账户」按钮，合并接口把余额相加、账目与借贷迁移后删掉源账户。批量与设置：账单页和资产页账户列表加「批量管理」，开启后 Ctrl 多选，底部悬浮批量栏支持批量删除（软删并逐条回滚余额）、批量改分类（只动分类字段）、账户批量删除（仍挂账目的账户跳过并回报原因）；「我的」页新增显示与主题设置，首页卡片显示/隐藏写 localStorage，主题支持浅色/深色/跟随系统并用 matchMedia 监听系统变化；style.css 在 standalone / window-controls-overlay 模式下给 .topbar 加 padding-right 140px !important + padding-top 30px !important 作为 PWA 遮挡兜底，service worker 缓存名升到 ai-accounting-v0.11.6 让旧缓存自动失效。
+
+踩坑与验证：批量改分类不能再调 ensure_category 的返回值当元组用，它只返回分类字典、失败抛 RecordError；账户改名必须同时改 records 的 account 与 to_account，否则转账旧名字会变成幽灵账户；交叉账户回滚不需要新写逻辑，update_record 的「先撤旧账 → 校验 → 落新账」已经覆盖，测试里 30→50 + 微信→支付宝一次通过。后端脚本 24/24 通过（跨账户双向回滚、自动建户 + is_new_account + 合并迁移、改名同步账目与重名 409、批量删账单与批量改分类、批量删账户、清理后余额复原），py_compile 通过；前端 node --check 通过、首页/管理页 200 且新 DOM 与文案命中。

@@ -554,6 +554,11 @@ const state = {
   // v0.07：通讯录与当前选中的联系人
   contacts: [],
   selectedContactId: null,
+  // v0.11.6：账户行内编辑 / 批量管理状态
+  editingAccount: "",
+  batchMode: "",
+  batchRecordIds: [],
+  batchAccountNames: [],
 };
 
 let recordModal = null;
@@ -1152,16 +1157,48 @@ function renderAccountGroups() {
 
       const rows = group.accounts
         .map(function (account) {
-          const active = account.name === state.detailAccount ? " active" : "";
           const name = escapeHtml(account.name);
           const balance = Number(account.balance || 0);
+          // v0.11.6：行内编辑表单，保存 / 取消由事件委托处理
+          if (state.editingAccount === account.name) {
+            return (
+              '<div class="account-row is-editing" data-account="' +
+              name +
+              '">' +
+              '<form class="account-edit-form" data-edit-form="' +
+              name +
+              '" onsubmit="return false;">' +
+              '<input class="form-control form-control-sm account-edit-name" type="text" maxlength="30" value="' +
+              name +
+              '" aria-label="账户名称" autocomplete="off">' +
+              '<input class="form-control form-control-sm account-edit-balance" type="number" step="0.01" value="' +
+              balance.toFixed(2) +
+              '" aria-label="账户余额" autocomplete="off">' +
+              '<button class="btn btn-sm btn-primary account-edit-save" type="button">保存</button>' +
+              '<button class="btn btn-sm btn-light account-edit-cancel" type="button">取消</button>' +
+              "</form></div>"
+            );
+          }
+          const active = account.name === state.detailAccount ? " active" : "";
+          const batchOn = state.batchMode === "accounts";
+          const selected =
+            batchOn && state.batchAccountNames.indexOf(account.name) >= 0;
           const shown = state.amountHidden ? "¥••••" : money(account.balance);
           return (
             '<div class="account-row' +
             active +
+            (batchOn ? " is-batch" : "") +
+            (selected ? " is-batch-selected" : "") +
             '" data-account="' +
             name +
             '" role="button" tabindex="0">' +
+            (batchOn
+              ? '<input type="checkbox" class="batch-check account-batch-check" data-batch-account="' +
+                name +
+                '"' +
+                (selected ? " checked" : "") +
+                ' tabindex="-1" aria-label="选择账户">'
+              : "") +
             '<span class="account-dot" style="background:' +
             accountTone(account.name) +
             '">' +
@@ -1179,6 +1216,12 @@ function renderAccountGroups() {
             '">' +
             shown +
             "</span>" +
+            '<button class="account-row-edit" type="button" data-edit-account="' +
+            name +
+            '" title="编辑账户" aria-label="编辑账户">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="m4 20 4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10z"></path><path d="M13.5 6.5 17 10"></path>' +
+            "</svg></button>" +
             '<button class="account-row-del" type="button" data-del-account="' +
             name +
             '" title="删除账户">×</button>' +
@@ -1238,6 +1281,7 @@ async function loadAccounts() {
       $("quick-add-btn").disabled = false;
       renderAccountGroups();
     }
+    renderAccountBalanceCard();
   } finally {
     finish();
   }
@@ -1249,6 +1293,7 @@ function clearDetail() {
   $("detail-title").textContent = "账户流水";
   $("quick-add-btn").disabled = true;
   $("account-records").innerHTML = feedEmptyHtml("先在上方点一个账户，这里会显示它的流水");
+  renderAccountBalanceCard();
 }
 
 async function selectAccount(name) {
@@ -1256,6 +1301,7 @@ async function selectAccount(name) {
   $("detail-title").textContent = name + " · 流水";
   $("quick-add-btn").disabled = false;
   renderAccountGroups();
+  renderAccountBalanceCard();
 
   const finish = beginTableLoad($("account-records"), 5);
   try {
@@ -1265,6 +1311,614 @@ async function selectAccount(name) {
   } finally {
     finish();
   }
+}
+
+
+/* ==================== v0.11.6：账户编辑 / 余额卡 / 批量管理 / 设置中心 ==================== */
+
+const LS_CARDS = "ai-accounting-card-visibility";
+
+const HOME_CARD_OPTIONS = [
+  { id: "home-hero-card", label: "本月支出主卡" },
+  { id: "home-budget-card", label: "预算环形卡" },
+  { id: "home-charts-panel", label: "数据可视化" },
+  { id: "home-recent-panel", label: "近 7 天账单" },
+  { id: "home-records-panel", label: "全部账单" },
+  { id: "home-calendar-panel", label: "日历" },
+  { id: "home-day-panel", label: "按日明细" }
+];
+
+function readHiddenCards() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(LS_CARDS) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+/** 按 localStorage 里保存的隐藏清单，给首页卡片加 display:none */
+function applyCardVisibility() {
+  const hidden = readHiddenCards();
+  HOME_CARD_OPTIONS.forEach(function (item) {
+    const node = $(item.id);
+    if (!node) {
+      return;
+    }
+    node.classList.toggle("is-card-hidden", hidden.indexOf(item.id) >= 0);
+  });
+}
+
+function renderCardVisibility() {
+  const box = $("card-visibility");
+  if (!box) {
+    return;
+  }
+  const hidden = readHiddenCards();
+  box.innerHTML = HOME_CARD_OPTIONS.map(function (item) {
+    return (
+      '<label class="card-visibility-item">' +
+      '<input type="checkbox" data-card-id="' + item.id + '"' +
+      (hidden.indexOf(item.id) >= 0 ? "" : " checked") +
+      ">" +
+      "<span>" + item.label + "</span></label>"
+    );
+  }).join("");
+}
+
+function saveSettings() {
+  const box = $("card-visibility");
+  const hidden = [];
+  if (box) {
+    Array.prototype.forEach.call(box.querySelectorAll("[data-card-id]"), function (input) {
+      if (!input.checked) {
+        hidden.push(input.getAttribute("data-card-id"));
+      }
+    });
+  }
+  localStorage.setItem(LS_CARDS, JSON.stringify(hidden));
+  applyCardVisibility();
+  toast("显示与主题设置已保存", "success");
+}
+
+function resetSettings() {
+  localStorage.removeItem(LS_CARDS);
+  localStorage.removeItem(LS_THEME);
+  applyTheme("system");
+  renderCardVisibility();
+  applyCardVisibility();
+  toast("已恢复默认显示与主题", "success");
+}
+
+/** 主题三态：把设置值同步到「我的」页的单选按钮 */
+function syncThemeSetting() {
+  const current = readTheme();
+  Array.prototype.forEach.call(document.querySelectorAll('input[name="dsh-theme"]'), function (radio) {
+    radio.checked = radio.value === current;
+  });
+}
+
+/** 跟随系统模式：系统主题一变就重新套一次 */
+function initThemeSystemWatcher() {
+  if (!window.matchMedia) {
+    return;
+  }
+  const query = window.matchMedia("(prefers-color-scheme: dark)");
+  const onChange = function () {
+    if (readTheme() === "system") {
+      applyTheme("system");
+    }
+  };
+  if (query.addEventListener) {
+    query.addEventListener("change", onChange);
+  } else if (query.addListener) {
+    query.addListener(onChange);
+  }
+}
+
+/* ---------- 账户行内编辑 ---------- */
+
+function startAccountEdit(name) {
+  state.editingAccount = name;
+  renderAccountGroups();
+  window.setTimeout(function () {
+    const form = document.querySelector('.account-edit-form[data-edit-form="' + name + '"]');
+    const input = form && form.querySelector(".account-edit-name");
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }, 30);
+}
+
+function cancelAccountEdit() {
+  state.editingAccount = "";
+  renderAccountGroups();
+}
+
+async function saveAccountEdit(form) {
+  const name = form.getAttribute("data-edit-form");
+  const nameInput = form.querySelector(".account-edit-name");
+  const balanceInput = form.querySelector(".account-edit-balance");
+  const newName = String((nameInput && nameInput.value) || "").trim();
+  const balance = Number((balanceInput && balanceInput.value) || 0);
+  if (!newName) {
+    toast("账户名不能为空", "error");
+    return;
+  }
+  if (!isFinite(balance)) {
+    toast("余额必须是数字", "error");
+    return;
+  }
+  try {
+    await api(
+      "/api/accounts/" + encodeURIComponent(name),
+      jsonOptions("PUT", { new_name: newName, balance: balance })
+    );
+    state.editingAccount = "";
+    toast(newName === name ? "账户已更新" : "账户已重命名为 " + newName, "success");
+    const wasSelected = state.detailAccount === name;
+    await loadAccounts();
+    if (wasSelected) {
+      await selectAccount(newName);
+    }
+    refresh().catch(function () {});
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+/* ---------- 右栏账户余额卡 ---------- */
+
+function renderAccountBalanceCard() {
+  const nameEl = $("account-balance-name");
+  const valueEl = $("account-balance-value");
+  if (!nameEl || !valueEl) {
+    return;
+  }
+  const selected = (state.accounts || []).filter(function (item) {
+    return item.name === state.detailAccount;
+  })[0];
+  if (!selected) {
+    nameEl.textContent = "请选择账户";
+    valueEl.textContent = "¥0.00";
+    return;
+  }
+  nameEl.textContent = selected.name;
+  valueEl.textContent = state.amountHidden ? "¥••••" : money(selected.balance);
+}
+
+/* ---------- 批量管理（账单 + 账户） ---------- */
+
+let batchBarElement = null;
+let batchConfirmModal = null;
+let pendingBatchConfirm = null;
+let batchCategoryModal = null;
+let aiMergeModal = null;
+let mergeSourceName = "";
+
+function ensureBatchBar() {
+  if (batchBarElement) {
+    return batchBarElement;
+  }
+  const bar = document.createElement("div");
+  bar.id = "batch-bar";
+  bar.className = "batch-bar";
+  bar.hidden = true;
+  bar.innerHTML =
+    '<span class="batch-bar-count" id="batch-bar-count">已选 0 项</span>' +
+    '<div class="batch-bar-actions">' +
+      '<button type="button" class="btn btn-sm btn-outline-primary" id="batch-category-btn">批量改分类</button>' +
+      '<button type="button" class="btn btn-sm btn-danger" id="batch-delete-btn">批量删除</button>' +
+      '<button type="button" class="btn btn-sm btn-light" id="batch-cancel-btn">退出批量</button>' +
+    "</div>";
+  document.body.appendChild(bar);
+  $("batch-cancel-btn").addEventListener("click", exitBatchMode);
+  $("batch-delete-btn").addEventListener("click", confirmBatchDelete);
+  $("batch-category-btn").addEventListener("click", openBatchCategoryModal);
+  batchBarElement = bar;
+  return bar;
+}
+
+function updateBatchBar() {
+  const bar = ensureBatchBar();
+  if (!state.batchMode) {
+    bar.hidden = true;
+    return;
+  }
+  const count = state.batchMode === "accounts" ? state.batchAccountNames.length : state.batchRecordIds.length;
+  bar.hidden = false;
+  $("batch-bar-count").textContent = "已选 " + count + " 项";
+  $("batch-category-btn").hidden = state.batchMode !== "records";
+  $("batch-delete-btn").disabled = count === 0;
+  const checkCol = $("bills-check-col");
+  if (checkCol) {
+    checkCol.classList.toggle("is-batch-hidden", state.batchMode !== "records");
+  }
+}
+
+function syncBatchToggles() {
+  const accountsToggle = $("accounts-batch-toggle");
+  if (accountsToggle) {
+    accountsToggle.textContent = state.batchMode === "accounts" ? "退出批量" : "批量管理";
+    accountsToggle.classList.toggle("is-active", state.batchMode === "accounts");
+  }
+  const billsToggle = $("bills-batch-toggle");
+  if (billsToggle) {
+    billsToggle.textContent = state.batchMode === "records" ? "退出批量" : "批量管理";
+    billsToggle.classList.toggle("is-active", state.batchMode === "records");
+  }
+}
+
+function enterBatchMode(mode) {
+  state.batchMode = mode;
+  state.batchRecordIds = [];
+  state.batchAccountNames = [];
+  syncBatchToggles();
+  updateBatchBar();
+  renderAccountGroups();
+  renderBillsTable();
+}
+
+function exitBatchMode() {
+  state.batchMode = "";
+  state.batchRecordIds = [];
+  state.batchAccountNames = [];
+  syncBatchToggles();
+  updateBatchBar();
+  renderAccountGroups();
+  renderBillsTable();
+}
+
+function toggleBatchAccount(name) {
+  if (!name) {
+    return;
+  }
+  const index = state.batchAccountNames.indexOf(name);
+  if (index >= 0) {
+    state.batchAccountNames.splice(index, 1);
+  } else {
+    state.batchAccountNames.push(name);
+  }
+  updateBatchBar();
+  renderAccountGroups();
+}
+
+function toggleBatchRecord(rawId) {
+  const recordId = Number(rawId);
+  if (!recordId) {
+    return;
+  }
+  const index = state.batchRecordIds.indexOf(recordId);
+  if (index >= 0) {
+    state.batchRecordIds.splice(index, 1);
+  } else {
+    state.batchRecordIds.push(recordId);
+  }
+  updateBatchBar();
+  renderBillsTable();
+}
+
+function openBatchConfirm(title, text, action) {
+  const element = $("batch-confirm-modal");
+  if (!element || !window.bootstrap) {
+    return;
+  }
+  $("batch-confirm-title").textContent = title;
+  $("batch-confirm-text").textContent = text;
+  $("batch-confirm-ok").textContent = title.indexOf("删除") >= 0 ? "确认删除" : "确认";
+  $("batch-confirm-ok").className = title.indexOf("删除") >= 0 ? "btn btn-danger" : "btn btn-primary";
+  pendingBatchConfirm = action;
+  if (!batchConfirmModal) {
+    batchConfirmModal = new window.bootstrap.Modal(element);
+  }
+  batchConfirmModal.show();
+}
+
+function runPendingBatchConfirm() {
+  if (!pendingBatchConfirm) {
+    if (batchConfirmModal) {
+      batchConfirmModal.hide();
+    }
+    return;
+  }
+  const action = pendingBatchConfirm;
+  pendingBatchConfirm = null;
+  const button = $("batch-confirm-ok");
+  button.disabled = true;
+  Promise.resolve()
+    .then(action)
+    .catch(function (error) {
+      toast(error.message, "error");
+    })
+    .then(function () {
+      button.disabled = false;
+      if (batchConfirmModal) {
+        batchConfirmModal.hide();
+      }
+    });
+}
+
+function confirmBatchDelete() {
+  if (state.batchMode === "accounts") {
+    if (!state.batchAccountNames.length) {
+      return;
+    }
+    const names = state.batchAccountNames.slice();
+    openBatchConfirm(
+      "删除账户",
+      "将删除选中的 " + names.length + " 个账户；仍挂着账目的账户会被跳过并提示。确定继续？",
+      function () {
+        return api("/api/accounts/batch/delete", jsonOptions("POST", { names: names })).then(function (data) {
+          const failed = data.failed || [];
+          toast(
+            "已删除 " + (data.deleted || 0) + " 个账户" +
+              (failed.length ? "，跳过 " + failed.length + " 个（仍有账目）" : ""),
+            failed.length ? "warn" : "success"
+          );
+          exitBatchMode();
+          return loadAccounts().then(function () {
+            return refresh();
+          });
+        });
+      }
+    );
+    return;
+  }
+  if (!state.batchRecordIds.length) {
+    return;
+  }
+  const ids = state.batchRecordIds.slice();
+  openBatchConfirm(
+    "删除账单",
+    "将删除选中的 " + ids.length + " 笔账单，余额会同步回滚（删除后可在回收站恢复）。确定继续？",
+    function () {
+      return api("/api/records/batch/delete", jsonOptions("POST", { ids: ids })).then(function (data) {
+        const failed = data.failed || [];
+        toast(
+          "已删除 " + (data.deleted || 0) + " 笔账单" +
+            (failed.length ? "，" + failed.length + " 笔失败" : ""),
+          failed.length ? "warn" : "success"
+        );
+        exitBatchMode();
+        return refresh();
+      });
+    }
+  );
+}
+
+function openBatchCategoryModal() {
+  if (state.batchMode !== "records" || !state.batchRecordIds.length) {
+    return;
+  }
+  const element = $("batch-category-modal");
+  const select = $("batch-category-select");
+  if (!element || !select || !window.bootstrap) {
+    return;
+  }
+  const names = [];
+  (state.categories || []).forEach(function (item) {
+    if (item && item.name && names.indexOf(item.name) < 0) {
+      names.push(item.name);
+    }
+  });
+  select.innerHTML = names
+    .map(function (name) {
+      return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + "</option>";
+    })
+    .join("");
+  $("batch-category-error").classList.add("d-none");
+  $("batch-category-error").textContent = "";
+  if (!batchCategoryModal) {
+    batchCategoryModal = new window.bootstrap.Modal(element);
+  }
+  batchCategoryModal.show();
+}
+
+function submitBatchCategory() {
+  const select = $("batch-category-select");
+  const category = select ? select.value : "";
+  const ids = state.batchRecordIds.slice();
+  if (!category || !ids.length) {
+    return;
+  }
+  const errorElement = $("batch-category-error");
+  const button = $("batch-category-confirm");
+  button.disabled = true;
+  errorElement.classList.add("d-none");
+  api("/api/records/batch/category", jsonOptions("PUT", { ids: ids, category: category }))
+    .then(function (data) {
+      toast("已把 " + (data.updated || ids.length) + " 笔账单改为「" + category + "」", "success");
+      if (batchCategoryModal) {
+        batchCategoryModal.hide();
+      }
+      exitBatchMode();
+      return refresh();
+    })
+    .catch(function (error) {
+      errorElement.textContent = error.message;
+      errorElement.classList.remove("d-none");
+    })
+    .then(function () {
+      button.disabled = false;
+    });
+}
+
+/* ---------- AI 自动建户提示 + 合并 ---------- */
+
+function aiNewAccountInfo(data) {
+  if (!data) {
+    return null;
+  }
+  const layers = [data, data.payload, data.payload && data.payload.record, data.record];
+  for (let i = 0; i < layers.length; i += 1) {
+    const layer = layers[i];
+    if (layer && (layer.is_new_account || layer.new_account_name)) {
+      const name = layer.new_account_name || "";
+      if (name) {
+        return name;
+      }
+    }
+  }
+  return null;
+}
+
+function attachNewAccountHint(bubble, data) {
+  const name = aiNewAccountInfo(data);
+  if (!name || !bubble || !bubble.element) {
+    return;
+  }
+  bubbleAppendNote(bubble, "已为您自动创建新账户：" + name);
+  const main = bubble.element.querySelector(".bubble-main");
+  if (!main || main.querySelector(".bubble-merge-btn")) {
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-sm btn-outline-primary bubble-merge-btn";
+  button.textContent = "合并到已有账户";
+  button.addEventListener("click", function (event) {
+    event.stopPropagation();
+    openAiMergeModal(name);
+  });
+  main.appendChild(button);
+}
+
+function openAiMergeModal(sourceName) {
+  const element = $("ai-merge-modal");
+  const select = $("ai-merge-target");
+  if (!element || !select || !window.bootstrap) {
+    return;
+  }
+  const others = (state.accounts || []).filter(function (item) {
+    return item.name !== sourceName;
+  });
+  if (!others.length) {
+    toast("还没有其它账户可以合并，先去新增一个账户", "warn");
+    return;
+  }
+  select.innerHTML = others
+    .map(function (item) {
+      return '<option value="' + escapeHtml(item.name) + '">' + escapeHtml(item.name) + "</option>";
+    })
+    .join("");
+  $("ai-merge-source-text").textContent =
+    "AI 自动创建的账户「" + sourceName + "」可以合并到下面某个已有账户：余额相加、账目一起迁移，然后删除这个新账户。";
+  $("ai-merge-error").classList.add("d-none");
+  $("ai-merge-error").textContent = "";
+  mergeSourceName = sourceName;
+  if (!aiMergeModal) {
+    aiMergeModal = new window.bootstrap.Modal(element);
+  }
+  aiMergeModal.show();
+}
+
+function submitAiMerge() {
+  const select = $("ai-merge-target");
+  const target = select ? select.value : "";
+  if (!mergeSourceName || !target) {
+    return;
+  }
+  const button = $("ai-merge-confirm");
+  const errorElement = $("ai-merge-error");
+  button.disabled = true;
+  errorElement.classList.add("d-none");
+  api("/api/accounts/merge", jsonOptions("POST", { source: mergeSourceName, target: target }))
+    .then(function () {
+      toast("已把「" + mergeSourceName + "」合并到「" + target + "」", "success");
+      if (aiMergeModal) {
+        aiMergeModal.hide();
+      }
+      mergeSourceName = "";
+      return loadAccounts().then(function () {
+        return refresh();
+      });
+    })
+    .catch(function (error) {
+      errorElement.textContent = error.message;
+      errorElement.classList.remove("d-none");
+    })
+    .then(function () {
+      button.disabled = false;
+    });
+}
+
+/* ---------- v0.11.6 事件接线 ---------- */
+
+function initV0116Ui() {
+  const accountsToggle = $("accounts-batch-toggle");
+  if (accountsToggle) {
+    accountsToggle.addEventListener("click", function () {
+      if (state.batchMode === "accounts") {
+        exitBatchMode();
+      } else {
+        enterBatchMode("accounts");
+      }
+    });
+  }
+  const billsToggle = $("bills-batch-toggle");
+  if (billsToggle) {
+    billsToggle.addEventListener("click", function () {
+      if (state.batchMode === "records") {
+        exitBatchMode();
+      } else {
+        enterBatchMode("records");
+      }
+    });
+  }
+  const themeChoice = $("theme-choice");
+  if (themeChoice) {
+    themeChoice.addEventListener("change", function (event) {
+      const radio = event.target.closest('input[name="dsh-theme"]');
+      if (radio) {
+        applyTheme(radio.value);
+      }
+    });
+  }
+  const saveBtn = $("settings-save-btn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", saveSettings);
+  }
+  const resetBtn = $("settings-reset-btn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", resetSettings);
+  }
+  const confirmOk = $("batch-confirm-ok");
+  if (confirmOk) {
+    confirmOk.addEventListener("click", runPendingBatchConfirm);
+  }
+  const batchCategoryConfirm = $("batch-category-confirm");
+  if (batchCategoryConfirm) {
+    batchCategoryConfirm.addEventListener("click", submitBatchCategory);
+  }
+  const mergeConfirm = $("ai-merge-confirm");
+  if (mergeConfirm) {
+    mergeConfirm.addEventListener("click", submitAiMerge);
+  }
+  const billsBody = $("bills-tbody");
+  if (billsBody) {
+    // 批量态下点整行 = 勾选，拦截掉原来的「打开详情」
+    billsBody.addEventListener(
+      "click",
+      function (event) {
+        if (state.batchMode !== "records") {
+          return;
+        }
+        const row = event.target.closest("tr[data-record-id]");
+        if (!row) {
+          return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        toggleBatchRecord(row.getAttribute("data-record-id"));
+      },
+      true
+    );
+  }
+  renderCardVisibility();
+  applyCardVisibility();
+  syncThemeSetting();
+  initThemeSystemWatcher();
 }
 
 /* ==================== 三栏看板：主卡 / 预算 / 近 7 天 ==================== */
@@ -2548,6 +3202,7 @@ async function refreshDetail() {
     const data = await api("/api/records?account=" + encodeURIComponent(state.detailAccount));
     state.detailRecords = data.records || [];
     renderAccountRecords();
+    renderAccountBalanceCard();
   } finally {
     finish();
   }
@@ -3958,19 +4613,26 @@ function switchPage(page) {
 
 function readTheme() {
   const saved = localStorage.getItem(LS_THEME);
-  if (saved === "dark" || saved === "light") {
+  // v0.11.6：支持三态，system 表示跟随系统
+  if (saved === "dark" || saved === "light" || saved === "system") {
     return saved;
   }
-  // 没存过就跟随系统
-  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-    ? "dark"
-    : "light";
+  // 没存过就按「跟随系统」处理
+  return "system";
 }
 
 function applyTheme(theme) {
-  const dark = theme === "dark";
+  const setting =
+    theme === "dark" || theme === "light" || theme === "system"
+      ? theme
+      : "system";
+  const systemDark =
+    window.matchMedia &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const dark = setting === "dark" || (setting === "system" && systemDark);
   document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
-  localStorage.setItem(LS_THEME, dark ? "dark" : "light");
+  // v0.11.6：持久化的是「设置值」（light/dark/system），而不是解析后的主题
+  localStorage.setItem(LS_THEME, setting);
 
   const moon = document.querySelector(".icon-moon");
   const sun = document.querySelector(".icon-sun");
@@ -3980,6 +4642,7 @@ function applyTheme(theme) {
   if (sun) {
     sun.classList.toggle("d-none", !dark);
   }
+  syncThemeSetting();
 
   // 提示文案统一用中性的「切换深色 / 浅色模式」（见 index.html），
   // 这里绝不 dispose / 重建 Tooltip：淡出过程中销毁实例会让 Bootstrap 的
@@ -4328,6 +4991,7 @@ async function uploadShotForAi(file, index, total) {
       });
       attachBubbleRevise(bubble, recordId);
       bubbleAppendNote(bubble, aiAutoCorrectedMsg(data));
+      attachNewAccountHint(bubble, data);
     } else {
       toast("截图记账成功：" + summary, warn ? "warn" : "success");
     }
@@ -5149,7 +5813,7 @@ function bindEvents() {
     }
   });
 
-  // 资产页：点卡片看流水、点 × 删账户
+  // 资产页：点卡片看流水、点 × 删账户、点铅笔行内编辑、批量勾选
   $("account-groups").addEventListener("click", function (event) {
     const del = event.target.closest("[data-del-account]");
     if (del) {
@@ -5157,11 +5821,66 @@ function bindEvents() {
       removeAccount(del.getAttribute("data-del-account"));
       return;
     }
+    const editBtn = event.target.closest("[data-edit-account]");
+    if (editBtn) {
+      event.stopPropagation();
+      startAccountEdit(editBtn.getAttribute("data-edit-account"));
+      return;
+    }
+    const cancelBtn = event.target.closest(".account-edit-cancel");
+    if (cancelBtn) {
+      event.stopPropagation();
+      cancelAccountEdit();
+      return;
+    }
+    const saveBtn = event.target.closest(".account-edit-save");
+    if (saveBtn) {
+      event.stopPropagation();
+      const form = saveBtn.closest(".account-edit-form");
+      if (form) {
+        saveAccountEdit(form);
+      }
+      return;
+    }
+    if (event.target.closest(".account-edit-form")) {
+      return; // 编辑表单内部点击不冒泡成行点击
+    }
+    const check = event.target.closest("[data-batch-account]");
+    if (check) {
+      event.stopPropagation();
+      toggleBatchAccount(check.getAttribute("data-batch-account"));
+      return;
+    }
     const card = event.target.closest(".account-card, .account-row");
-    if (card) {
-      selectAccount(card.getAttribute("data-account")).catch(function (error) {
-        toast(error.message, "error");
-      });
+    if (!card) {
+      return;
+    }
+    // v0.11.6：批量管理态下点击行 = 勾选 / 取消勾选，不再切换流水账户
+    if (state.batchMode === "accounts") {
+      event.preventDefault();
+      toggleBatchAccount(card.getAttribute("data-account"));
+      return;
+    }
+    selectAccount(card.getAttribute("data-account")).catch(function (error) {
+      toast(error.message, "error");
+    });
+  });
+
+  // 行内编辑：Enter 保存、Esc 取消（表单内键盘事件）
+  $("account-groups").addEventListener("keydown", function (event) {
+    if (!state.editingAccount) {
+      return;
+    }
+    const form = event.target.closest(".account-edit-form");
+    if (!form) {
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelAccountEdit();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      saveAccountEdit(form);
     }
   });
 
@@ -5237,7 +5956,16 @@ function bindEvents() {
   }
   if ($("settings-btn")) {
     $("settings-btn").addEventListener("click", function () {
-      notifyComingSoon("设置");
+      // v0.11.6：设置不再是占位提示，跳到「我的」页的显示与主题卡片
+      switchPage("profile");
+      const card = $("settings-card");
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("is-flash");
+        setTimeout(function () {
+          card.classList.remove("is-flash");
+        }, 1200);
+      }
     });
   }
 
@@ -6352,6 +7080,7 @@ async function init() {
   applySidebar();
 
   bindEvents();
+  initV0116Ui();
   initTooltips();
   initDateFields();
 
@@ -6635,7 +7364,7 @@ function renderBillsTable() {
   const list = billsFilterRecords();
   renderBillsSummary(list);
   if (!list.length) {
-    tbody.innerHTML = '<tr class="bills-empty-row"><td colspan="8">没有符合条件的账单</td></tr>';
+    tbody.innerHTML = '<tr class="bills-empty-row"><td colspan="9">没有符合条件的账单</td></tr>';
     return;
   }
   const snapshots = balanceSnapshots(state.allRecords || []);
@@ -6656,7 +7385,7 @@ function renderBillsTable() {
         (collapsed ? " is-collapsed" : "") +
         '" data-bills-month-toggle="' +
         monthKey +
-        '"><td colspan="8">' +
+        '"><td colspan="9">' +
         '<span class="bills-month-caret">' +
         (collapsed ? "+" : "−") +
         "</span>" +
@@ -6680,10 +7409,21 @@ function renderBillsTable() {
       return;
     }
     const balance = snapshots[record.id];
+    const batchOn = state.batchMode === "records";
+    const batchSelected = batchOn && state.batchRecordIds.indexOf(Number(record.id)) >= 0;
     html +=
       '<tr data-record-id="' +
       record.id +
-      '">' +
+      '"' +
+      (batchOn ? ' class="is-batch' + (batchSelected ? " is-batch-selected" : "") + '"' : "") +
+      ">" +
+      (batchOn
+        ? '<td class="bills-batch-cell"><input type="checkbox" class="batch-check" data-batch-record="' +
+          record.id +
+          '"' +
+          (batchSelected ? " checked" : "") +
+          ' tabindex="-1" aria-label="选择账单"></td>'
+        : '<td class="bills-batch-cell is-batch-hidden"></td>') +
       "<td>" +
       escapeHtml(key) +
       "</td>" +
@@ -7392,6 +8132,7 @@ async function runAiStream(text, force) {
     attachBubbleRevise(bubble, recordId);
   }
   bubbleAppendNote(bubble, aiAutoCorrectedMsg(terminal));
+  attachNewAccountHint(bubble, terminal);
   refresh().catch(function () {});
 }
 
@@ -7433,6 +8174,7 @@ async function fallbackAiRequest(bubble, text, force) {
       attachBubbleRevise(bubble, recordId);
     }
     bubbleAppendNote(bubble, aiAutoCorrectedMsg(data));
+    attachNewAccountHint(bubble, data);
     refresh().catch(function () {});
   } catch (error) {
     bubbleFinish(bubble, {
