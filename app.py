@@ -1445,6 +1445,26 @@ def list_records():
     )
 
 
+@app.route("/api/search", methods=["GET"])
+def search_records_api():
+    """全局搜索（v0.11.8）：?q=关键词&limit=200，备注/分类/账户/金额随便搜。
+
+    只读接口，和账单列表一样公开；前端拿到后每 10 条一批渲染成搜索浮窗。
+    """
+    keyword = (request.args.get("q") or "").strip()
+    if not keyword:
+        return jsonify(items=[], total=0)
+    if len(keyword) > 50:
+        return jsonify(error="关键词太长了，控制在 50 字以内"), 400
+    raw_limit = request.args.get("limit", "200")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify(error="limit 必须是整数"), 400
+    items = database.search_records(keyword, limit)
+    return jsonify(items=items, total=len(items))
+
+
 @app.route("/api/records/<int:record_id>", methods=["PUT"])
 def update_record(record_id):
     """整条覆盖式更新一条账目，并修正余额。前端编辑时会把表单里的全部字段一起发上来。"""
@@ -2168,7 +2188,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.11.7-DEV"
+APP_VERSION_FALLBACK = "v0.11.8-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

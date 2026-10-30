@@ -1477,15 +1477,46 @@ async function saveAccountEdit(form) {
 
 /* ---------- 右栏账户余额卡 ---------- */
 
+/** v0.11.8：按账户名归类，给余额卡换对应品牌的渐变色 */
+function accountCardKind(name) {
+  const text = String(name || "").toLowerCase();
+  if (!text) {
+    return "default";
+  }
+  if (/微信|wechat/.test(text)) {
+    return "wechat";
+  }
+  if (/支付宝|alipay|余额宝/.test(text)) {
+    return "alipay";
+  }
+  if (/基金|投资|股票|理财/.test(text)) {
+    return "invest";
+  }
+  if (/现金|cash/.test(text)) {
+    return "cash";
+  }
+  if (/银行|卡|招行|招商|建行|工行|农行|中信|储蓄|信用/.test(text)) {
+    return "bank";
+  }
+  return "default";
+}
+
 function renderAccountBalanceCard() {
   const nameEl = $("account-balance-name");
   const valueEl = $("account-balance-value");
+  const cardEl = $("account-balance-card");
   if (!nameEl || !valueEl) {
     return;
   }
   const selected = (state.accounts || []).filter(function (item) {
     return item.name === state.detailAccount;
   })[0];
+  const kind = selected ? accountCardKind(selected.name) : "default";
+  if (cardEl) {
+    ["wechat", "alipay", "invest", "cash", "bank", "default"].forEach(function (item) {
+      cardEl.classList.toggle("is-card-" + item, item === kind);
+    });
+  }
   if (!selected) {
     nameEl.textContent = "请选择账户";
     valueEl.textContent = "¥0.00";
@@ -4425,6 +4456,11 @@ function openRecordDetail(recordId) {
     toast("找不到这条账单，可能已经被删除了", "error");
     return;
   }
+  showRecordDetail(record);
+}
+
+/** v0.11.8：拿整条记录直接开详情弹窗（全局搜索浮窗的结果可能不在首页列表里） */
+function showRecordDetail(record) {
   state.detailRecordId = record.id;
   if ($("detail-body")) {
     $("detail-body").innerHTML = buildDetailBody(record);
@@ -4740,10 +4776,234 @@ function toggleSidebar() {
 
 function onSearchInput() {
   const input = $("global-search");
-  state.searchQuery = input ? input.value || "" : "";
+  const query = input ? input.value || "" : "";
+  state.searchQuery = query;
   resetPaging();
   renderRecords();
   renderRecentGroups();
+  scheduleGlobalSearch(query);
+}
+
+/* ==================== 全局搜索浮窗（v0.11.8） ==================== */
+
+const SEARCH_BATCH_SIZE = 10;
+const SEARCH_DEBOUNCE_MS = 300;
+
+const searchPop = {
+  // 输入防抖定时器 / 请求序号 / 已渲染条数 / 全部结果 / 当前关键词
+  timer: null,
+  seq: 0,
+  rendered: 0,
+  items: [],
+  query: "",
+  observer: null,
+};
+
+function ensureSearchPopover() {
+  let pop = $("search-popover");
+  if (pop) {
+    return pop;
+  }
+  pop = document.createElement("div");
+  pop.id = "search-popover";
+  pop.className = "search-popover";
+  pop.hidden = true;
+  pop.innerHTML =
+    '<div class="search-pop-list" id="search-pop-list"></div>' +
+    '<div class="search-pop-foot" id="search-pop-foot" hidden></div>' +
+    '<div class="search-pop-sentinel" id="search-pop-sentinel" aria-hidden="true"></div>';
+  document.body.appendChild(pop);
+  return pop;
+}
+
+function closeSearchPopover() {
+  const pop = $("search-popover");
+  if (pop) {
+    pop.hidden = true;
+  }
+  if (searchPop.observer) {
+    searchPop.observer.disconnect();
+    searchPop.observer = null;
+  }
+}
+
+/** 宽度和搜索框完全一致、左对齐，贴在搜索框正下方（fixed 定位，滚动时重新贴） */
+function positionSearchPopover() {
+  const input = $("global-search");
+  const pop = $("search-popover");
+  if (!input || !pop || pop.hidden) {
+    return;
+  }
+  const rect = input.getBoundingClientRect();
+  pop.style.left = rect.left + "px";
+  pop.style.top = rect.bottom + 6 + "px";
+  pop.style.width = rect.width + "px";
+}
+
+function searchResultRow(item) {
+  const typeLabel = item.type === "income" ? "收入" : item.type === "transfer" ? "转账" : "支出";
+  const sign = item.type === "income" ? "+" : item.type === "transfer" ? "" : "-";
+  const category = item.category || "未分类";
+  const note = item.note || category;
+  return (
+    '<button type="button" class="search-pop-item" data-search-id="' + item.id + '">' +
+      '<span class="search-pop-main">' +
+        '<span class="search-pop-note">' + escapeHtml(note) + "</span>" +
+        '<span class="search-pop-meta">' + escapeHtml(category) + " · " +
+          escapeHtml(item.account || "") + " · " +
+          escapeHtml(String(item.date || "").slice(0, 10)) + "</span>" +
+      "</span>" +
+      '<span class="search-pop-side">' +
+        '<span class="search-pop-amount is-' + escapeHtml(item.type || "expense") + '">' +
+          sign + "¥" + Number(item.amount || 0).toFixed(2) +
+        "</span>" +
+        '<span class="search-pop-type">' + typeLabel + "</span>" +
+      "</span>" +
+    "</button>"
+  );
+}
+
+function renderSearchBatch() {
+  const list = $("search-pop-list");
+  if (!list) {
+    return;
+  }
+  const start = searchPop.rendered;
+  const next = searchPop.items.slice(start, start + SEARCH_BATCH_SIZE);
+  if (next.length) {
+    list.insertAdjacentHTML("beforeend", next.map(searchResultRow).join(""));
+    searchPop.rendered = start + next.length;
+  }
+  const foot = $("search-pop-foot");
+  if (foot) {
+    if (searchPop.items.length === 0) {
+      foot.hidden = false;
+      foot.textContent = "没有找到匹配的账单";
+    } else if (searchPop.rendered < searchPop.items.length) {
+      foot.hidden = false;
+      foot.textContent = "已加载 " + searchPop.rendered + " 条，继续下滑加载更多…";
+    } else {
+      foot.hidden = false;
+      foot.textContent = "已加载 " + searchPop.rendered + " / 共 " +
+        searchPop.items.length + " 条结果";
+    }
+  }
+}
+
+function watchSearchSentinel() {
+  const sentinel = $("search-pop-sentinel");
+  const pop = $("search-popover");
+  if (!sentinel || !pop) {
+    return;
+  }
+  if (searchPop.observer) {
+    searchPop.observer.disconnect();
+  }
+  if (!("IntersectionObserver" in window)) {
+    // 老浏览器兜底：监听浮窗滚动，快到底就追加一批
+    pop.addEventListener("scroll", function () {
+      if (pop.scrollTop + pop.clientHeight >= pop.scrollHeight - 24) {
+        if (searchPop.rendered < searchPop.items.length) {
+          renderSearchBatch();
+        }
+      }
+    });
+    return;
+  }
+  searchPop.observer = new IntersectionObserver(
+    function (entries) {
+      if (!entries[0] || !entries[0].isIntersecting) {
+        return;
+      }
+      if (searchPop.rendered < searchPop.items.length) {
+        renderSearchBatch();
+      }
+    },
+    { root: pop, rootMargin: "40px" }
+  );
+  searchPop.observer.observe(sentinel);
+}
+
+function runGlobalSearch(query) {
+  const keyword = String(query || "").trim();
+  if (!keyword) {
+    closeSearchPopover();
+    return;
+  }
+  const seq = ++searchPop.seq;
+  api("/api/search?q=" + encodeURIComponent(keyword) + "&limit=200")
+    .then(function (data) {
+      // 输入很快时旧请求可能后到：只认最后一次，避免把过期结果画上去
+      if (seq !== searchPop.seq) {
+        return;
+      }
+      searchPop.query = keyword;
+      searchPop.items = (data && data.items) || [];
+      searchPop.rendered = 0;
+      const list = $("search-pop-list");
+      if (list) {
+        list.innerHTML = "";
+      }
+      const pop = ensureSearchPopover();
+      pop.hidden = false;
+      positionSearchPopover();
+      renderSearchBatch();
+      watchSearchSentinel();
+    })
+    .catch(function () {
+      if (seq !== searchPop.seq) {
+        return;
+      }
+      closeSearchPopover();
+    });
+}
+
+function scheduleGlobalSearch(query) {
+  if (searchPop.timer) {
+    window.clearTimeout(searchPop.timer);
+  }
+  searchPop.timer = window.setTimeout(function () {
+    searchPop.timer = null;
+    runGlobalSearch(query);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+function initGlobalSearchPopover() {
+  const input = $("global-search");
+  if (!input) {
+    return;
+  }
+  const pop = ensureSearchPopover();
+
+  pop.addEventListener("click", function (event) {
+    const button = event.target.closest("[data-search-id]");
+    if (!button) {
+      return;
+    }
+    const id = Number(button.getAttribute("data-search-id"));
+    const record = searchPop.items.filter(function (item) {
+      return Number(item.id) === id;
+    })[0];
+    closeSearchPopover();
+    if (record) {
+      showRecordDetail(record);
+    }
+  });
+
+  // 点页面空白处关闭：点在搜索框或浮窗内部不算
+  document.addEventListener("mousedown", function (event) {
+    if (pop.hidden) {
+      return;
+    }
+    if (pop.contains(event.target) || input.contains(event.target)) {
+      return;
+    }
+    closeSearchPopover();
+  });
+
+  // 搜索框固定顶栏，窗口滚动 / 缩放时让浮窗继续贴着它
+  window.addEventListener("resize", positionSearchPopover);
+  window.addEventListener("scroll", positionSearchPopover, true);
 }
 
 /* ==================== 预算 ==================== */
@@ -5231,6 +5491,7 @@ function onGlobalKeydown(event) {
   }
 
   if (event.key === "Escape") {
+    closeSearchPopover();
     closeCtxMenu();
     if ($("fab")) {
       closeFab();
@@ -5982,6 +6243,12 @@ function bindEvents() {
 
   if ($("global-search")) {
     $("global-search").addEventListener("input", onSearchInput);
+    $("global-search").addEventListener("focus", function () {
+      if (String($("global-search").value || "").trim()) {
+        runGlobalSearch($("global-search").value);
+      }
+    });
+    initGlobalSearchPopover();
   }
 
   if ($("budget-edit-btn")) {

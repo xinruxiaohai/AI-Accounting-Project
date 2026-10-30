@@ -1318,6 +1318,41 @@ def list_records(account=None, category_id=None, parent_id=None):
         conn.close()
 
 
+def search_records(keyword, limit=200):
+    """全局搜索账目（v0.11.8）：备注 / 分类 / 账户 / 金额都能搜，最新记的排最前。
+
+    关键词只做 LIKE 包含匹配，% 和 _ 先转义掉，避免用户输入把整库匹配出来；
+    limit 夹在 1~500 之间，前端按 10 条一批自己分段渲染。
+    """
+    text = (keyword or "").strip()
+    if not text:
+        return []
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    like = "%" + escaped + "%"
+    try:
+        limit = max(1, min(500, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+
+    sql = (
+        _RECORD_SELECT
+        + " WHERE r.deleted_at IS NULL AND ("
+        + "r.note LIKE ? ESCAPE '\\' OR r.category LIKE ? ESCAPE '\\'"
+        + " OR r.account LIKE ? ESCAPE '\\' OR r.to_account LIKE ? ESCAPE '\\'"
+        + " OR CAST(r.amount AS TEXT) LIKE ? ESCAPE '\\'"
+        + ") ORDER BY r.id DESC LIMIT ?"
+    )
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, (like, like, like, like, like, limit)).fetchall()
+        records = [dict(row) for row in rows]
+        for record in records:
+            record["date"] = normalize_date(record["date"])
+        return records
+    finally:
+        conn.close()
+
+
 def list_records_with_images():
     """相册：取出所有带截图凭证的账目，最新记的排最前。
 

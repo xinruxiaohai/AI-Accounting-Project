@@ -7246,3 +7246,155 @@ html.access-locked body {
     margin: 10px 12px 2px;
   }
 }
+
+/* ==================== v0.11.8：账户余额卡按品牌渐变色 ==================== */
+
+.account-balance-card {
+  background: linear-gradient(135deg, #c6cfdc 0%, #93a1b5 55%, #6b7d94 100%);
+  color: #14202f;
+  box-shadow: 0 8px 22px rgba(107, 125, 148, 0.28);
+  transition: background 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
+}
+
+.account-balance-card .account-balance-value {
+  color: inherit;
+}
+
+.account-balance-card.is-card-wechat {
+  background: linear-gradient(135deg, #8ef0b4 0%, #34c759 55%, #1a9c4a 100%);
+  color: #06301a;
+  box-shadow: 0 8px 22px rgba(26, 156, 74, 0.3);
+}
+
+.account-balance-card.is-card-alipay {
+  background: linear-gradient(135deg, #8fd0ff 0%, #2e90fa 55%, #1668d9 100%);
+  color: #032442;
+  box-shadow: 0 8px 22px rgba(22, 104, 217, 0.3);
+}
+
+.account-balance-card.is-card-bank {
+  background: linear-gradient(135deg, #ffc2a8 0%, #f0684f 52%, #b62f22 100%);
+  color: #400b04;
+  box-shadow: 0 8px 22px rgba(182, 47, 34, 0.3);
+}
+
+.account-balance-card.is-card-cash {
+  background: linear-gradient(135deg, #ffe08a 0%, #f5c451 42%, #e6a92f 100%);
+  color: #5b3d00;
+  box-shadow: 0 8px 22px rgba(214, 158, 28, 0.28);
+}
+
+.account-balance-card.is-card-invest {
+  background: linear-gradient(135deg, #d8c4ff 0%, #a273ff 52%, #7440d6 100%);
+  color: #22003f;
+  box-shadow: 0 8px 22px rgba(116, 64, 214, 0.3);
+}
+
+/* ==================== v0.11.8：全局搜索浮窗 ==================== */
+
+.search-popover {
+  position: fixed;
+  z-index: 4000;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+}
+
+.search-popover[hidden] {
+  display: none;
+}
+
+.search-pop-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-pop-item:hover,
+.search-pop-item:focus-visible {
+  background: var(--surface-soft, rgba(15, 23, 42, 0.06));
+  outline: none;
+}
+
+.search-pop-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.search-pop-note {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-pop-meta {
+  font-size: 11.5px;
+  color: var(--text-muted, #8a8f99);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-pop-side {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+
+.search-pop-amount {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-pop-amount.is-expense {
+  color: #e5484d;
+}
+
+.search-pop-amount.is-income {
+  color: #2f9e44;
+}
+
+.search-pop-amount.is-transfer {
+  color: var(--text-main);
+}
+
+.search-pop-type {
+  font-size: 11px;
+  color: var(--text-muted, #8a8f99);
+}
+
+.search-pop-foot {
+  padding: 8px 10px 4px;
+  font-size: 11.5px;
+  color: var(--text-muted, #8a8f99);
+  text-align: center;
+}
+
+.search-pop-sentinel {
+  height: 1px;
+}
+
+[data-theme="dark"] .search-pop-item:hover,
+[data-theme="dark"] .search-pop-item:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+}
