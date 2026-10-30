@@ -6897,3 +6897,72 @@ html.access-locked body {
   }
 }
 
+/* v0.11.5：气泡正文下的灰色补充提示（AI 自动纠正 / 报销提醒） */
+.bubble-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8a8f99;
+  word-break: break-all;
+}
+
+.bubble-note + .bubble-note {
+  margin-top: 4px;
+}
+
+/* v0.11.5：/admin「AI 纠错与反馈中心」左右双栏 */
+.center-scroll {
+  max-height: 62vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.center-log-item {
+  border: 1px solid var(--border, #e6e8ee);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--card-bg, #fff);
+}
+
+.center-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted, #8a8f99);
+  margin-bottom: 6px;
+}
+
+.center-log-text {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-all;
+  margin-bottom: 6px;
+}
+
+.center-log-diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted, #8a8f99);
+}
+
+.center-log-field {
+  background: rgba(255, 193, 7, 0.12);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.center-log-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #8a8f99;
+}
+
+.center-log-conf {
+  color: #b07d00;
+}

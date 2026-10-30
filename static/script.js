@@ -4327,6 +4327,7 @@ async function uploadShotForAi(file, index, total) {
         warn: warn,
       });
       attachBubbleRevise(bubble, recordId);
+      bubbleAppendNote(bubble, aiAutoCorrectedMsg(data));
     } else {
       toast("截图记账成功：" + summary, warn ? "warn" : "success");
     }
@@ -6889,8 +6890,50 @@ function bubbleStatus(bubble, text) {
 }
 
 /**
- * 成功气泡内挂一个迷你「修改」表单（v0.11.4）
- * 用户直接在气泡里说「金额改成 30」「分类改成交通」，原地多轮改账，不用再开弹窗。
+ * v0.11.5：从任意一层数据里取 AI 模糊纠正提示，如「识别到相似账户，已自动匹配为“微信”」
+ */
+function aiAutoCorrectedMsg(data) {
+  if (!data) {
+    return "";
+  }
+  const candidates = [
+    data.auto_corrected_msg,
+    data.record && data.record.auto_corrected_msg,
+    data.payload && data.payload.auto_corrected_msg,
+    data.payload && data.payload.record && data.payload.record.auto_corrected_msg,
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const item = candidates[i];
+    if (typeof item === "string" && item.trim()) {
+      return item.trim();
+    }
+  }
+  return "";
+}
+
+/**
+ * 在气泡正文下面补一行灰色小字（自动纠正提示、报销提醒等），主文案保持一行
+ */
+function bubbleAppendNote(bubble, text) {
+  if (!bubble || bubble.removed || !bubble.element || !text) {
+    return;
+  }
+  const main = bubble.element.querySelector(".bubble-main");
+  if (!main) {
+    return;
+  }
+  let note = main.querySelector(".bubble-note");
+  if (!note) {
+    note = document.createElement("p");
+    note.className = "bubble-note";
+    main.appendChild(note);
+  }
+  note.textContent = text;
+}
+
+/**
+ * 成功气泡内挂一个迷你「修改」表单（v0.11.4，v0.11.5 升级）
+ * 用户直接在气泡里说「改成微信零钱，金额 50」，后端拿原账单完整 JSON 让 AI 全量覆盖。
  */
 function attachBubbleRevise(bubble, recordId) {
   if (!bubble || bubble.removed || !recordId || !bubble.element) {
@@ -6912,7 +6955,7 @@ function attachBubbleRevise(bubble, recordId) {
   const form = document.createElement("div");
   form.className = "bubble-revise";
   form.innerHTML =
-    '<input class="bubble-revise-input" type="text" maxlength="200" placeholder="分类不对？直接改，如：改成交通">' +
+    '<input class="bubble-revise-input" type="text" maxlength="200" placeholder="哪里不对直接说，如：改成微信零钱，金额 50">' +
     '<button class="bubble-revise-btn" type="button">修改</button>' +
     '<p class="bubble-revise-error" hidden></p>';
   main.appendChild(form);
@@ -6937,24 +6980,16 @@ function attachBubbleRevise(bubble, recordId) {
       input.focus();
       return;
     }
-    // 只取分类名：用户常说「改成交通」「分类改为餐饮」，前缀剥掉再提交
-    const corrected = extractCorrectedCategory(text);
     button.disabled = true;
     button.textContent = "提交中";
     errorElement.hidden = true;
     errorElement.textContent = "";
     try {
-      if (!corrected) {
-        throw new Error("没听出要改成哪个分类，直接输入分类名试试");
-      }
-      const current = findRecordById(targetId) || {};
+      // v0.11.5：气泡内多轮纠错走自然语言接口——后端把原账单完整 JSON 交给 AI，
+      // 要求未提及的字段继承原值，拿到完整 JSON 后全量 UPDATE（账户余额自动回滚/重算）
       const data = await apiRecordRequest(
-        "/api/records/" + targetId + "/correction",
-        jsonOptions("POST", {
-          corrected_category: corrected,
-          original_text: text,
-          raw_category: current.category || "",
-        })
+        "/api/records/" + targetId + "/ai-revise",
+        jsonOptions("POST", { text: text })
       );
       const record = (data && data.record) || {};
       const updatedId = (data && data.id) || record.id || targetId;
@@ -6967,11 +7002,15 @@ function attachBubbleRevise(bubble, recordId) {
       if (titleElement) {
         titleElement.textContent = "已更新这笔账";
       }
-      // 文案用后端记录里的新分类，拿不到就用用户输入的分类名
-      const finalCategory = record.category || corrected;
-      bubbleWriteText(bubble, "已改为 " + finalCategory + "（已记入 AI 记忆）", false);
+      const summary = aiRecordSummary(record) || "已按你说的改好";
+      bubbleWriteText(bubble, "已更新为 " + summary, false);
+      bubbleAppendNote(bubble, aiAutoCorrectedMsg(data));
+      const warnings = (data && data.warnings) || [];
+      if (warnings.length) {
+        bubbleAppendNote(bubble, warnings.join("；"));
+      }
       input.value = "";
-      toast("已改为 " + finalCategory + "，下次 AI 会参考", "success");
+      toast("已更新为 " + summary, "success");
       refresh().catch(function () {});
     } catch (error) {
       errorElement.hidden = false;
@@ -7352,6 +7391,7 @@ async function runAiStream(text, force) {
   if (action === "record") {
     attachBubbleRevise(bubble, recordId);
   }
+  bubbleAppendNote(bubble, aiAutoCorrectedMsg(terminal));
   refresh().catch(function () {});
 }
 
@@ -7392,6 +7432,7 @@ async function fallbackAiRequest(bubble, text, force) {
     if (action === "record") {
       attachBubbleRevise(bubble, recordId);
     }
+    bubbleAppendNote(bubble, aiAutoCorrectedMsg(data));
     refresh().catch(function () {});
   } catch (error) {
     bubbleFinish(bubble, {

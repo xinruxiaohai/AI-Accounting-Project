@@ -349,3 +349,13 @@ AI 预处理层：ai_service 新增 CATEGORY_MAPPING（滴滴/打撤→交通、
 AI 记忆库：新建 ai_memory 表（original_text / raw_category / corrected_category / note / created_at），纠错成功即落一条，解析前取最近 3 条注入 Prompt；/admin 新增「AI 纠错记忆」Tab，可查看、手动补一条、删除。
 
 踩坑与验证：本机沙箱一度把项目目录设成只读（写 records.db 报 readonly），端到端测试前必须先确认目录可写；纠错接口返回记忆对象形如 {"memory":..,"record":..}，而 /api/ai-memory POST 直接返回记忆本体，前端两个调用要分开解析。后端脚本 14/14 通过（三文件语法、首页与管理页 200 且新弹窗/多选结构命中、ai_memory 增删查、纠错接口 其他→交通且写记忆、防重命中与不同金额不命中、分类映射、confidence 夹取），node --check 通过，测试数据全部按唯一备注清理、数据库回到原状；未做真实浏览器点测（本机未起服务）。
+
+v0.11.5-DEV 2026-10-30 AI 账户/联系人精准匹配 / 气泡多轮全量覆盖 / 纠错反馈中心
+
+三模块一起封版。AI 精准度：ai_service 把数据库里真实存在的账户与联系人清单注入 Prompt，明确要求「用户提到具体子账户（微信零钱、支付宝余额、招行卡尾号1234）时原样保留、不要向上合并」；新增 difflib 模糊匹配（阈值 0.8）与 ACCOUNT_ALIASES 别名表（威信/薇信/维信/威信支付→微信、银行/银行卡支付→银行卡、支付宝账户→支付宝），归一化阶段把账户名与联系人名强制换成库中真名，并返回 auto_corrected / auto_corrected_msg（如「识别到相似账户，已自动匹配为「微信」」）；解析前用用户这句话的关键词去 ai_memory 做模糊匹配取 Top 3 注入 Prompt，当 few-shot 参考。
+
+气泡多轮纠错彻底重做：带 previous_record_id 时不再只给 9 个字段的快照，而是把原账单完整 JSON（含报销字段）交给 AI，Prompt 明确「用户没提到的字段必须继承原值、返回完整 JSON」；新增 POST /api/records/<id>/ai-revise，后端拿 AI 返回的完整 JSON 执行全量 UPDATE，余额由 update_record 内部「先撤旧账 → 校验新账 → 落新账」保证——「微信 → 微信零钱」「30 → 50」时两个账户的余额都正确回滚/扣除；报销字段同步更新，分类被改动时写 ai_memory，并把改前/改后快照写进新表 ai_correction_log。
+
+前端与后台：气泡收到 auto_corrected_msg 用灰色小字展示，confidence<80 保持黄牌提示核对；气泡内迷你输入框从「只改分类」升级为自然语言改任意字段，改调 /ai-revise，成功后展示新的账单摘要；/admin 新增「AI 纠错与反馈中心」Tab，左栏 ai_memory 记录可滚动、可删除，右栏近期纠错审计按字段展示改前 → 改后差异与置信度，两个列表串行加载避免并发压库。
+
+踩坑与验证：别名表替换必须放在「子账户后缀」判断之后并校验品牌是否本来就写对，否则「微信零钱通」会被别名表吞成「微信」；parse_intent 新增的 accounts/contacts 参数必须在 /ai、/ai/stream、/ai/image、/ai-revise 四处都传，漏一处就整条链路失去纠正；防重逻辑会干扰测试，mock 解析后要先把测试账单撤掉再测 /api/records/ai。后端脚本 17/17 通过（Prompt 注入账户列表与 few-shot、威信零钱通→微信且带提示语、微信零钱不被误吞、confidence 透传、ai-revise 全量覆盖 30→50 且微信/微信零钱余额双向回滚、审计日志写入与接口可用、AI 接口透传 auto_corrected_msg、清理后余额复原），node --check 与 py_compile 通过；真实模型三场景联调全部 PASS（「用微信零钱付午饭30」→ 餐饮 30 微信 置信度 95；「用威信零钱通付午饭30」→ 强制纠正为微信并带「识别到相似账户，已自动匹配为「微信」」；带原账单「改成微信零钱，金额50」→ 金额 50、账户微信零钱、分类/备注继承原值）。

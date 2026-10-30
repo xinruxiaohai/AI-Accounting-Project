@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.11.4">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.5">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -612,6 +612,9 @@
       <!-- v0.11.4：ai_memory 纠错记忆，解析前取最近 3 条注入 Prompt -->
       <button type="button" class="admin-tab" role="tab" data-tab="memory"
               aria-selected="false">AI 记忆库</button>
+      <!-- v0.11.5：左框 ai_memory、右框纠错审计日志（改前/改后对比） -->
+      <button type="button" class="admin-tab" role="tab" data-tab="center"
+              aria-selected="false">AI 纠错与反馈中心</button>
     </div>
 
     <section id="pane-notices">
@@ -745,6 +748,44 @@
         <div id="memory-list"></div>
       </div>
     </section>
+
+    <!-- AI 纠错与反馈中心（v0.11.5）：左 ai_memory 可滚动可删，右近期纠错审计（改前/改后） -->
+    <section id="pane-center" hidden>
+      <div class="admin-grid">
+        <section>
+          <div class="admin-card">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <h2 class="admin-card-title mb-0">
+                AI 记忆库（Few-Shot）
+                <span class="badge text-bg-secondary" id="center-memory-total">0</span>
+              </h2>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-memory-refresh">刷新</button>
+            </div>
+            <p class="admin-hint">
+              每次 AI 解析前，会按用户这句话的关键词从表里模糊匹配最近 3 条注入 Prompt 当 few-shot。
+              删掉某条后，下次解析立刻不再参考它。
+            </p>
+            <div class="center-scroll" id="center-memory-list"></div>
+          </div>
+        </section>
+        <section>
+          <div class="admin-card">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <h2 class="admin-card-title mb-0">
+                近期纠错审计
+                <span class="badge text-bg-secondary" id="center-log-total">0</span>
+              </h2>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-log-refresh">刷新</button>
+            </div>
+            <p class="admin-hint">
+              气泡里说「改成微信零钱，金额 50」、详情点「AI 纠错」都会留一条审计；
+              这里展示改前 → 改后的字段差异，方便排查 AI 到底改对了没有。
+            </p>
+            <div class="center-scroll" id="center-log-list"></div>
+          </div>
+        </section>
+      </div>
+    </section>
   </main>
 
   <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
@@ -826,7 +867,7 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/access-guard.js?v=0.11.4"></script>
+  <script src="/static/access-guard.js?v=0.11.5"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1710,9 +1751,11 @@
         $("pane-notices").hidden = name !== "notices";
         $("pane-feedback").hidden = name !== "feedback";
         $("pane-memory").hidden = name !== "memory";
+        $("pane-center").hidden = name !== "center";
         // 第一次进反馈 / 记忆 Tab 才拉数据，避免每次进 /admin 都多打一个请求
         if (name === "feedback" && !state.loaded) { loadFeedback(); }
         if (name === "memory" && !memoryState.loaded) { loadMemory(); }
+        if (name === "center" && !centerState.loaded) { loadCenter(); }
       }
 
       tabs.forEach(function (tab) {
@@ -1889,6 +1932,157 @@
           .then(function () {
             toast("记忆 #" + id + " 已删除，下次解析不再参考");
             return loadMemory();
+          })
+          .catch(function (error) {
+            button.disabled = false;
+            toast(error.message, true);
+          });
+      });
+
+      /* ---------- AI 纠错与反馈中心（v0.11.5） ---------- */
+
+      var centerState = { memories: [], logs: [], loaded: false, loading: false };
+
+      var AUDIT_FIELDS = [
+        ["amount", "金额"],
+        ["type", "类型"],
+        ["category", "分类"],
+        ["account", "账户"],
+        ["to_account", "转入账户"],
+        ["fee", "手续费"],
+        ["date", "日期"],
+        ["note", "备注"],
+        ["is_reimbursable", "报销"],
+        ["reimbursement_contact_name", "报销人"]
+      ];
+
+      var TYPE_LABELS = { expense: "支出", income: "收入", transfer: "转账" };
+
+      function auditValue(field, value) {
+        if (value == null || value === "") { return "—"; }
+        if (field === "type") { return TYPE_LABELS[value] || String(value); }
+        if (field === "is_reimbursable") { return value ? "是" : "否"; }
+        if (field === "amount" || field === "fee") {
+          var number = Number(value);
+          return isNaN(number) ? String(value) : "¥" + number.toFixed(2);
+        }
+        return String(value);
+      }
+
+      function renderCenterMemories() {
+        var box = $("center-memory-list");
+        $("center-memory-total").textContent = String(centerState.memories.length);
+        if (!centerState.memories.length) {
+          box.innerHTML = '<div class="admin-empty">还没有纠错记忆。记账气泡里说「改成微信零钱」或详情点「AI 纠错」后，这里就会出现一条。</div>';
+          return;
+        }
+        box.innerHTML = centerState.memories.map(function (item) {
+          var created = item.created_at ? String(item.created_at).slice(0, 16) : "";
+          return (
+            '<div class="center-log-item">' +
+              '<div class="center-log-head">' +
+                "<span>#" + item.id + (created ? " · " + escapeHtml(created) : "") + "</span>" +
+                '<button type="button" class="btn btn-sm btn-outline-danger" data-condition-delete-memory="' + item.id + '">删除</button>' +
+              "</div>" +
+              '<div class="center-log-text">' + escapeHtml(item.original_text || "—") + "</div>" +
+              '<div class="center-log-diff">' +
+                escapeHtml(item.raw_category || "—") + " → " +
+                '<strong>' + escapeHtml(item.corrected_category || "—") + "</strong>" +
+                (item.note ? "（" + escapeHtml(item.note) + "）" : "") +
+              "</div>" +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function renderCenterLogs() {
+        var box = $("center-log-list");
+        $("center-log-total").textContent = String(centerState.logs.length);
+        if (!centerState.logs.length) {
+          box.innerHTML = '<div class="admin-empty">还没有纠错记录。AI 记账后在气泡里改一句、或在详情点「AI 纠错」，这里就会留一条审计。</div>';
+          return;
+        }
+        box.innerHTML = centerState.logs.map(function (log) {
+          var before = log.before || {};
+          var after = log.after || {};
+          var diffs = [];
+          AUDIT_FIELDS.forEach(function (pair) {
+            var key = pair[0];
+            var label = pair[1];
+            var oldValue = auditValue(key, before[key]);
+            var newValue = auditValue(key, after[key]);
+            if (oldValue !== newValue) {
+              diffs.push(
+                '<span class="center-log-field">' + label + "：" +
+                escapeHtml(oldValue) + " → <strong>" + escapeHtml(newValue) + "</strong></span>"
+              );
+            }
+          });
+          var created = log.created_at ? String(log.created_at).slice(0, 16) : "";
+          var sourceLabel = { bubble: "气泡纠错", detail: "详情纠错", ai: "AI 补改" }[log.source] || (log.source || "纠错");
+          return (
+            '<div class="center-log-item">' +
+              '<div class="center-log-head">' +
+                "<span>账单 #" + (log.record_id == null ? "—" : log.record_id) +
+                  " · " + escapeHtml(sourceLabel) + (created ? " · " + escapeHtml(created) : "") + "</span>" +
+                (log.confidence == null ? "" : '<span class="center-log-conf">置信度 ' + escapeHtml(String(log.confidence)) + "%</span>") +
+              "</div>" +
+              '<div class="center-log-text">' + escapeHtml(log.original_text || "（无原话）") + "</div>" +
+              (diffs.length
+                ? '<div class="center-log-diff">' + diffs.join("") + "</div>"
+                : '<div class="center-log-diff text-muted">字段没有变化</div>') +
+              (log.auto_corrected_msg
+                ? '<div class="center-log-note">' + escapeHtml(log.auto_corrected_msg) + "</div>"
+                : "") +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function loadCenter() {
+        if (centerState.loading) { return Promise.resolve(); }
+        centerState.loading = true;
+        // 串行拉两次：先记忆库、后审计日志，避免并发把后台数据库压出锁
+        return request("/api/ai-memory?limit=100")
+          .then(function (data) {
+            centerState.memories = data.items || [];
+            return request("/api/ai-correction-log?limit=50");
+          })
+          .then(function (data) {
+            centerState.logs = data.items || [];
+            centerState.loaded = true;
+            renderCenterMemories();
+            renderCenterLogs();
+          })
+          .catch(function (error) {
+            $("center-memory-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+            $("center-log-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () { centerState.loading = false; });
+      }
+
+      $("center-memory-refresh").addEventListener("click", function () {
+        centerState.loaded = false;
+        loadCenter().then(function () { toast("记忆库已刷新"); });
+      });
+
+      $("center-log-refresh").addEventListener("click", function () {
+        centerState.loaded = false;
+        loadCenter().then(function () { toast("纠错审计已刷新"); });
+      });
+
+      $("center-memory-list").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-condition-delete-memory]");
+        if (!button) { return; }
+        var id = button.getAttribute("data-condition-delete-memory");
+        button.disabled = true;
+        request("/api/ai-memory/" + id, { method: "DELETE" })
+          .then(function () {
+            toast("记忆 #" + id + " 已删除，下次解析不再参考");
+            centerState.loaded = false;
+            return loadCenter();
           })
           .catch(function (error) {
             button.disabled = false;

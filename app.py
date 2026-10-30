@@ -50,6 +50,8 @@ ACCESS_PROTECTED_PREFIXES = (
     "/api/upload",
     # v0.11.4：AI 记忆库属于后台管理数据，只有管理端看得到
     "/api/ai-memory",
+    # v0.11.5：AI 纠错审计日志同样只在后台「纠错与反馈中心」展示
+    "/api/ai-correction-log",
 )
 
 
@@ -329,12 +331,91 @@ AI_ACTION_MESSAGES = {
 # ---------------- v0.11.4：AI 记忆库 / 补充修改 / 防重 ----------------
 
 
-def _recent_ai_memories(limit=3):
-    """最近几条人工纠错，解析前当 few-shot 注入 Prompt；读库失败就当没有记忆。"""
+def _ai_account_names():
+    """库里真实存在的账户名（v0.11.5）：注入 Prompt，并在 AI 返回后做 difflib 纠正。"""
     try:
-        return database.list_recent_ai_memories(limit)
-    except Exception:  # noqa: BLE001 - 记忆只是锦上添花，坏了不能影响记账
+        return [item["name"] for item in database.list_accounts() if item.get("name")]
+    except Exception:  # noqa: BLE001 - 账户读失败不能影响 AI 解析本身
         return []
+
+
+def _ai_contact_names():
+    """库里真实存在的联系人姓名，用于借贷/报销对象的模糊匹配。"""
+    try:
+        return [item["name"] for item in database.list_contacts() if item.get("name")]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _memory_hints(text):
+    """按用户这次说的话，从 ai_memory 里挑最相关的 3 条当 few-shot（v0.11.5 RAG）。
+
+    读库失败就退化成「没有记忆」，绝不能因为记忆库坏了导致记不了账。
+    """
+    try:
+        return database.search_ai_memories(text, 3)
+    except Exception:  # noqa: BLE001
+        try:
+            return database.list_recent_ai_memories(3)
+        except Exception:  # noqa: BLE001
+            return []
+
+
+# ---------------- AI 纠错审计日志（v0.11.5） ----------------
+
+# 审计对比只保留用户看得懂的字段，余额、内部 id 之类的噪音不写进日志
+AUDIT_FIELDS = (
+    "amount",
+    "type",
+    "category",
+    "account",
+    "to_account",
+    "fee",
+    "date",
+    "note",
+    "is_reimbursable",
+    "reimbursement_contact_name",
+)
+
+
+def _record_snapshot(record):
+    """把一条账单裁成审计用的「改前/改后」快照；None 原样返回。"""
+    if not record:
+        return None
+    snapshot = {}
+    for key in AUDIT_FIELDS:
+        if key in record:
+            snapshot[key] = record.get(key)
+    return snapshot
+
+
+def _log_ai_correction(record_id, before, text, source, parsed=None):
+    """写一条纠错审计日志；写失败只影响后台展示，不影响已经成功的账单更新。"""
+    try:
+        fresh = database.get_record(record_id)
+    except Exception:  # noqa: BLE001
+        fresh = None
+    try:
+        database.add_ai_correction_log(
+            record_id,
+            _record_snapshot(before),
+            _record_snapshot(fresh),
+            original_text=text or "",
+            source=source,
+            confidence=(parsed or {}).get("confidence"),
+            auto_corrected_msg=(parsed or {}).get("auto_corrected_msg") or "",
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _attach_auto_corrected(body, parsed):
+    """把模糊纠正结果挂到响应体上，前端据此在气泡里显示灰色小字提示。"""
+    if not isinstance(body, dict):
+        return body
+    body["auto_corrected"] = parsed.get("auto_corrected") or []
+    body["auto_corrected_msg"] = parsed.get("auto_corrected_msg") or ""
+    return body
 
 
 def _previous_record(data):
@@ -364,9 +445,23 @@ def _duplicate_candidate(parsed, account="", note="", exclude_id=None):
     )
 
 
-def _apply_ai_correction(previous_record, parsed, text):
-    """AI 补充修改原账单：覆盖原数据而不是新建，分类变了就顺手记一条记忆。"""
+def _apply_ai_correction(previous_record, parsed, text, source="ai"):
+    """AI 补充修改原账单（v0.11.5 全量覆盖）：按 AI 返回的完整 JSON 覆盖更新，并回滚/重算余额。
+
+    和 v0.11.4 的区别：
+    - AI 这次拿到的是原账单**完整** JSON，要求没提到的字段继承原值、返回完整 JSON；
+    - 这里按完整 JSON 做全量 UPDATE（含报销字段），不再只更新分类/金额两三个字段；
+    - 余额由 database.update_record 内部「先撤旧账 → 校验新账 → 落新账」保证，
+      「微信 → 微信零钱」「30 → 50」时两个账户的余额都会被正确回滚/扣除；
+    - 更新前后各拍一张快照写进 ai_correction_log，后台可以看改前/改后对比。
+    """
+    record_id = previous_record["id"]
     record_type = parsed.get("type") or previous_record.get("type") or database.DEFAULT_TYPE
+
+    amount = parsed.get("amount")
+    if amount is None:
+        amount = previous_record.get("amount")
+
     category = parsed.get("category") or previous_record.get("category") or "其他"
     category_id = previous_record.get("category_id")
     if record_type in ("expense", "income"):
@@ -374,12 +469,9 @@ def _apply_ai_correction(previous_record, parsed, text):
             category_id = database.ensure_category(category)["id"]
         except database.RecordError:
             category_id = None
-    elif record_type == "transfer":
+    else:
         category_id = None
 
-    amount = parsed.get("amount")
-    if amount is None:
-        amount = previous_record.get("amount")
     date = parsed.get("date") or previous_record.get("date")
     note = parsed.get("note")
     if note is None:
@@ -392,8 +484,35 @@ def _apply_ai_correction(previous_record, parsed, text):
     if fee is None:
         fee = previous_record.get("fee") or 0
 
+    # 报销字段：AI 提到就按它的，没提就继承原账单（不允许一句话把报销标记弄丢）
+    if "is_reimbursable" in parsed:
+        is_reimbursable = bool(parsed.get("is_reimbursable"))
+    else:
+        is_reimbursable = bool(previous_record.get("is_reimbursable"))
+    contact_name = (parsed.get("contact_name") or "").strip()
+    if not contact_name:
+        contact_name = (previous_record.get("reimbursement_contact_name") or "").strip()
+    contact_id = previous_record.get("reimbursement_contact_id")
+    warnings = []
+    created_contact = None
+    if record_type == "expense" and is_reimbursable:
+        if contact_name:
+            contact, created, error_message = _find_or_create_contact(contact_name)
+            if error_message is not None:
+                return {"error": error_message}, 400
+            if created:
+                created_contact = contact
+            contact_id = contact["id"]
+        elif not contact_id:
+            # 想报销但原账单也没报销人：先按普通记账更新，明确告诉用户去补报销人
+            is_reimbursable = False
+            warnings.append("没有识别到报销人，这笔账先按普通支出处理，可在详情里补设报销人")
+    else:
+        is_reimbursable = False
+        contact_id = None
+
     updated, error_message = database.update_record(
-        previous_record["id"],
+        record_id,
         amount,
         category,
         note or "",
@@ -406,9 +525,29 @@ def _apply_ai_correction(previous_record, parsed, text):
         fee or 0,
     )
     if error_message is not None:
+        if created_contact is not None:
+            database.delete_contact(created_contact["id"])
         return {"error": error_message}, 400
     if not updated:
+        if created_contact is not None:
+            database.delete_contact(created_contact["id"])
         return {"error": "原账单不存在（可能已被删除）"}, 404
+
+    # 报销是独立的一张表字段，update_record 不碰它，这里单独同步
+    try:
+        if record_type == "expense" and is_reimbursable and contact_id:
+            already = float(previous_record.get("reimbursed_amount") or 0)
+            database.set_record_reimbursement(
+                record_id,
+                True,
+                contact_id,
+                total_reimbursement=amount,
+                reimbursed_amount=min(already, float(amount)),
+            )
+        else:
+            database.set_record_reimbursement(record_id, False)
+    except database.RecordError as exc:
+        warnings.append("报销信息未更新：%s" % exc)
 
     # 分类被纠正了就写进记忆库：下次遇到同样说法的商户，AI 会按新分类来
     if (
@@ -425,16 +564,22 @@ def _apply_ai_correction(previous_record, parsed, text):
         except database.RecordError:
             pass
 
-    fresh = database.get_record(previous_record["id"])
-    return {
-        "id": previous_record["id"],
+    _log_ai_correction(record_id, previous_record, text, source, parsed)
+
+    fresh = database.get_record(record_id)
+    body = {
+        "id": record_id,
         "source": "ai",
         "action": "record",
         "updated": True,
         "text": text.strip(),
         "record": fresh,
         "confidence": parsed.get("confidence"),
-    }, 200
+    }
+    body = _attach_auto_corrected(body, parsed)
+    if warnings:
+        body["warnings"] = warnings
+    return body, 200
 
 
 def _apply_ai_intent(parsed, text):
@@ -524,6 +669,7 @@ def _apply_ai_intent(parsed, text):
             "text": text.strip(),
             "record": {key: value for key, value in parsed.items() if key != "action"},
         }
+        body = _attach_auto_corrected(body, parsed)
         if reimbursement is not None:
             body["reimbursement"] = reimbursement
         return body, 201
@@ -598,7 +744,9 @@ def create_record_by_ai():
         parsed = ai_service.parse_intent(
             text,
             previous_record=previous_record,
-            memories=_recent_ai_memories(),
+            memories=_memory_hints(text),
+            accounts=_ai_account_names(),
+            contacts=_ai_contact_names(),
         )
     except ai_service.AIServiceError as exc:
         # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
@@ -627,6 +775,7 @@ def create_record_by_ai():
     body, status = _apply_ai_intent(parsed, text)
     if status < 400:
         body["confidence"] = parsed.get("confidence")
+        body = _attach_auto_corrected(body, parsed)
     return jsonify(body), status
 
 
@@ -662,7 +811,9 @@ def create_record_by_ai_stream():
                 parsed = ai_service.parse_intent(
                     text,
                     previous_record=previous_record,
-                    memories=_recent_ai_memories(),
+                    memories=_memory_hints(text),
+                    accounts=_ai_account_names(),
+                    contacts=_ai_contact_names(),
                 )
             except ai_service.AIServiceError as exc:
                 yield event({"status": "error", "action": "unknown", "msg": str(exc), "message": str(exc)})
@@ -846,7 +997,9 @@ def create_record_by_ai_image():
         parsed = ai_service.parse_image(
             image,
             mime or ai_service.IMAGE_MIME_FALLBACK,
-            memories=_recent_ai_memories(),
+            memories=_memory_hints(""),
+            accounts=_ai_account_names(),
+            contacts=_ai_contact_names(),
         )
     except ai_service.AIServiceError as exc:
         # 密钥失效 / 超时 / 模型返回坏 JSON 都算上游失败，502 让前端提示重试
@@ -1043,7 +1196,54 @@ def correct_record_category(record_id):
     if not updated:
         return jsonify(error="账目不存在（可能已被删除）"), 404
 
+    _log_ai_correction(
+        record_id,
+        record,
+        original_text,
+        "detail",
+        {"category": category["name"], "raw_category": raw_category},
+    )
     return jsonify(memory=memory, record=database.get_record(record_id))
+
+
+@app.route("/api/records/<int:record_id>/ai-revise", methods=["POST"])
+def revise_record_by_ai(record_id):
+    """气泡里继续聊：「改成微信零钱，金额 50」。
+
+    v0.11.5 的多轮纠错彻底方案：
+    - 把原账单**完整** JSON 交给 AI，明确要求「未提到的字段继承原值、返回完整 JSON」；
+    - 后端按 AI 返回的完整 JSON 全量 UPDATE，账户余额由 update_record 先撤旧账再落新账，
+      「微信 -> 微信零钱」时两个账户的余额都会被正确回滚 / 扣除；
+    - 和 /correction 的分工：/correction 是详情弹窗里用户直接选标准分类，
+      这里是自然语言改任意字段。
+    """
+    record = database.get_record(record_id)
+    if record is None:
+        return jsonify(error="账单不存在（可能已被删除）"), 404
+
+    data = request.get_json(silent=True) or {}
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(error="先说说要改成什么，比如「改成微信零钱，金额 50」"), 400
+
+    try:
+        parsed = ai_service.parse_intent(
+            text.strip(),
+            previous_record=record,
+            memories=_memory_hints(text),
+            accounts=_ai_account_names(),
+            contacts=_ai_contact_names(),
+        )
+    except ai_service.AIServiceError as exc:
+        return jsonify(error=str(exc)), 502
+
+    if parsed["action"] != "record":
+        return jsonify(error="没听懂要改成什么，请直接说「改成微信零钱，金额 50」"), 400
+
+    body, status = _apply_ai_correction(record, parsed, text, source="bubble")
+    if status >= 400:
+        return jsonify(body), status
+    return jsonify(body), 200
 
 
 @app.route("/api/records/duplicate-check", methods=["GET"])
@@ -1105,6 +1305,18 @@ def create_ai_memory():
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(memory), 201
+
+
+@app.route("/api/ai-correction-log", methods=["GET"])
+def list_ai_correction_log():
+    """后台右栏：最近的 AI 纠错审计日志（新的在前），?limit=N 控制条数（1~200）。"""
+    raw_limit = request.args.get("limit", "30")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError):
+        return jsonify(error="limit 必须是整数"), 400
+    items = database.list_ai_correction_logs(limit)
+    return jsonify(items=items, total=len(items))
 
 
 @app.route("/api/ai-memory/<int:memory_id>", methods=["DELETE"])
@@ -1758,7 +1970,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.11.4-DEV"
+APP_VERSION_FALLBACK = "v0.11.5-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

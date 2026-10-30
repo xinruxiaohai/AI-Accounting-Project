@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import os
 import re
@@ -81,6 +82,26 @@ CATEGORY_MAPPING = {
     "话费": "居住",
     "物业": "居住",
 }
+
+# v0.11.5 账户 / 联系人模糊匹配：模型常把用户口语里的叫法原样返回
+# （「威信零钱通」「支付宝余额」），这里在归一化阶段跟库里的真实名字比对。
+# 规则顺序很重要：先认精确同名 → 再认「子账户后缀」→ 再认常见错字别名 → 最后才用 difflib。
+FUZZY_CUTOFF = 0.8
+# 支付账户的常见子账户后缀，长后缀放前面，避免「零钱通」被「零钱」先截断
+ACCOUNT_SUFFIXES = ("零钱通", "零钱", "钱包", "余额宝", "余额", "支付", "账户")
+# 常见同音错字 / 口语叫法 → 标准账户名；只做「账户品牌」层面的替换，
+# 不影响「微信零钱」这种品牌写对了、只是多了子账户后缀的情况。
+ACCOUNT_ALIASES = {
+    "威信": "微信",
+    "薇信": "微信",
+    "维信": "微信",
+    "威信支付": "微信",
+    "微信支付": "微信",
+    "支付宝账户": "支付宝",
+    "银行": "银行卡",
+    "银行卡支付": "银行卡",
+}
+CONTACT_FUZZY_CUTOFF = 0.8
 
 # 模型可能写中文，统一映射到数据库的 lend / borrow
 DEBT_TYPE_ALIASES = {
@@ -147,6 +168,7 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 【record 规则】
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
 - 分类必须是标准分类名（交通/餐饮/购物/居住/工资/其他 等），绝对不要把商户名当分类（「滴滴」「星巴克」是商户，不是分类）。
+- 账户（v0.11.5）：account 优先从 Prompt 末尾的【用户真实账户列表】里选；用户说的是具体子账户（「微信零钱」「支付宝余额」「招行卡尾号1234」）时原样保留，不要向上合并成大类账户；用户说的是账户名的错别字/同音字（「威信」「薇信」）也先原样输出，后端会统一纠正并提示。
 - 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
 - 时间：今天是 {today}（{weekday}），当前时间 {now}；「昨天/前天/上周五」换算成具体日期；没提时间用 {now}；只提日期时刻填 00:00。
 - 报销（代买/垫付）：用户替别人或公司花钱、之后要收回来时，is_reimbursable 填 true；
@@ -228,7 +250,7 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 【类型与分类】
 - 「支付/付款/消费/买了」→ expense；「收款/退款/红包/工资到账」→ income（金额填正数）；「转给/转到」→ transfer。
 - 分类按商户判断：麦当劳/奶茶/咖啡/外卖/餐厅 → 餐饮；滴滴/地铁/公交/加油 → 交通；超市/淘宝/京东/日用品 → 购物；房租/水电/话费 → 居住；判断不了填 "其他"。
-- account：截图里出现的付款方式（零钱、余额、招商银行储蓄卡、花呗）能映射成账户名就填，判断不了填空字符串。
+- account：截图里出现的付款方式（零钱、余额、招商银行储蓄卡、花呗）能映射成账户名就填，判断不了填空字符串；用户库里已有具体子账户时（微信零钱、支付宝余额）原样保留，不要合并成「微信」「支付宝」。
 
 【时间】
 - 截图里有交易时间就用它；只有日期填 00:00；完全没有时间用当前时间 __NOW__（今天 __TODAY__）。
@@ -362,6 +384,93 @@ def _client(timeout: float = REQUEST_TIMEOUT) -> OpenAI:
     return OpenAI(api_key=key, base_url=BASE_URL, timeout=timeout)
 
 
+def _compact_name(value: Any) -> str:
+    """去掉空白/连字符/括号等装饰字符，只留可比较的名字主体。"""
+    return re.sub(r"[\s\-_·（）()【】\[\]、,，.。]+", "", _as_text(value))
+
+
+def _account_base(name: str) -> tuple[str, str]:
+    """把「微信零钱通」拆成 (品牌「微信」, 后缀「零钱通」)；没有后缀时 suffix 为空。"""
+    compact = _compact_name(name)
+    for suffix in ACCOUNT_SUFFIXES:
+        if compact.endswith(suffix) and len(compact) > len(suffix):
+            return compact[: -len(suffix)], suffix
+    return compact, ""
+
+
+def _closest_name(name: str, candidates: list[str], cutoff: float = FUZZY_CUTOFF) -> str:
+    """返回 candidates 里与 name 相似度最高且 >= cutoff 的那个，没有就返回空串。"""
+    target = _compact_name(name)
+    if not target:
+        return ""
+    best_name = ""
+    best_ratio = 0.0
+    for candidate in candidates:
+        current = _compact_name(candidate)
+        if not current:
+            continue
+        ratio = difflib.SequenceMatcher(None, target, current).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_name = candidate
+    return best_name if best_ratio >= cutoff else ""
+
+
+def _match_account(name: Any, accounts: Optional[list[str]]) -> tuple[str, bool]:
+    """把 AI 抽到的账户名对齐到库里的真实账户，返回 (最终名字, 是否被纠正)。
+
+    规则顺序（很重要，别随便调）：
+    1. 一字不差 → 原样返回，不算纠正；
+    2. 品牌写对、只是多了子账户后缀（微信零钱 / 支付宝余额）→ 保留子账户名，
+       这是用户真实在用的具体账户，不该被强行吞成大类账户；
+    3. 品牌本身是错字/同音（威信）→ 换成标准账户名，并标记已纠正；
+    4. 其余情况用 difflib 相似度 >= 0.8 兜底（招商银行 ↔ 招行卡 这类近名）。
+    """
+    raw = _as_text(name)
+    if not raw or not accounts:
+        return raw, False
+    compact = _compact_name(raw)
+    exact = {_compact_name(item): item for item in accounts if _as_text(item)}
+    if compact in exact:
+        return exact[compact], False
+
+    base, suffix = _account_base(raw)
+    alias_target = ACCOUNT_ALIASES.get(base) or ACCOUNT_ALIASES.get(compact, "")
+    if alias_target and _compact_name(alias_target) in exact:
+        matched = exact[_compact_name(alias_target)]
+        # 品牌本身写对了、只是带了子账户后缀（微信零钱通 → 微信）：保留用户的具体账户，
+        # 不能因为别名表里有「微信」就把子账户吞掉；只有品牌写错（威信 → 微信）才替换
+        if suffix and _compact_name(base) == _compact_name(matched):
+            return raw, False
+        if matched != raw:
+            return matched, True
+
+    # 品牌写对、只多了子账户后缀：当作合法子账户保留（如「微信」→「微信零钱」）
+    for current, original in exact.items():
+        if suffix and current == base:
+            return raw, False
+
+    similar = _closest_name(raw, accounts)
+    if similar and _compact_name(similar) != compact:
+        return similar, True
+    return raw, False
+
+
+def _match_contact(name: Any, contacts: Optional[list[str]]) -> tuple[str, bool]:
+    """联系人姓名模糊匹配：相似度 >= 0.8 时用库里的名字，避免「小王」「晓王」记成两个人。"""
+    raw = _as_text(name)
+    if not raw or not contacts:
+        return raw, False
+    compact = _compact_name(raw)
+    exact = {_compact_name(item): item for item in contacts if _as_text(item)}
+    if compact in exact:
+        return exact[compact], False
+    similar = _closest_name(raw, contacts, CONTACT_FUZZY_CUTOFF)
+    if similar and _compact_name(similar) != compact:
+        return similar, True
+    return raw, False
+
+
 def _memory_block(memories: Optional[list[dict[str, Any]]]) -> str:
     """把最近几条人工纠错拼成 few-shot 提示段（v0.11.4 AI 记忆库）。
 
@@ -391,32 +500,59 @@ def _memory_block(memories: Optional[list[dict[str, Any]]]) -> str:
     )
 
 
+def _accounts_block(
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
+) -> str:
+    """把数据库里真实存在的账户/联系人拼成提示段（v0.11.5 精准度）。
+
+    让模型优先用用户自己的账户名，别每次把「零钱」这种口语当新账户；
+    但明确要求它保留用户说出的具体子账户（微信零钱、支付宝余额），
+    标准化交给后端的 difflib 模糊匹配，而不是靠模型猜。
+    """
+    account_names = [str(item).strip() for item in (accounts or []) if str(item).strip()]
+    contact_names = [str(item).strip() for item in (contacts or []) if str(item).strip()]
+    if not account_names and not contact_names:
+        return ""
+    block = ""
+    if account_names:
+        block += (
+            "\n\n【用户真实账户列表（记账/借贷/转账的 account 优先从这里选）】\n"
+            + "、".join(account_names[:40])
+            + "\n说明：用户提到具体子账户（如「微信零钱」「支付宝余额」「招行卡尾号1234」）时，"
+            "原样保留用户的具体叫法，不要向上合并成大类账户；用户说的是这些账户的常见错别字或同音字"
+            "（如「威信」「薇信」）时，也先原样输出，后端会统一纠正。"
+        )
+    if contact_names:
+        block += (
+            "\n\n【用户已有联系人（借贷/报销对象优先从这里选）】\n"
+            + "、".join(contact_names[:40])
+        )
+    return block
+
+
 def _previous_record_block(previous_record: Optional[dict[str, Any]]) -> str:
-    """补充修改账单时把原账单快照注入 Prompt（v0.11.4 多轮上下文）。"""
+    """补充修改账单时把原账单完整 JSON 注入 Prompt（v0.11.5 多轮覆盖）。
+
+    和 v0.11.4 的区别：不再只给 9 个字段的快照，而是把整条账单（含报销字段）交给模型，
+    并要求它返回**完整** JSON——没提到的字段必须继承原值，后端拿这份 JSON 做全量 UPDATE。
+    """
     if not previous_record:
         return ""
     snapshot = {
-        key: previous_record.get(key)
-        for key in (
-            "id",
-            "amount",
-            "type",
-            "category",
-            "account",
-            "to_account",
-            "fee",
-            "date",
-            "note",
-        )
-        if key in previous_record
+        key: value
+        for key, value in previous_record.items()
+        if key not in ("deleted_at", "created_at", "updated_at")
     }
     return (
         "\n\n【补充修改账单上下文】\n"
-        "用户正在补充修改账单，请覆盖原数据。\n"
-        "原账单 JSON：" + json.dumps(snapshot, ensure_ascii=False) + "\n"
+        "用户正在补充修改这笔已有账单，请覆盖原数据。\n"
+        "原账单完整 JSON：" + json.dumps(snapshot, ensure_ascii=False) + "\n"
         "用户这次说的话是对上面这笔账单的补充或修改（补商户、改分类、改金额、"
-        "改支付账户等）。请输出修改后的最终完整结果，action 仍为 record；"
-        "用户没提到的字段沿用原账单的值，不要清空。"
+        "改支付账户、改报销人等）。请输出修改后的最终完整结果，action 仍为 record。\n"
+        "【继承规则】用户这次没提到的字段，必须从上面的原账单 JSON 里原样继承，"
+        "金额、类型、分类、账户、日期、备注一个都不能丢、不能填空串；"
+        "返回的 16 个字段必须齐全，后端会用这份完整 JSON 覆盖更新原账单。"
     )
 
 
@@ -425,6 +561,8 @@ def _build_messages(
     now: datetime,
     previous_record: Optional[dict[str, Any]] = None,
     memories: Optional[list[dict[str, Any]]] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
 ) -> list[dict[str, str]]:
     weekday = "一二三四五六日"[now.weekday()]
     yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -434,7 +572,11 @@ def _build_messages(
         now=now.strftime("%Y-%m-%d %H:%M"),
         yesterday=yesterday,
     )
-    system += _memory_block(memories) + _previous_record_block(previous_record)
+    system += (
+        _accounts_block(accounts, contacts)
+        + _memory_block(memories)
+        + _previous_record_block(previous_record)
+    )
     return [
         {"role": "system", "content": system},
         {"role": "user", "content": text.strip()},
@@ -596,7 +738,59 @@ def _normalize_contact(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _normalize_intent(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
+def _apply_fuzzy_names(
+    result: dict[str, Any],
+    action: str,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
+    """对归一化后的结果做账户/联系人模糊纠错，返回纠正明细列表。
+
+    每个明细形如 {"field": "account", "raw": "威信零钱通", "matched": "微信", "kind": "account"}，
+    前端拿 auto_corrected_msg 显示一句灰色小字，管理员在后台能看到逐字段明细。
+    """
+    corrections: list[dict[str, Any]] = []
+
+    def fix(field: str, kind: str, matcher):
+        raw = result.get(field)
+        if not raw:
+            return
+        matched, changed = matcher(raw)
+        if changed and matched != raw:
+            result[field] = matched
+            corrections.append(
+                {"field": field, "raw": raw, "matched": matched, "kind": kind}
+            )
+
+    if action in ("record", "debt"):
+        if action == "record":
+            fix("account", "account", lambda value: _match_account(value, accounts))
+            fix("to_account", "account", lambda value: _match_account(value, accounts))
+        else:
+            fix("account", "account", lambda value: _match_account(value, accounts))
+        fix("contact_name", "contact", lambda value: _match_contact(value, contacts))
+    return corrections
+
+
+def _correction_message(corrections: list[dict[str, Any]]) -> str:
+    """把纠正明细拼成给用户看的一句中文提示；没有纠正时返回空串。"""
+    pieces: list[str] = []
+    for item in corrections:
+        if item["kind"] == "account":
+            sentence = "识别到相似账户，已自动匹配为「%s」" % item["matched"]
+        else:
+            sentence = "识别到相似联系人，已自动匹配为「%s」" % item["matched"]
+        if sentence not in pieces:
+            pieces.append(sentence)
+    return "；".join(pieces)
+
+
+def _normalize_intent(
+    payload: dict[str, Any],
+    now: datetime,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
+) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AIServiceError("模型返回的不是 JSON 对象")
 
@@ -604,15 +798,29 @@ def _normalize_intent(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
     action = _as_text(payload.get("action")).lower()
     if action not in ACTIONS:
         # 模型漏了 action 或写了别的词，一律当听不懂，不猜意图
-        return {"action": "unknown", "confidence": confidence}
+        return {
+            "action": "unknown",
+            "confidence": confidence,
+            "auto_corrected": [],
+            "auto_corrected_msg": "",
+        }
     if action == "unknown":
-        return {"action": "unknown", "confidence": confidence}
+        return {
+            "action": "unknown",
+            "confidence": confidence,
+            "auto_corrected": [],
+            "auto_corrected_msg": "",
+        }
 
     result = _normalize_record(payload, now) if action == "record" else None
     if action == "debt":
         result = _normalize_debt(payload, now)
     elif action == "add_contact":
         result = _normalize_contact(payload)
+
+    corrections = _apply_fuzzy_names(result, action, accounts, contacts)
+    result["auto_corrected"] = corrections
+    result["auto_corrected_msg"] = _correction_message(corrections)
     return {"action": action, "confidence": confidence, **result}
 
 
@@ -621,6 +829,8 @@ def _chat(
     now: datetime,
     previous_record: Optional[dict[str, Any]] = None,
     memories: Optional[list[dict[str, Any]]] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if not cleaned:
@@ -631,7 +841,9 @@ def _chat(
     client = _client()
     kwargs: dict[str, Any] = {
         "model": MODEL,
-        "messages": _build_messages(cleaned, now, previous_record, memories),
+        "messages": _build_messages(
+            cleaned, now, previous_record, memories, accounts, contacts
+        ),
         "temperature": 0.1,
         "max_tokens": 400,
     }
@@ -659,7 +871,7 @@ def _chat(
     except json.JSONDecodeError as error:
         raise AIServiceError("模型返回的不是合法 JSON：%s" % error)
 
-    return _normalize_intent(payload, now)
+    return _normalize_intent(payload, now, accounts, contacts)
 
 
 def parse_intent(
@@ -667,18 +879,28 @@ def parse_intent(
     now: Optional[datetime] = None,
     previous_record: Optional[dict[str, Any]] = None,
     memories: Optional[list[dict[str, Any]]] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """理解一句话的意图，返回带 action 与 confidence 的字段；失败抛 AIServiceError。
 
-    previous_record 非空表示「补充修改账单」，会把原账单快照注入 Prompt；
-    memories 是最近几条人工纠错（AI 记忆库），当 few-shot 注入。
+    previous_record 非空表示「补充修改账单」，会把原账单完整 JSON 注入 Prompt；
+    memories 是关键词命中的历史纠错（AI 记忆库），当 few-shot 注入；
+    accounts / contacts 是库里的真实名字，用于 Prompt 提示 + 返回后的 difflib 强制纠正。
     """
-    return _chat(text, now or datetime.now(), previous_record, memories)
+    return _chat(
+        text, now or datetime.now(), previous_record, memories, accounts, contacts
+    )
 
 
-def parse_record(text: str, now: Optional[datetime] = None) -> dict[str, Any]:
+def parse_record(
+    text: str,
+    now: Optional[datetime] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """兼容 v0.08 的记账专用入口：只接受 record 意图，返回原来的 8 字段 + formula。"""
-    result = parse_intent(text, now)
+    result = parse_intent(text, now, accounts=accounts, contacts=contacts)
     if result["action"] != "record":
         raise AIServiceError("这句话不是记账指令，当前接口只支持记账")
     return {key: value for key, value in result.items() if key != "action"}
@@ -700,12 +922,14 @@ def _build_vision_messages(
     mime: str,
     now: datetime,
     memories: Optional[list[dict[str, Any]]] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     # 提示词里本身就有大量 JSON 花括号，不能用 str.format，改用占位符替换
     prompt = VISION_PROMPT.replace(
         "__TODAY__", now.strftime("%Y-%m-%d")
     ).replace("__NOW__", now.strftime("%Y-%m-%d %H:%M"))
-    prompt += _memory_block(memories)
+    prompt += _accounts_block(accounts, contacts) + _memory_block(memories)
     return [
         {
             "role": "user",
@@ -727,6 +951,8 @@ def parse_image(
     mime: str = IMAGE_MIME_FALLBACK,
     now: Optional[datetime] = None,
     memories: Optional[list[dict[str, Any]]] = None,
+    accounts: Optional[list[str]] = None,
+    contacts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """识别一张账单截图，返回与 parse_intent 同结构的字段；不是账单返回 {"action": "unknown"}。
 
@@ -757,7 +983,9 @@ def parse_image(
     try:
         completion = client.chat.completions.create(
             model=VISION_MODEL,
-            messages=_build_vision_messages(raw_base64, mime, moment, memories),
+            messages=_build_vision_messages(
+                raw_base64, mime, moment, memories, accounts, contacts
+            ),
             temperature=0.1,
             max_tokens=500,
         )
@@ -785,8 +1013,8 @@ def parse_image(
     if not isinstance(payload, dict):
         raise AIServiceError("视觉模型返回的不是 JSON 对象")
 
-    # 复用文本版的归一化：金额校验、日期换算、报销字段都走同一套规则
-    return _normalize_intent(payload, moment)
+    # 复用文本版的归一化：金额校验、日期换算、报销字段、账户模糊匹配都走同一套规则
+    return _normalize_intent(payload, moment, accounts, contacts)
 
 
 def generate_notification(

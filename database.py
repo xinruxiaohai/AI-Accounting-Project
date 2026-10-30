@@ -1,4 +1,5 @@
 import datetime
+import difflib
 import json
 import re
 import sqlite3
@@ -531,6 +532,24 @@ def init_db():
                     raw_category       TEXT,
                     corrected_category TEXT    NOT NULL,
                     note               TEXT,
+                    created_at         TEXT    DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            # AI 纠错审计日志（v0.11.5）：气泡里多轮纠错、详情页改分类都留一条，
+            # 后台「AI 纠错与反馈中心」右栏据此展示「改前 → 改后」对比。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_correction_log (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    record_id          INTEGER,
+                    source             TEXT    NOT NULL DEFAULT 'bubble',
+                    original_text      TEXT,
+                    before_json        TEXT,
+                    after_json         TEXT,
+                    confidence         INTEGER,
+                    auto_corrected_msg TEXT,
                     created_at         TEXT    DEFAULT CURRENT_TIMESTAMP
                 )
                 """
@@ -2085,6 +2104,127 @@ def list_ai_memories(limit=50):
 def list_recent_ai_memories(limit=3):
     """取最近几条纠错给 Prompt 当 few-shot；条数固定很小，避免提示词被撑爆。"""
     return list_ai_memories(limit)
+
+
+def search_ai_memories(text, limit=3):
+    """按关键词 + 模糊相似度从记忆库里挑最相关的几条（v0.11.5 RAG）。
+
+    和 v0.11.4 的「只取最近 3 条」相比，这里会真的读用户这次说的话：
+    - difflib 相似度衡量整句像不像；
+    - 2 字片段命中数当作关键词重合度（不引第三方分词，够用且快）；
+    - 分数太低的直接不要，不足 limit 时用最近的记忆补齐，保证 Prompt 里总有几条参考。
+    """
+    query = re.sub(r"\s+", "", (text or "").strip().lower())
+    memories = list_ai_memories(200)
+    if not query:
+        return memories[:limit]
+
+    grams = {query[index : index + 2] for index in range(len(query) - 1)}
+    scored = []
+    for item in memories:
+        original = re.sub(r"\s+", "", (item.get("original_text") or "").lower())
+        if not original:
+            continue
+        ratio = difflib.SequenceMatcher(None, query, original).ratio()
+        hits = sum(1 for gram in grams if gram in original)
+        score = ratio + min(hits, 5) * 0.15
+        if score >= 0.2:
+            scored.append((score, item))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    picked = [item for _, item in scored[:limit]]
+    if len(picked) < limit:
+        for item in memories:
+            if item not in picked:
+                picked.append(item)
+            if len(picked) >= limit:
+                break
+    return picked[:limit]
+
+
+def _row_to_correction_log(row):
+    def load(raw):
+        try:
+            value = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            return None
+        return value
+
+    return {
+        "id": row["id"],
+        "record_id": row["record_id"],
+        "source": row["source"],
+        "original_text": row["original_text"],
+        "before": load(row["before_json"]),
+        "after": load(row["after_json"]),
+        "confidence": row["confidence"],
+        "auto_corrected_msg": row["auto_corrected_msg"],
+        "created_at": row["created_at"],
+    }
+
+
+def add_ai_correction_log(
+    record_id,
+    before,
+    after,
+    original_text="",
+    source="bubble",
+    confidence=None,
+    auto_corrected_msg="",
+):
+    """记一条 AI 纠错审计日志，返回入库后的完整字典（含 id）。
+
+    before / after 是整条账单的字典（改前 / 改后），后台右栏拿来做前后对比；
+    写日志失败不应该影响主流程，调用方自行 try/except 即可。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO ai_correction_log "
+                "       (record_id, source, original_text, before_json, after_json, "
+                "        confidence, auto_corrected_msg) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record_id,
+                    (source or "bubble").strip()[:20],
+                    (original_text or "").strip()[:2000],
+                    json.dumps(before, ensure_ascii=False, default=str) if before is not None else None,
+                    json.dumps(after, ensure_ascii=False, default=str) if after is not None else None,
+                    confidence,
+                    (auto_corrected_msg or "").strip()[:500] or None,
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, record_id, source, original_text, before_json, after_json, "
+            "       confidence, auto_corrected_msg, created_at "
+            "FROM ai_correction_log WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_correction_log(row)
+    finally:
+        conn.close()
+
+
+def list_ai_correction_logs(limit=50):
+    """列出最近的纠错审计日志，新的在前；limit 夹在 1~200 之间。"""
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 50
+    limit = max(1, min(200, limit))
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, record_id, source, original_text, before_json, after_json, "
+            "       confidence, auto_corrected_msg, created_at "
+            "FROM ai_correction_log ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [_row_to_correction_log(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def delete_ai_memory(memory_id):
