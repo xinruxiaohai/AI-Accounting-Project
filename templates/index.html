@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.5">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.6">
 </head>
 <body>
 
@@ -33,10 +33,12 @@
 
   <!-- ================= 左侧侧边栏 ================= -->
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-      <span class="brand-mark">AI</span>
-      <span class="brand-text">AI记账管家</span>
-    </div>
+    <!-- v0.12.6：左上角换成用户头像，点击弹出个人中心 -->
+    <button class="sidebar-brand sidebar-brand-btn" type="button" id="sidebar-avatar"
+            aria-label="打开个人中心">
+      <span class="brand-avatar" id="sidebar-avatar-letter">A</span>
+      <span class="brand-text" id="sidebar-brand-name">AI记账管家</span>
+    </button>
 
     <!-- 三行杠单独一行：放在 Logo 正下方、导航菜单上方 -->
     <div class="sidebar-tools">
@@ -94,8 +96,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-user" id="sidebar-user-name" hidden></div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.5-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.6-DEV</div>
     </div>
   </aside>
 
@@ -564,36 +565,22 @@
             </ul>
           </div>
 
-          <div class="panel export-card">
+          <!-- v0.12.6：导入 / 导出合并为一张卡片 -->
+          <div class="panel export-card import-export-card">
             <div class="export-head">
-              <span class="export-badge" aria-hidden="true">CSV</span>
-              <h3>导出全部账单</h3>
+              <span class="export-badge" aria-hidden="true">CSV / XLSX</span>
+              <h3>导入 / 导出账单</h3>
             </div>
-            <p class="export-text">
-              文件开头带 UTF-8 BOM，Excel / WPS 直接双击打开，中文不会变成乱码。
-              列包含日期、类型、分类、账户、转入账户、金额、手续费、公式与备注。
-              日期列已用 ="..." 包成文本，避免 Excel 显示成 ####；如果仍然看到井号，把日期列拖宽即可。
-            </p>
-            <button class="btn btn-primary" type="button" id="export-btn-profile">
-              下载 CSV 文件
-            </button>
-            <p class="export-hint">导出不影响账本数据，随时可以再导一次。</p>
-          </div>
-
-          <!-- v0.12.1：导入账单入口（与导出并列） -->
-          <div class="panel import-card">
-            <div class="export-head">
-              <span class="export-badge import-badge" aria-hidden="true">CSV / XLSX</span>
-              <h3>导入账单</h3>
+            <p class="export-text">支持微信 / 支付宝账单导出与导入，数据只在本机，换电脑也能搬走。</p>
+            <div class="export-actions">
+              <button class="btn btn-outline-primary" type="button" id="profile-import-btn">
+                导入账单文件
+              </button>
+              <button class="btn btn-primary" type="button" id="export-btn-profile">
+                导出全部账单
+              </button>
             </div>
-            <p class="export-text">
-              支持微信 / 支付宝导出的 CSV、Excel，自动识别 GBK / UTF-8 编码。
-              上传后先预览解析结果，重复项会高亮且默认不勾选，确认后才写进账本。
-            </p>
-            <button class="btn btn-outline-primary" type="button" id="profile-import-btn">
-              导入账单文件
-            </button>
-            <p class="export-hint">解析只读文件不写库；点【确认导入】才会联动账户余额。</p>
+            <p class="export-hint">导入先预览、重复项默认不勾选，确认后才会写进账本。</p>
           </div>
 
         <!-- ============ 通讯录：收缩成与「我的账本」同尺寸的小卡片，内容进弹窗 ============ -->
@@ -1211,19 +1198,10 @@
 
           <div class="settings-group">
             <span class="settings-label">修改密码</span>
-            <!-- v0.12.5：平铺输入框删除，改成按钮弹独立 Modal -->
+            <!-- v0.12.6：平铺输入框删除，改成按钮弹独立 Modal -->
             <button class="btn btn-outline-primary w-100" type="button" id="settings-change-password-btn"
                     data-bs-toggle="modal" data-bs-target="#change-password-modal">修改密码</button>
             <p class="settings-hint">点开后输入旧密码与新密码，浏览器不会自动填充旧密码。</p>
-          </div>
-
-          <div class="settings-group">
-            <span class="settings-label">忘记旧密码？</span>
-            <!-- v0.12.4：平铺输入框全部删掉，改成链接弹独立 Modal -->
-            <button class="settings-forgot-link" type="button" id="settings-forgot-link"
-                    data-bs-toggle="modal" data-bs-target="#reset-password-modal">
-              通过邮箱验证码重置密码 →
-            </button>
           </div>
 
           <div class="settings-group settings-danger">
@@ -1280,7 +1258,7 @@
   </div>
 </div>
 
-<!-- ================= v0.12.5：修改密码（独立 Modal） ================= -->
+<!-- ================= v0.12.6：修改密码（独立 Modal） ================= -->
 <div class="modal fade" id="change-password-modal" tabindex="-1" aria-labelledby="change-password-title"
      aria-hidden="true" data-bs-keyboard="true">
   <div class="modal-dialog modal-dialog-centered">
@@ -1301,10 +1279,49 @@
         <input class="form-control" id="change-confirm-password" type="password" autocomplete="new-password"
                name="dsh-change-confirm-password" placeholder="再输一次">
         <p class="settings-error" id="change-password-error" hidden></p>
+        <p class="settings-forgot-line">
+          <button class="settings-forgot-link" type="button" id="change-forgot-link">
+            忘记旧密码？通过邮箱验证码重置 →
+          </button>
+        </p>
       </div>
       <div class="modal-footer">
         <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
         <button class="btn btn-primary" type="button" id="change-password-submit">保存新密码</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.12.6：个人中心（点左上角头像打开） ================= -->
+<div class="modal fade" id="profile-modal" tabindex="-1" aria-labelledby="profile-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content profile-modal">
+      <div class="modal-header border-0">
+        <h5 class="modal-title" id="profile-title">个人中心</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <div class="profile-hero">
+          <span class="profile-avatar" id="profile-avatar">A</span>
+          <div class="profile-hero-main">
+            <div class="profile-name" id="profile-name">—</div>
+            <div class="profile-sub" id="profile-days">记账第 1 天</div>
+          </div>
+        </div>
+        <ul class="profile-meta">
+          <li>
+            <span class="profile-meta-label">UID</span>
+            <b id="profile-uid">—</b>
+            <button class="profile-copy" type="button" id="profile-copy-uid">复制</button>
+          </li>
+          <li><span class="profile-meta-label">注册日期</span><b id="profile-created">—</b></li>
+          <li><span class="profile-meta-label">绑定状态</span><b id="profile-bind">邮箱已绑定</b></li>
+        </ul>
+      </div>
+      <div class="modal-footer border-0">
+        <button class="btn btn-warning w-100 profile-logout" type="button" data-logout>退出登录</button>
       </div>
     </div>
   </div>
@@ -1629,10 +1646,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.5"></script>
-<script src="/static/access-guard.js?v=0.12.5"></script>
+<script src="/static/auth-v012.js?v=0.12.6"></script>
+<script src="/static/access-guard.js?v=0.12.6"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.5"></script>
+<script src="/static/script.js?v=0.12.6"></script>
 
 </body>
 </html>

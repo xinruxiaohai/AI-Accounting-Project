@@ -822,25 +822,150 @@
 
   /* ---------------- v0.12.2：侧栏昵称 ---------------- */
 
+  function displayName(user) {
+    var name = (user && user.nickname) || ((user && user.email) ? String(user.email).split("@")[0] : "");
+    return name || "AI记账管家";
+  }
+
+  function avatarLetter(user) {
+    var text = displayName(user).trim();
+    return (text ? text.slice(0, 1) : "A").toUpperCase();
+  }
+
+  function accountingDays(user) {
+    var raw = user && user.created_at;
+    if (!raw) {
+      return 1;
+    }
+    var start = new Date(String(raw).replace(" ", "T"));
+    if (isNaN(start.getTime())) {
+      return 1;
+    }
+    var diff = Math.floor((Date.now() - start.getTime()) / 86400000);
+    return Math.max(1, diff + 1);
+  }
+
+  function fillProfileModal(user) {
+    var person = user || getUser() || {};
+    var name = displayName(person);
+    var letterEl = document.getElementById("profile-avatar");
+    if (letterEl) {
+      letterEl.textContent = avatarLetter(person);
+    }
+    var nameEl = document.getElementById("profile-name");
+    if (nameEl) {
+      nameEl.textContent = name;
+    }
+    var daysEl = document.getElementById("profile-days");
+    if (daysEl) {
+      daysEl.textContent = "记账第 " + accountingDays(person) + " 天";
+    }
+    var uidEl = document.getElementById("profile-uid");
+    if (uidEl) {
+      uidEl.textContent = person.id === undefined || person.id === null ? "—" : String(person.id);
+    }
+    var createdEl = document.getElementById("profile-created");
+    if (createdEl) {
+      createdEl.textContent = person.created_at ? String(person.created_at).slice(0, 10) : "—";
+    }
+    var bindEl = document.getElementById("profile-bind");
+    if (bindEl) {
+      bindEl.textContent = person.email ? "邮箱已绑定 · " + person.email : "未绑定邮箱";
+    }
+  }
+
   function updateSidebarUser() {
-    var slot = document.getElementById("sidebar-user-name");
-    if (!slot) {
-      return;
-    }
     var user = getUser() || {};
-    var name = user.nickname || (user.email ? String(user.email).split("@")[0] : "");
-    if (!name) {
-      slot.hidden = true;
+    var name = displayName(user);
+    var nameEl = document.getElementById("sidebar-brand-name");
+    if (nameEl) {
+      nameEl.textContent = name;
+    }
+    var letterEl = document.getElementById("sidebar-avatar-letter");
+    if (letterEl) {
+      letterEl.textContent = avatarLetter(user);
+    }
+    var avatarBtn = document.getElementById("sidebar-avatar");
+    if (avatarBtn) {
+      var uidText = user.id === undefined || user.id === null ? "" : "UID " + user.id;
+      avatarBtn.title = "个人中心" + (uidText ? " · " + uidText : "");
+      avatarBtn.setAttribute("aria-label", "个人中心：" + name);
+    }
+    fillProfileModal(user);
+  }
+
+  function refreshProfileFromServer() {
+    if (!getToken()) {
       return;
     }
-    // v0.12.5：昵称旁边显示 UID，验证 1-9 号预留逻辑
-    var uidText = user.id === undefined || user.id === null ? "" : "UID " + user.id;
-    slot.innerHTML =
-      '<span class="sidebar-nickname"></span>' +
-      (uidText ? '<span class="sidebar-uid">' + uidText + "</span>" : "");
-    slot.querySelector(".sidebar-nickname").textContent = name;
-    slot.title = (user.email || "") + (uidText ? " · " + uidText : "");
-    slot.hidden = false;
+    originalFetch("/api/auth/me", { headers: { Authorization: "Bearer " + getToken() } })
+      .then(function (response) {
+        return response.ok ? response.json() : null;
+      })
+      .then(function (data) {
+        if (data && data.user) {
+          try {
+            localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+          } catch (error) {
+            /* 忽略 */
+          }
+          updateSidebarUser();
+        }
+      })
+      .catch(function () {
+        /* 离线时沿用本地缓存 */
+      });
+  }
+
+  function copyUid() {
+    var uidEl = document.getElementById("profile-uid");
+    var text = uidEl ? uidEl.textContent : "";
+    if (!text || text === "—") {
+      return;
+    }
+    var done = function () {
+      if (typeof toast === "function") {
+        toast("UID 已复制", "success");
+      }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        if (typeof toast === "function") {
+          toast("复制失败，请手动选择", "error");
+        }
+      });
+      return;
+    }
+    var input = document.createElement("input");
+    input.value = text;
+    document.body.appendChild(input);
+    input.select();
+    try {
+      document.execCommand("copy");
+      done();
+    } catch (error) {
+      /* 忽略 */
+    }
+    document.body.removeChild(input);
+  }
+
+  function bindProfileUi() {
+    var avatarBtn = document.getElementById("sidebar-avatar");
+    var profileEl = document.getElementById("profile-modal");
+    if (avatarBtn && profileEl && window.bootstrap) {
+      avatarBtn.addEventListener("click", function () {
+        fillProfileModal(getUser() || {});
+        window.bootstrap.Modal.getOrCreateInstance(profileEl).show();
+        refreshProfileFromServer();
+      });
+      profileEl.addEventListener("shown.bs.modal", function () {
+        fillProfileModal(getUser() || {});
+      });
+    }
+    var copyBtn = document.getElementById("profile-copy-uid");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", copyUid);
+    }
   }
 
   function setSettingsMessage(elementId, message, ok) {
@@ -1124,11 +1249,14 @@
     if (resetButton) {
       resetButton.addEventListener("click", resetPassword);
     }
-    var forgotLink = document.getElementById("settings-forgot-link");
+    var forgotLink = document.getElementById("change-forgot-link");
     var resetModal = document.getElementById("reset-password-modal");
+    var changeModalEl = document.getElementById("change-password-modal");
     if (forgotLink && resetModal) {
-      // 打开独立 Modal 时把当前账号邮箱带进去，省得手输
       forgotLink.addEventListener("click", function () {
+        if (changeModalEl && window.bootstrap) {
+          window.bootstrap.Modal.getOrCreateInstance(changeModalEl).hide();
+        }
         window.setTimeout(function () {
           var emailInput = document.getElementById("reset-password-email");
           var user = getUser() || {};
@@ -1136,7 +1264,10 @@
             emailInput.value = user.email;
           }
           setSettingsMessage("reset-password-error", "");
-        }, 220);
+          if (window.bootstrap) {
+            window.bootstrap.Modal.getOrCreateInstance(resetModal).show();
+          }
+        }, 200);
       });
     }
     if (resetModal) {
@@ -1152,6 +1283,7 @@
     if (modal) {
       modal.addEventListener("shown.bs.modal", fillAccountPane);
     }
+    bindProfileUi();
   }
 
   /* ---------------- v0.12.3：登录页「忘记密码」---------------- */

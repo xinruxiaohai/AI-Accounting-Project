@@ -5954,14 +5954,50 @@ function iconFor(kind, name) {
   return bucket[name] || null;
 }
 
-function iconImgHtml(kind, name, size) {
-  const icon = iconFor(kind, name);
-  if (!icon) {
-    return "";
+// v0.12.6：系统默认图标兜底。自定义图标优先用 <img>，否则用内联 SVG + emoji 字形，
+// 保证账单表与账户列表的文字左侧永远有图标，而不是只有干巴巴的文字。
+const DEFAULT_ICON_GLYPHS = {
+  category: {
+    "餐饮": "🍜", "交通": "🚕", "购物": "🛍️", "居住": "🏠", "娱乐": "🎮", "医疗": "💊",
+    "学习": "📚", "人情": "🎁", "工资": "💼", "奖金": "🎉", "投资": "📈", "理财": "📈",
+    "利息收入": "🏦", "利息支出": "🏦", "退款": "↩️", "其他": "🏷️",
+  },
+  account: {
+    "现金": "💵", "微信": "💬", "支付宝": "🅰️", "银行卡": "💳", "信用卡": "💳",
+    "花呗": "🌸", "余额宝": "💰", "招商银行": "🏦", "工商银行": "🏦", "建设银行": "🏦",
+    "农业银行": "🏦", "中国银行": "🏦", "交通银行": "🏦", "邮储银行": "🏦", "云闪付": "📲",
+  },
+};
+
+function defaultIconGlyph(kind, name) {
+  const map = DEFAULT_ICON_GLYPHS[kind] || {};
+  const key = String(name || "");
+  if (map[key]) {
+    return map[key];
   }
+  for (const candidate of Object.keys(map)) {
+    if (key.indexOf(candidate) >= 0 || candidate.indexOf(key) >= 0) {
+      return map[candidate];
+    }
+  }
+  return kind === "category" ? "🏷️" : "💳";
+}
+
+function defaultIconSvg(kind, name, px) {
+  const glyph = escapeHtml(defaultIconGlyph(kind, name));
+  return '<svg class="entity-icon entity-icon-default" viewBox="0 0 24 24" width="' + px +
+    '" height="' + px + '" aria-hidden="true"><text x="12" y="18.5" text-anchor="middle" ' +
+    'font-size="15">' + glyph + "</text></svg>";
+}
+
+function iconImgHtml(kind, name, size) {
   const px = Math.max(14, Number(size) || 18);
-  return '<img class="entity-icon" src="' + escapeHtml(icon.path) + '" alt="" style="width:' + px +
-    "px;height:" + px + 'px">';
+  const icon = iconFor(kind, name);
+  if (icon && icon.path) {
+    return '<img class="entity-icon" src="' + escapeHtml(icon.path) + '" alt="" style="width:' + px +
+      "px;height:" + px + 'px">';
+  }
+  return defaultIconSvg(kind, name, px);
 }
 
 async function loadIconLibrary() {
