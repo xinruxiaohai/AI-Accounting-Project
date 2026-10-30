@@ -424,6 +424,7 @@ def init_db():
                     content      TEXT    NOT NULL DEFAULT '',
                     image_url    TEXT    NOT NULL DEFAULT '',
                     publish_date TEXT    NOT NULL,
+                    visible_at   TEXT    NOT NULL DEFAULT '',
                     status       TEXT    NOT NULL DEFAULT 'published'
                 )
                 """
@@ -436,6 +437,16 @@ def init_db():
                 conn.execute(
                     "ALTER TABLE notifications ADD COLUMN status TEXT NOT NULL DEFAULT 'published'"
                 )
+            # v0.11.7：visible_at = 生效时间，publish_date 只负责「展示时间」。
+            # 老数据没有这一列：补列后把 publish_date 回填进去，历史通知立即可见
+            if "visible_at" not in notify_columns:
+                conn.execute(
+                    "ALTER TABLE notifications ADD COLUMN visible_at TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                "UPDATE notifications SET visible_at = publish_date "
+                "WHERE visible_at IS NULL OR visible_at = ''"
+            )
             # 前台只查 published，后台分开查草稿与已发布，状态索引避免全表扫
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_notifications_status "
@@ -1907,7 +1918,9 @@ def delete_debt(debt_id):
 
 # 通知状态（v0.11.1）：draft=AI 起草或人工存草稿，待后台审核；published=前台可见
 NOTIFICATION_STATUSES = ("draft", "published")
-NOTIFICATION_COLUMNS = "id, title, content, image_url, publish_date, status"
+NOTIFICATION_COLUMNS = (
+    "id, title, content, image_url, publish_date, visible_at, status"
+)
 
 
 def _row_to_notification(row):
@@ -1917,23 +1930,32 @@ def _row_to_notification(row):
         "content": row["content"],
         "image_url": row["image_url"],
         "publish_date": row["publish_date"],
+        "visible_at": row["visible_at"] if "visible_at" in row.keys() else row["publish_date"],
         "status": row["status"] if "status" in row.keys() else "published",
     }
 
 
-def list_notifications(status=None):
-    """通知列表，按发布时间倒序（新发的排最上面）。
+def list_notifications(status=None, visible_only=False):
+    """通知列表，按展示时间倒序（新发的排最上面）。
 
     status 传 "published" 只给前台已发布列表，传 "draft" 是后台待审核草稿；
-    不传则返回全部（仅后台维护用）。
+    visible_only=True 时只返回「已到生效时间」的已发布通知（前台严格用这个）。
+    生效时间没到（比如设成明天）的通知今天绝对不可见。
     """
     sql = "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications"
     params = []
+    where = []
     if status:
         if status not in NOTIFICATION_STATUSES:
             raise RecordError("status 只能是 draft / published")
-        sql += " WHERE status = ?"
+        where.append("status = ?")
         params.append(status)
+    if visible_only:
+        where.append("status = 'published'")
+        where.append("visible_at <= ?")
+        params.append(datetime.datetime.now().strftime("%Y-%m-%d %H:%M"))
+    if where:
+        sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY publish_date DESC, id DESC"
 
     conn = get_conn()
@@ -1944,8 +1966,16 @@ def list_notifications(status=None):
         conn.close()
 
 
-def create_notification(title, content="", image_url="", publish_date=None, status="published"):
-    """发布一条通知（或存草稿），返回入库后的完整字典。"""
+def create_notification(
+    title, content="", image_url="", publish_date=None, status="published", visible_at=None
+):
+    """发布一条通知（或存草稿），返回入库后的完整字典。
+
+    v0.11.7 双时间：
+    - publish_date 只作为「展示时间」；
+    - visible_at 是「生效时间」，前台按它过滤；
+    - 发布时间留空时用生效时间兜底；生效时间留空时用发布时间兜底。
+    """
     title = (title or "").strip()
     if not title:
         raise RecordError("通知标题不能为空")
@@ -1954,17 +1984,21 @@ def create_notification(title, content="", image_url="", publish_date=None, stat
     if status not in NOTIFICATION_STATUSES:
         raise RecordError("status 只能是 draft / published")
 
-    publish_date = (publish_date or "").strip() or datetime.datetime.now().strftime(
-        "%Y-%m-%d %H:%M"
-    )
+    publish_date = (publish_date or "").strip()
+    visible_at = (visible_at or "").strip()
+    if not publish_date:
+        publish_date = visible_at or datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    if not visible_at:
+        visible_at = publish_date
 
     conn = get_conn()
     try:
         with conn:
             cursor = conn.execute(
-                "INSERT INTO notifications (title, content, image_url, publish_date, status) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (title, content or "", image_url or "", publish_date, status),
+                "INSERT INTO notifications "
+                "       (title, content, image_url, publish_date, visible_at, status) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, content or "", image_url or "", publish_date, visible_at, status),
             )
             new_id = cursor.lastrowid
         row = conn.execute(
@@ -1977,19 +2011,26 @@ def create_notification(title, content="", image_url="", publish_date=None, stat
 
 
 def publish_notification(notify_id):
-    """把草稿发布出去：status 改 published，publish_date 刷新为当前时间。"""
+    """把草稿发布出去：status 改 published。
+
+    v0.11.7：不动用户排好的生效时间；只有没生效时间时才补成当前时间。
+    展示时间没填也补成现在。
+    """
     conn = get_conn()
     try:
         exists = conn.execute(
-            "SELECT 1 FROM notifications WHERE id = ?", (notify_id,)
+            "SELECT publish_date, visible_at FROM notifications WHERE id = ?", (notify_id,)
         ).fetchone()
         if exists is None:
             return None
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        publish_date = (exists["publish_date"] or "").strip() or now
+        visible_at = (exists["visible_at"] or "").strip() or now
         with conn:
             conn.execute(
-                "UPDATE notifications SET status = 'published', publish_date = ? WHERE id = ?",
-                (now, notify_id),
+                "UPDATE notifications SET status = 'published', publish_date = ?, "
+                "visible_at = ? WHERE id = ?",
+                (publish_date, visible_at, notify_id),
             )
         row = conn.execute(
             "SELECT " + NOTIFICATION_COLUMNS + " FROM notifications WHERE id = ?",
@@ -2000,7 +2041,15 @@ def publish_notification(notify_id):
         conn.close()
 
 
-def update_notification(notify_id, title=None, content=None, image_url=None, publish_date=None, status=None):
+def update_notification(
+    notify_id,
+    title=None,
+    content=None,
+    image_url=None,
+    publish_date=None,
+    status=None,
+    visible_at=None,
+):
     """改通知：只更新传进来的字段（None 表示不动），返回改后的完整字典。
 
     没有这条通知返回 None，由 app.py 转成 404。
@@ -2022,6 +2071,8 @@ def update_notification(notify_id, title=None, content=None, image_url=None, pub
         fields["image_url"] = image_url
     if publish_date is not None:
         fields["publish_date"] = publish_date
+    if visible_at is not None:
+        fields["visible_at"] = visible_at
 
     conn = get_conn()
     try:

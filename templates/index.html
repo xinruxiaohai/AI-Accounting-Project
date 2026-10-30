@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.11.6">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.7">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.11.6-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.11.7-DEV</div>
     </div>
   </aside>
 
@@ -614,28 +614,16 @@
           </div>
         </div>
 
-        <!-- ============ v0.11.6：显示与主题设置中心 ============ -->
+        <!-- ============ v0.11.7：设置抽离为独立系统设置弹窗 ============ -->
         <div class="panel settings-card" id="settings-card">
           <div class="export-head">
-            <h3>显示与主题</h3>
+            <h3>系统设置</h3>
             <span class="export-badge">本机设置</span>
           </div>
-          <p class="settings-hint">只影响当前设备，不会写入账本数据。</p>
-          <div class="settings-group">
-            <span class="settings-label">主题</span>
-            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题">
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="light"><span>浅色</span></label>
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="dark"><span>深色</span></label>
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="system"><span>跟随系统</span></label>
-            </div>
-          </div>
-          <div class="settings-group">
-            <span class="settings-label">首页卡片显示</span>
-            <div class="card-visibility" id="card-visibility"></div>
-          </div>
+          <p class="settings-hint">主题、首页卡片显隐集中在独立设置弹窗里，只影响当前设备、不写入账本。</p>
           <div class="settings-actions">
-            <button class="btn btn-primary btn-sm" type="button" id="settings-save-btn">保存设置</button>
-            <button class="btn btn-light btn-sm" type="button" id="settings-reset-btn">恢复默认</button>
+            <button class="btn btn-primary btn-sm" type="button" id="open-settings-btn"
+                    data-bs-toggle="modal" data-bs-target="#settings-modal">打开系统设置</button>
           </div>
         </div>
         </div>
@@ -1069,22 +1057,75 @@
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
       </div>
       <div class="modal-body">
-        <p class="correct-hint">选对分类后提交，AI 会记住这次纠正，下次识别得更准。</p>
+        <p class="correct-hint">整条账单都能改：提交后按完整表单全量覆盖，跨账户会自动回滚余额，并记一条纠错审计。</p>
         <div class="correct-current" id="correct-current"></div>
-        <div class="mb-3">
-          <label class="form-label" for="correct-category">改成</label>
-          <select class="form-select" id="correct-category"></select>
-        </div>
-        <div class="mb-0">
-          <label class="form-label" for="correct-category-text">或直接输入新的分类名</label>
-          <input class="form-control" type="text" id="correct-category-text" maxlength="40"
-                 placeholder="例如：餐饮、交通（留空则用上面的下拉选择）">
+        <div class="row g-3">
+          <div class="col-6">
+            <label class="form-label" for="correct-amount">金额</label>
+            <input class="form-control" type="text" id="correct-amount" inputmode="decimal"
+                   maxlength="20" placeholder="例如：50">
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="correct-date">日期</label>
+            <input class="form-control" type="date" id="correct-date">
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="correct-category">分类</label>
+            <select class="form-select" id="correct-category"></select>
+          </div>
+          <div class="col-6">
+            <label class="form-label" for="correct-account">账户</label>
+            <select class="form-select" id="correct-account"></select>
+          </div>
+          <div class="col-12">
+            <label class="form-label" for="correct-note">备注</label>
+            <input class="form-control" type="text" id="correct-note" maxlength="100"
+                   placeholder="例如：午饭">
+          </div>
+          <div class="col-12">
+            <label class="form-label" for="correct-category-text">分类不在下拉里？直接输入新分类名</label>
+            <input class="form-control" type="text" id="correct-category-text" maxlength="40"
+                   placeholder="例如：餐饮、交通（留空则用上面的下拉选择）">
+          </div>
         </div>
         <p class="correct-error" id="correct-error" hidden></p>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-light" data-bs-dismiss="modal">取消</button>
         <button type="button" class="btn btn-primary" id="correct-submit-btn">提交纠正</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.11.7：系统设置（独立居中大弹窗） ================= -->
+<div class="modal fade" id="settings-modal" tabindex="-1" aria-labelledby="settings-modal-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="settings-modal-title">系统设置</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-group">
+          <span class="settings-label">主题</span>
+          <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题">
+            <label class="theme-option"><input type="radio" name="dsh-theme" value="light"><span>浅色</span></label>
+            <label class="theme-option"><input type="radio" name="dsh-theme" value="dark"><span>深色</span></label>
+            <label class="theme-option"><input type="radio" name="dsh-theme" value="system"><span>跟随系统</span></label>
+          </div>
+        </div>
+        <div class="settings-group">
+          <span class="settings-label">首页卡片显示</span>
+          <div class="card-visibility" id="card-visibility"></div>
+        </div>
+        <p class="settings-hint">只影响当前设备，不会写入账本数据。</p>
+        <p class="settings-error" id="settings-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" type="button" id="settings-reset-btn">恢复默认</button>
+        <button class="btn btn-primary" type="button" id="settings-save-btn">保存设置</button>
       </div>
     </div>
   </div>
@@ -1348,9 +1389,9 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/access-guard.js?v=0.11.6"></script>
+<script src="/static/access-guard.js?v=0.11.7"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.11.6"></script>
+<script src="/static/script.js?v=0.11.7"></script>
 
 </body>
 </html>

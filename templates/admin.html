@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.11.6">
+  <link rel="stylesheet" href="/static/style.css?v=0.11.7">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -676,6 +676,15 @@
             </label>
           </div>
 
+          <div class="mb-3">
+            <label class="admin-label" for="notice-visible-at">定时发布时间（生效时间，留空 = 与发布时间相同）</label>
+            <label class="date-field">
+              <input id="notice-visible-at" class="form-control" type="text" placeholder="年 / 月 / 日 时:分" autocomplete="off" readonly>
+              <input class="date-native" type="datetime-local" aria-hidden="true" tabindex="-1" data-date-for="notice-visible-at">
+            </label>
+            <div class="admin-hint">生效时间没到，用户端绝对看不到这条通知；发布时间只决定列表里的展示时间。</div>
+          </div>
+
           <div class="d-flex align-items-center gap-3">
             <button type="button" class="btn btn-primary" id="publish-btn">发布通知</button>
             <button type="button" class="btn btn-outline-primary d-none" id="publish-as-btn">发布这条草稿</button>
@@ -867,7 +876,7 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/access-guard.js?v=0.11.6"></script>
+  <script src="/static/access-guard.js?v=0.11.7"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1010,6 +1019,7 @@
         $("title-count").textContent = "0";
         editor.innerHTML = "";
         setNoticeDateValue("");
+        setVisibleAtValue("");
         state.imageUrl = "";
         $("cover-preview").textContent = "未选择";
         $("cover-input").value = "";
@@ -1036,6 +1046,8 @@
         $("cover-input").value = "";
         var dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
         setNoticeDateValue(dateText);
+        var visibleText = item.visible_at ? String(item.visible_at).slice(0, 16) : "";
+        setVisibleAtValue(visibleText);
         $("publish-btn").textContent = "保存修改";
         $("publish-as-btn").classList.toggle("d-none", state.editingStatus !== "draft");
         $("cancel-edit-btn").classList.remove("d-none");
@@ -1054,6 +1066,22 @@
         if (native) {
           native.value = display ? display.replace(" ", "T") : "";
         }
+      }
+
+      function setVisibleAtValue(value) {
+        var display = value ? String(value).slice(0, 16).replace("T", " ") : "";
+        $("notice-visible-at").value = display;
+        var native = document.querySelector('.date-native[data-date-for="notice-visible-at"]');
+        if (native) {
+          native.value = display ? display.replace(" ", "T") : "";
+        }
+      }
+
+      var noticeVisibleNative = document.querySelector('.date-native[data-date-for="notice-visible-at"]');
+      if (noticeVisibleNative) {
+        noticeVisibleNative.addEventListener("change", function () {
+          setVisibleAtValue(noticeVisibleNative.value);
+        });
       }
 
       var noticeDateNative = document.querySelector('.date-native[data-date-for="notice-date"]');
@@ -1085,6 +1113,14 @@
 
         var payload = { title: title, content: content, image_url: state.imageUrl || "" };
         var dateValue = $("notice-date").value.trim();
+        var visibleValue = $("notice-visible-at").value.trim();
+        // v0.11.7：发布时间留空就用定时发布时间填补；生效时间始终单独提交
+        if (!dateValue && visibleValue) {
+          dateValue = visibleValue;
+        }
+        if (visibleValue) {
+          payload.visible_at = visibleValue.replace("T", " ") + ":00";
+        }
         if (dateValue) {
           payload.publish_date = dateValue.replace("T", " ") + ":00";
         }
@@ -1163,7 +1199,12 @@
             '<article class="admin-notice" data-id="' + item.id + '">' +
               '<div class="admin-notice-head">' +
                 '<span class="admin-notice-title">' + escapeHtml(item.title) + "</span>" +
-                '<span class="admin-notice-date">' + escapeHtml(date) + "</span>" +
+                '<span class="admin-notice-date">' + escapeHtml(date) +
+                (item.visible_at && String(item.visible_at).slice(0, 16) !== date
+                  ? '<span class="admin-notice-visible">生效 ' +
+                    escapeHtml(String(item.visible_at).slice(0, 16)) + "</span>"
+                  : "") +
+                "</span>" +
               "</div>" +
               '<div class="admin-notice-body">' + (plain ? escapeHtml(plain.slice(0, 140)) : "（无正文）") + "</div>" +
               '<div class="admin-notice-foot">' +

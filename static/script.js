@@ -1379,6 +1379,13 @@ function saveSettings() {
   localStorage.setItem(LS_CARDS, JSON.stringify(hidden));
   applyCardVisibility();
   toast("显示与主题设置已保存", "success");
+  // v0.11.7：设置搬进独立弹窗，保存完顺手收起
+  if (window.bootstrap) {
+    const modalElement = $("settings-modal");
+    if (modalElement) {
+      window.bootstrap.Modal.getOrCreateInstance(modalElement).hide();
+    }
+  }
 }
 
 function resetSettings() {
@@ -1910,11 +1917,50 @@ function initV0116Ui() {
         }
         event.preventDefault();
         event.stopImmediatePropagation();
-        toggleBatchRecord(row.getAttribute("data-record-id"));
+        const rawId = row.getAttribute("data-record-id");
+        // v0.11.7：Ctrl/Command + 点击 = 追加多选；普通点击 = 只选这一行
+        if (event.ctrlKey || event.metaKey) {
+          toggleBatchRecord(rawId);
+        } else {
+          state.batchRecordIds = [Number(rawId)];
+          updateBatchBar();
+          renderBillsTable();
+        }
       },
       true
     );
   }
+  // v0.11.7：批量态下 Ctrl+A 全选当前列表，Esc 退出批量
+  document.addEventListener("keydown", function (event) {
+    if (!state.batchMode) {
+      return;
+    }
+    if (event.key === "Escape") {
+      exitBatchMode();
+      return;
+    }
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a") {
+      return;
+    }
+    if (typeof isTypingTarget === "function" && isTypingTarget(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    if (state.batchMode === "accounts") {
+      state.batchAccountNames = (state.accounts || [])
+        .map(function (account) { return account && account.name; })
+        .filter(Boolean);
+      updateBatchBar();
+      renderAccountGroups();
+    } else {
+      state.batchRecordIds = Array.prototype.slice
+        .call(document.querySelectorAll("#bills-tbody tr[data-record-id]"))
+        .map(function (row) { return Number(row.getAttribute("data-record-id")); })
+        .filter(Boolean);
+      updateBatchBar();
+      renderBillsTable();
+    }
+  });
   renderCardVisibility();
   applyCardVisibility();
   syncThemeSetting();
@@ -5858,7 +5904,15 @@ function bindEvents() {
     // v0.11.6：批量管理态下点击行 = 勾选 / 取消勾选，不再切换流水账户
     if (state.batchMode === "accounts") {
       event.preventDefault();
-      toggleBatchAccount(card.getAttribute("data-account"));
+      const name = card.getAttribute("data-account");
+      // v0.11.7：Ctrl/Command + 点击 = 追加多选；普通点击 = 只选这一项
+      if (event.ctrlKey || event.metaKey) {
+        toggleBatchAccount(name);
+      } else {
+        state.batchAccountNames = name ? [name] : [];
+        updateBatchBar();
+        renderAccountGroups();
+      }
       return;
     }
     selectAccount(card.getAttribute("data-account")).catch(function (error) {
@@ -5956,15 +6010,10 @@ function bindEvents() {
   }
   if ($("settings-btn")) {
     $("settings-btn").addEventListener("click", function () {
-      // v0.11.6：设置不再是占位提示，跳到「我的」页的显示与主题卡片
-      switchPage("profile");
-      const card = $("settings-card");
-      if (card) {
-        card.scrollIntoView({ behavior: "smooth", block: "center" });
-        card.classList.add("is-flash");
-        setTimeout(function () {
-          card.classList.remove("is-flash");
-        }, 1200);
+      // v0.11.7：顶栏齿轮直接打开独立「系统设置」弹窗
+      const modalElement = $("settings-modal");
+      if (modalElement && window.bootstrap) {
+        window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
       }
     });
   }
@@ -8554,6 +8603,31 @@ function fillCorrectCategoryOptions(currentCategory) {
   }
 }
 
+/** 账户下拉：用当前账户表填充，并回填原账单的账户 */
+function fillCorrectAccountOptions(currentAccount) {
+  const select = $("correct-account");
+  if (!select) {
+    return;
+  }
+  const names = [];
+  (state.accounts || []).forEach(function (account) {
+    const name = String((account && account.name) || "").trim();
+    if (name && names.indexOf(name) < 0) {
+      names.push(name);
+    }
+  });
+  select.innerHTML = '<option value="">请选择账户…</option>';
+  names.forEach(function (name) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  if (currentAccount && names.indexOf(currentAccount) >= 0) {
+    select.value = currentAccount;
+  }
+}
+
 /** 详情弹窗点「AI 纠错」：先收起详情，再开纠错弹窗 */
 function openRecordCorrectModal() {
   const recordId = state.detailRecordId;
@@ -8576,9 +8650,22 @@ function openRecordCorrectModal() {
       (record.category_parent ? "（" + escapeHtml(record.category_parent) + "）" : "");
   }
   fillCorrectCategoryOptions(record.category);
+  fillCorrectAccountOptions(record.account);
   const textInput = $("correct-category-text");
   if (textInput) {
     textInput.value = "";
+  }
+  const amountInput = $("correct-amount");
+  if (amountInput) {
+    amountInput.value = record.amount === null || record.amount === undefined ? "" : String(record.amount);
+  }
+  const dateInput = $("correct-date");
+  if (dateInput) {
+    dateInput.value = record.date ? String(record.date).slice(0, 10) : "";
+  }
+  const noteInput = $("correct-note");
+  if (noteInput) {
+    noteInput.value = record.note || "";
   }
   const errorElement = $("correct-error");
   if (errorElement) {
@@ -8593,38 +8680,72 @@ async function submitCorrect() {
   if (!correctRecordId) {
     return;
   }
+  const recordId = correctRecordId;
+  const current = findRecordById(recordId) || {};
+  const errorElement = $("correct-error");
   const textInput = $("correct-category-text");
   const select = $("correct-category");
   // 输入框优先：允许输入页面下拉里没有的新分类名
   const typed = textInput ? String(textInput.value || "").trim() : "";
   const selected = select ? String(select.value || "").trim() : "";
-  const corrected = typed || selected;
-  const errorElement = $("correct-error");
-  if (!corrected) {
+  const category = typed || selected || String(current.category || "").trim();
+  if (!category) {
     if (errorElement) {
       errorElement.hidden = false;
       errorElement.textContent = "请先选择或输入正确的分类";
     }
     return;
   }
-  const recordId = correctRecordId;
-  const current = findRecordById(recordId) || {};
+
+  // 金额允许公式（沿用记账页的 amountFromInput），留空则沿用原金额
+  const amountInput = $("correct-amount");
+  const amountText = amountInput ? String(amountInput.value || "").trim() : "";
+  const amountResult = amountText ? amountFromInput(amountText) : { ok: true, value: current.amount };
+  if (!amountResult.ok) {
+    if (errorElement) {
+      errorElement.hidden = false;
+      errorElement.textContent = amountResult.message;
+    }
+    return;
+  }
+
+  const accountSelect = $("correct-account");
+  const account = accountSelect ? String(accountSelect.value || "").trim() : "";
+  if (!account) {
+    if (errorElement) {
+      errorElement.hidden = false;
+      errorElement.textContent = "请选择账户";
+    }
+    return;
+  }
+
+  const dateInput = $("correct-date");
+  const noteInput = $("correct-note");
+
+  const payload = {
+    amount: amountResult.value,
+    category: category,
+    account: account,
+    date: dateInput && dateInput.value ? dateInput.value : String(current.date || "").slice(0, 10),
+    note: noteInput ? String(noteInput.value || "") : String(current.note || ""),
+    text: "详情弹窗完整表单修改",
+  };
+
   const button = $("correct-submit-btn");
   if (button) {
     setButtonBusy(button, true, "提交中…");
   }
   try {
-    // 契约（Lead m00176）：POST /api/records/<id>/correction，返回 {record, memory}
+    // v0.11.7：完整表单直接走 ai-revise 的结构化分支（全量覆盖 + 跨账户余额回滚 + 审计）
     const data = await apiRecordRequest(
-      "/api/records/" + recordId + "/correction",
-      jsonOptions("POST", {
-        corrected_category: corrected,
-        original_text: String(current.note || current.category || ""),
-        raw_category: String(current.category || ""),
-      })
+      "/api/records/" + recordId + "/ai-revise",
+      jsonOptions("POST", payload)
     );
     const updated = (data && data.record) || current;
-    toast("已记住这次纠正，下次 AI 会参考", "success");
+    toast("已更新这笔账，AI 也记下了这次纠正", "success");
+    if (data && data.is_new_account && data.new_account_name) {
+      toast("已自动创建新账户：" + data.new_account_name, "warn");
+    }
     if (correctModalInstance) {
       correctModalInstance.hide();
     }

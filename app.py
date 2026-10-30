@@ -1257,6 +1257,51 @@ def revise_record_by_ai(record_id):
         return jsonify(error="账单不存在（可能已被删除）"), 404
 
     data = request.get_json(silent=True) or {}
+
+    # v0.11.7：详情弹窗的「完整表单」直接走结构化字段，不经自然语言模型；
+    # 仍复用 _apply_ai_correction 做全量 UPDATE + 跨账户余额回滚 + 审计日志
+    field_keys = ("amount", "category", "account", "note", "date")
+    if any(key in data for key in field_keys):
+        amount_value = data.get("amount")
+        if amount_value in (None, ""):
+            amount_value = record.get("amount")
+        # 表单金额可能是字符串 / 带逗号的写法，这里统一成数字并拦截非法值，
+        # 否则会一路传到余额计算里抛 TypeError（500）
+        try:
+            amount_value = round(float(str(amount_value).replace(",", "").replace("¥", "").strip()), 2)
+        except (TypeError, ValueError):
+            return jsonify(error="金额必须是数字"), 400
+        if amount_value <= 0:
+            return jsonify(error="金额必须大于 0"), 400
+        parsed = {
+            "action": "record",
+            "confidence": None,
+            "type": record.get("type") or database.DEFAULT_TYPE,
+            "amount": amount_value,
+            "category": data.get("category") or record.get("category") or "其他",
+            "account": data.get("account") or record.get("account") or database.DEFAULT_ACCOUNT,
+            "to_account": data.get("to_account", record.get("to_account") or ""),
+            "fee": data.get("fee", record.get("fee") or 0),
+            "date": data.get("date") or record.get("date"),
+            "note": data.get("note", record.get("note") or ""),
+            "is_reimbursable": record.get("is_reimbursable") or False,
+            "contact_name": record.get("reimbursement_contact_name") or "",
+            "auto_corrected": [],
+            "auto_corrected_msg": "",
+        }
+        account, is_new = _ensure_ai_account(parsed["account"])
+        parsed["account"] = account
+        text = data.get("text") or (
+            "手动修改：%s %s · %s"
+            % (parsed["account"], parsed.get("category") or "", parsed.get("note") or "")
+        )
+        body, status = _apply_ai_correction(record, parsed, text.strip(), source="detail")
+        if status >= 400:
+            return jsonify(body), status
+        body["is_new_account"] = bool(is_new)
+        body["new_account_name"] = account if is_new else ""
+        return jsonify(body), 200
+
     text = data.get("text")
     if not isinstance(text, str) or not text.strip():
         return jsonify(error="先说说要改成什么，比如「改成微信零钱，金额 50」"), 400
@@ -1775,8 +1820,9 @@ def list_notifications():
     include = (request.args.get("include") or "").strip()
     if include in ("drafts", "all"):
         return jsonify(notifications=database.list_notifications())
+    # v0.11.7：前台严格按生效时间过滤，visible_at 没到今天的通知绝对不可见
     return jsonify(
-        notifications=database.list_notifications(status="published"),
+        notifications=database.list_notifications(status="published", visible_only=True),
     )
 
 
@@ -1815,10 +1861,18 @@ def create_notification():
     publish_date = data.get("publish_date")
     if publish_date is not None and not isinstance(publish_date, str):
         return jsonify(error="publish_date 必须是字符串"), 400
+    visible_at = data.get("visible_at")
+    if visible_at is not None and not isinstance(visible_at, str):
+        return jsonify(error="visible_at 必须是字符串"), 400
+    # v0.11.7：发布时间留空时用定时发布时间兜底；生效时间永远单独存 visible_at
+    publish_date = (publish_date or "").strip() or None
+    visible_at = (visible_at or "").strip() or None
+    if publish_date is None and visible_at is not None:
+        publish_date = visible_at
 
     try:
         notification = database.create_notification(
-            title, content, image_url, publish_date, status="draft"
+            title, content, image_url, publish_date, status="draft", visible_at=visible_at
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
@@ -1860,6 +1914,14 @@ def update_notification(notify_id):
     publish_date = data.get("publish_date")
     if publish_date is not None and not isinstance(publish_date, str):
         return jsonify(error="publish_date 必须是字符串"), 400
+    visible_at = data.get("visible_at")
+    if visible_at is not None and not isinstance(visible_at, str):
+        return jsonify(error="visible_at 必须是字符串"), 400
+    publish_date = (publish_date or "").strip() or None if publish_date is not None else None
+    visible_at = (visible_at or "").strip() or None if visible_at is not None else None
+    # 展示时间留空、但给了定时发布时间：用定时发布时间兜底
+    if publish_date is None and visible_at is not None:
+        publish_date = visible_at
 
     try:
         notification = database.update_notification(
@@ -1868,6 +1930,7 @@ def update_notification(notify_id):
             content=content,
             image_url=image_url,
             publish_date=publish_date,
+            visible_at=visible_at,
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
@@ -2105,7 +2168,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.11.6-DEV"
+APP_VERSION_FALLBACK = "v0.11.7-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
