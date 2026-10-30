@@ -1675,12 +1675,13 @@ def list_records_with_images():
     sql = (
         _RECORD_SELECT
         + " WHERE r.deleted_at IS NULL"
+        + "   AND r.user_id = ?"
         + "   AND r.image_path IS NOT NULL AND r.image_path <> ''"
         + " ORDER BY r.id DESC"
     )
     conn = get_conn()
     try:
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, (_uid(),)).fetchall()
     finally:
         conn.close()
     return [dict(row) for row in rows]
@@ -1695,8 +1696,8 @@ def set_record_image(record_id, image_path):
     try:
         with conn:
             cur = conn.execute(
-                "UPDATE records SET image_path = ? WHERE id = ?",
-                (image_path or "", record_id),
+                "UPDATE records SET image_path = ? WHERE id = ? AND user_id = ?",
+                (image_path or "", record_id, _uid()),
             )
             return cur.rowcount > 0
     finally:
@@ -1762,7 +1763,8 @@ def set_record_reimbursement(
             if contact_id is None:
                 return False, "开启报销前请选择报销人"
             exists = conn.execute(
-                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+                "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+                (contact_id, _uid()),
             ).fetchone()
             if exists is None:
                 return False, "报销人不存在"
@@ -2014,7 +2016,8 @@ def update_contact(contact_id, name=None, identity=None, phone=None, wechat=None
     try:
         with conn:
             exists = conn.execute(
-                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+                "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+                (contact_id, _uid()),
             ).fetchone()
             if exists is None:
                 return None, "联系人不存在"
@@ -2036,7 +2039,8 @@ def delete_contact(contact_id):
     try:
         with conn:
             exists = conn.execute(
-                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+                "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+                (contact_id, _uid()),
             ).fetchone()
             if exists is None:
                 return False, "联系人不存在"
@@ -2149,7 +2153,8 @@ def create_debt(
     try:
         with conn:
             exists = conn.execute(
-                "SELECT 1 FROM contacts WHERE id = ?", (contact_id,)
+                "SELECT 1 FROM contacts WHERE id = ? AND user_id = ?",
+                (contact_id, _uid()),
             ).fetchone()
             if exists is None:
                 return None, "联系人不存在"
