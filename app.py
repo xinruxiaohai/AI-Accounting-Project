@@ -1,20 +1,26 @@
 import base64
 import datetime
+import difflib
+import functools
 import io
 import json
 import os
+import re
 import subprocess
 import uuid
 
+import jwt
 from flask import (
     Flask,
     Response,
+    g,
     jsonify,
     render_template,
     request,
     send_from_directory,
     stream_with_context,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai_service
 import database
@@ -114,6 +120,175 @@ def _access_guard():
         return None
 
     return jsonify(error="需要输入访问密码", code="access_required"), 401
+
+
+# ---------------- 多用户账号与 JWT 鉴权（v0.12） ----------------
+
+JWT_SECRET = os.getenv("JWT_SECRET", "ai-accounting-jwt-secret-v012")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRES_SECONDS = 7 * 24 * 3600
+
+# 登录/注册本身和访问密码查询不要求 JWT；已发布通知允许游客看
+AUTH_PUBLIC_PATHS = {
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/sms-login",
+    "/api/access/config",
+    "/api/access/verify",
+    "/api/version",
+}
+
+
+def _bearer_token():
+    """从 Authorization: Bearer <token> 里取 JWT，没有就返回空串。"""
+    header = request.headers.get("Authorization") or ""
+    if not header.lower().startswith("bearer "):
+        return ""
+    return header[7:].strip()
+
+
+def _issue_token(user):
+    """签发 JWT：sub 是用户 id，7 天有效；绝不把密码哈希放进 Token。"""
+    now = datetime.datetime.utcnow()
+    payload = {
+        # PyJWT 2.15 要求 sub 必须是字符串，解码后再转回 int
+        "sub": str(int(user["id"])),
+        "email": user["email"],
+        "iat": now,
+        "exp": now + datetime.timedelta(seconds=JWT_EXPIRES_SECONDS),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def _user_from_token(token):
+    """解 JWT 并回表取用户；过期/伪造/用户已删都返回 None。"""
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+    try:
+        user_id = int(payload.get("sub"))
+    except (TypeError, ValueError):
+        return None
+    return database.get_user(user_id)
+
+
+def _public_user(user):
+    """对外只暴露 id / email / phone / created_at，绝不带 password_hash。"""
+    if not user:
+        return None
+    return {
+        "id": user.get("id"),
+        "email": user.get("email"),
+        "phone": user.get("phone") or "",
+        "created_at": user.get("created_at") or "",
+    }
+
+
+@app.before_request
+def _identity_guard():
+    """v0.12：所有 /api/* 默认必须带合法 JWT，白名单除外。
+
+    这里同时把 user_id 注入 database 的 contextvar，后面所有 SQL 都自动按用户隔离。
+    """
+    if request.method == "OPTIONS":
+        return None
+
+    path = request.path
+    user = _user_from_token(_bearer_token())
+    g.current_user = user
+
+    # 游客看已发布通知：按 1 号管理员的通知列表展示（通知只有后台能写）
+    if user is None and path == "/api/notifications" and request.method == "GET":
+        database.set_current_user(1)
+        return None
+
+    if path in AUTH_PUBLIC_PATHS:
+        # 登录/注册接口不需要身份；但上下文保持 0，避免误读他人数据
+        database.set_current_user(user["id"] if user else 0)
+        return None
+
+    if path.startswith("/api/") and user is None:
+        database.set_current_user(0)
+        return jsonify(error="请先登录", code="auth_required"), 401
+
+    database.set_current_user(user["id"] if user else 1)
+    return None
+
+
+def login_required(view):
+    """装饰器版保护：路由内部再确认一次，防止被绕过 before_request。"""
+
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if g.get("current_user") is None:
+            return jsonify(error="请先登录", code="auth_required"), 401
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
+def _normalize_email(value):
+    return (value or "").strip().lower()
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    """注册：邮箱唯一、密码至少 6 位；id 由 users 表的自增序列决定（从 10 开始）。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+    password = data.get("password") if isinstance(data.get("password"), str) else ""
+    phone = (data.get("phone") or "").strip() if isinstance(data.get("phone"), str) else ""
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify(error="请输入正确的邮箱"), 400
+    if len(password) < 6:
+        return jsonify(error="密码至少 6 位"), 400
+    if len(phone) > 30:
+        return jsonify(error="手机号太长了"), 400
+
+    user, error_message = database.create_user(
+        email, generate_password_hash(password), phone
+    )
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+
+    database.seed_default_accounts_for(user["id"])
+    return (
+        jsonify(token=_issue_token(user), user=_public_user(user)),
+        201,
+    )
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    """登录：校验邮箱 + 密码，成功返回 JWT 与用户信息（永不返回密码哈希）。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+    password = data.get("password") if isinstance(data.get("password"), str) else ""
+
+    user = database.get_user_by_email(email)
+    if user is None or not check_password_hash(user.get("password_hash") or "", password):
+        return jsonify(error="邮箱或密码不正确"), 401
+
+    return jsonify(token=_issue_token(user), user=_public_user(user))
+
+
+@app.route("/api/auth/me", methods=["GET"])
+@login_required
+def auth_me():
+    """当前登录用户信息；前端路由守卫用它验 Token 是否还有效。"""
+    return jsonify(user=_public_user(g.current_user))
+
+
+@app.route("/api/auth/sms-login", methods=["POST"])
+def auth_sms_login():
+    """短信登录占位：接口先占住，等接短信服务商后再实现。"""
+    return jsonify(error="短信登录即将上线，先用邮箱密码登录", code="not_implemented"), 501
 
 
 def _parse_datetime(value):
@@ -1356,6 +1531,334 @@ def check_record_duplicate():
     return jsonify(duplicate=candidate is not None, candidate=candidate)
 
 
+# ---------------- 账单导入（v0.12）：CSV / Excel 解析、去重预览、批量入库 ----------------
+
+IMPORT_MAX_BYTES = 8 * 1024 * 1024
+IMPORT_MAX_ROWS = 2000
+IMPORT_DUPLICATE_DAYS = 10
+
+# 微信 / 支付宝导出表的表头各自不同，按关键词找列，别写死列序号
+IMPORT_TIME_KEYWORDS = ("交易时间", "交易创建时间", "付款时间", "创建时间", "时间")
+IMPORT_AMOUNT_KEYWORDS = ("金额(元)", "交易金额", "金额")
+IMPORT_MERCHANT_KEYWORDS = ("交易对方", "对方", "商户", "商家", "交易对象")
+IMPORT_TYPE_KEYWORDS = ("收/支", "收支", "交易类型", "类型")
+IMPORT_NOTE_KEYWORDS = ("商品说明", "商品名称", "商品", "备注")
+IMPORT_STATUS_KEYWORDS = ("交易状态", "当前状态", "状态")
+IMPORT_PAY_KEYWORDS = ("支付方式", "收/付款方式", "付款方式", "账户")
+
+
+def _import_pick_column(columns, keywords):
+    """按关键词优先级挑列：先找 收/支，再退到 交易类型，避免把「商户消费」当收支。"""
+    for keyword in keywords:
+        for column in columns:
+            if keyword in str(column):
+                return column
+    return None
+
+
+def _import_decode_csv(raw):
+    """微信导出常见 GBK，支付宝常见 UTF-8；逐个编码试，失败返回 None。"""
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return None
+
+
+def _import_dataframe(upload):
+    """把上传的 CSV / Excel 读成 DataFrame，返回 (frame, 错误信息)。"""
+    import pandas as pd
+
+    filename = upload.filename or ""
+    extension = os.path.splitext(filename)[1].lower()
+    raw = upload.read()
+    if not raw:
+        return None, "文件是空的，请重新导出"
+    if len(raw) > IMPORT_MAX_BYTES:
+        return None, "文件太大了（上限 8MB），请按月导出"
+
+    if extension in (".xlsx", ".xls"):
+        try:
+            frame = pd.read_excel(io.BytesIO(raw), dtype=str)
+        except Exception as exc:  # noqa: BLE001 - 解析失败统一提示
+            return None, "Excel 解析失败：%s" % exc
+        return frame, None
+
+    text = _import_decode_csv(raw)
+    if text is None:
+        return None, "无法识别 CSV 编码，请用 UTF-8 或 GBK 重新导出"
+
+    # 微信/支付宝导出的 csv 前面常有几行说明文字，找到真正的表头再交给 pandas
+    lines = text.splitlines()
+    header_index = 0
+    for index, line in enumerate(lines[:40]):
+        if "交易时间" in line and ("金额" in line or "收/支" in line):
+            header_index = index
+            break
+    csv_text = "\n".join(lines[header_index:])
+    try:
+        frame = pd.read_csv(io.StringIO(csv_text), dtype=str, on_bad_lines="skip")
+    except Exception as exc:  # noqa: BLE001
+        return None, "CSV 解析失败：%s" % exc
+    return frame, None
+
+
+def _import_amount(value):
+    """把「¥1,234.50」「1,234.50」这类金额统一成两位小数。"""
+    if value is None:
+        return None
+    text = str(value).replace("¥", "").replace("￥", "").replace(",", "").strip()
+    if not text or text in ("-", "/", "--"):
+        return None
+    try:
+        return round(abs(float(text)), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _import_date(value):
+    """只保留日期部分（YYYY-MM-DD）；解析不了返回 None。"""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text.replace("/", "-").replace(".", "-").replace("年", "-").replace("月", "-").replace("日", "")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _import_type(value):
+    """收/支列：收入 → income，支出 → expense，不计收支返回 None。
+
+    预览接口返回的是已归一化的 expense / income，确认时原样再传回来，也要认。
+    """
+    text = str(value or "").strip()
+    if text in ("expense", "income"):
+        return text
+    if "收入" in text:
+        return "income"
+    if "支出" in text:
+        return "expense"
+    return None
+
+
+def _import_category(merchant, note):
+    """用同义词表给导入流水猜分类，猜不出归「其他」。"""
+    text = "%s %s" % (merchant or "", note or "")
+    for keyword, category in ai_service.CATEGORY_MAPPING.items():
+        if keyword and keyword in text:
+            return category
+    # 导入最常见的是吃饭：AI 同义词表没覆盖的小店名/菜名，用餐饮关键词兜底
+    for keyword in ("面", "饭", "餐", "早餐", "午餐", "晚餐", "夜宵", "烧烤", "火锅", "奶茶", "咖啡"):
+        if keyword in text:
+            return "餐饮"
+    return "其他"
+
+
+def _import_account(pay_text, accounts):
+    """按「支付方式 / 收付款方式」匹配用户自己的账户，匹配不到就用第 1 个账户。"""
+    text = str(pay_text or "")
+    for name in sorted(accounts, key=len, reverse=True):
+        if name and name in text:
+            return name
+    for alias, name in (
+        ("零钱通", "微信"),
+        ("零钱", "微信"),
+        ("微信", "微信"),
+        ("余额宝", "余额宝"),
+        ("余额", "支付宝"),
+        ("支付宝", "支付宝"),
+        ("银行", "银行卡"),
+    ):
+        if alias in text and (name in accounts or not accounts):
+            return name
+    return accounts[0] if accounts else database.DEFAULT_ACCOUNT
+
+
+def _import_similar(left, right):
+    """商户相似度：一方包含另一方，或 difflib 相似度 >= 0.6。"""
+    left = re.sub(r"\s+", "", left or "")
+    right = re.sub(r"\s+", "", right or "")
+    if not left or not right:
+        return False
+    return left in right or right in left or difflib.SequenceMatcher(None, left, right).ratio() >= 0.6
+
+
+def _import_recent_records():
+    """取当前用户最近 10 天的账目，用于导入去重。"""
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=IMPORT_DUPLICATE_DAYS)).strftime("%Y-%m-%d")
+    records = database.list_records()
+    return [record for record in records if (record.get("date") or "") >= cutoff]
+
+
+@app.route("/api/import/parse", methods=["POST"])
+@login_required
+def import_parse():
+    """解析微信/支付宝导出的 CSV / Excel，返回预览数据与重复标记（不写库）。"""
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return jsonify(error="请选择要导入的 CSV 或 Excel 文件"), 400
+
+    frame, error_message = _import_dataframe(upload)
+    if error_message is not None:
+        return jsonify(error=error_message), 400
+    if frame is None or frame.empty:
+        return jsonify(error="文件里没有可解析的流水"), 400
+
+    columns = list(frame.columns)
+    time_column = _import_pick_column(columns, IMPORT_TIME_KEYWORDS)
+    amount_column = _import_pick_column(columns, IMPORT_AMOUNT_KEYWORDS)
+    merchant_column = _import_pick_column(columns, IMPORT_MERCHANT_KEYWORDS)
+    type_column = _import_pick_column(columns, IMPORT_TYPE_KEYWORDS)
+    note_column = _import_pick_column(columns, IMPORT_NOTE_KEYWORDS)
+    status_column = _import_pick_column(columns, IMPORT_STATUS_KEYWORDS)
+    pay_column = _import_pick_column(columns, IMPORT_PAY_KEYWORDS)
+
+    if amount_column is None:
+        return jsonify(error="没找到金额列，请确认是微信 / 支付宝导出的账单文件"), 400
+    if time_column is None:
+        return jsonify(error="没找到交易时间列，请确认是微信 / 支付宝导出的账单文件"), 400
+
+    header_text = " ".join(str(item) for item in columns)
+    source = "alipay" if ("支付宝" in header_text or "交易号" in header_text) else "wechat"
+
+    accounts = [item["name"] for item in database.list_accounts()]
+    recent = _import_recent_records()
+    items = []
+    skipped = 0
+
+    for _, row in frame.iterrows():
+        if len(items) >= IMPORT_MAX_ROWS:
+            break
+        amount = _import_amount(row.get(amount_column))
+        date = _import_date(row.get(time_column))
+        record_type = _import_type(row.get(type_column) if type_column else "")
+        status = str(row.get(status_column) or "") if status_column else ""
+        merchant = str(row.get(merchant_column) or "").strip() if merchant_column else ""
+        note = str(row.get(note_column) or "").strip() if note_column else ""
+
+        invalid = (
+            amount is None
+            or amount <= 0
+            or date is None
+            or record_type is None
+            or "退款" in status
+            or "关闭" in status
+            or "失败" in status
+        )
+        if invalid:
+            skipped += 1
+            continue
+
+        duplicate = None
+        for record in recent:
+            if abs(float(record.get("amount") or 0) - amount) > 0.005:
+                continue
+            if (record.get("date") or "")[:10] != date:
+                continue
+            if _import_similar(merchant or note, record.get("note") or ""):
+                duplicate = record
+                break
+
+        items.append(
+            {
+                "date": date,
+                "amount": amount,
+                "type": record_type,
+                "category": _import_category(merchant, note),
+                "account": _import_account(row.get(pay_column) if pay_column else "", accounts),
+                "note": note or merchant or "导入流水",
+                "merchant": merchant,
+                "is_duplicate": duplicate is not None,
+                "duplicate_id": duplicate.get("id") if duplicate else None,
+            }
+        )
+
+    duplicate_count = sum(1 for item in items if item["is_duplicate"])
+    return jsonify(
+        source=source,
+        filename=upload.filename,
+        total=len(items),
+        duplicate_count=duplicate_count,
+        skipped=skipped,
+        items=items,
+    )
+
+
+@app.route("/api/import/confirm", methods=["POST"])
+@login_required
+def import_confirm():
+    """把预览里勾选的流水批量写进 records，同步账户余额并记录 import_history。"""
+    data = request.get_json(silent=True) or {}
+    raw_items = data.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        return jsonify(error="没有勾选任何流水"), 400
+
+    source = data.get("source") if data.get("source") in database.IMPORT_SOURCES else "wechat"
+    filename = data.get("filename") or ""
+    imported = 0
+    duplicated = 0
+    failed = []
+
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, dict):
+            failed.append({"index": index, "error": "数据格式不对"})
+            continue
+        amount = _import_amount(item.get("amount"))
+        date = _import_date(item.get("date"))
+        record_type = _import_type(item.get("type"))
+        if amount is None or amount <= 0 or date is None or record_type is None:
+            failed.append({"index": index, "error": "金额 / 日期 / 收支类型不合法"})
+            continue
+        if item.get("is_duplicate"):
+            duplicated += 1
+            continue
+
+        category_name = (item.get("category") or "其他").strip()
+        try:
+            category = database.ensure_category(category_name)
+        except database.RecordError:
+            category = database.ensure_category("其他")
+        account = (item.get("account") or database.DEFAULT_ACCOUNT).strip()
+        # 商户 + 商品都写进备注：下次导入同一份账单时，10 天去重能命中商户
+        merchant = (item.get("merchant") or "").strip()
+        note_text = (item.get("note") or "").strip()
+        note = (merchant + " " + note_text).strip() or "导入流水"
+        note = note[:200]
+
+        record_id, error_message = database.add_record(
+            amount,
+            category["name"] if isinstance(category, dict) else category_name,
+            note,
+            date,
+            account,
+            record_type,
+            category["id"] if isinstance(category, dict) else None,
+            "",
+            "",
+            0,
+        )
+        if error_message is not None:
+            failed.append({"index": index, "error": error_message})
+            continue
+        imported += 1
+
+    history = database.add_import_history(
+        source, len(raw_items), imported, duplicated, filename
+    )
+    return jsonify(
+        imported=imported,
+        duplicated=duplicated,
+        failed=failed,
+        total=len(raw_items),
+        history=history,
+    )
+
+
 # ---------------- AI 记忆库管理（v0.11.4，后台 Tab 用） ----------------
 
 
@@ -2188,7 +2691,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.11.8-DEV"
+APP_VERSION_FALLBACK = "v0.12-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

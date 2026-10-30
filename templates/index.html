@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.11.8">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.0">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.11.8-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12-DEV</div>
     </div>
   </aside>
 
@@ -512,6 +512,8 @@
                 <span class="panel-title">账单明细</span>
                 <div class="panel-tools">
                   <button class="btn btn-sm btn-outline-secondary" type="button" id="bills-batch-toggle">批量管理</button>
+                  <!-- v0.12：微信 / 支付宝账单导入 -->
+                  <button class="btn btn-sm btn-outline-primary" type="button" id="import-bill-btn">导入账单</button>
                 </div>
               </div>
               <div class="table-responsive bills-table-wrap">
@@ -559,6 +561,8 @@
               <li><kbd>Ctrl</kbd> + <kbd>K</kbd> 搜索账单</li>
               <li>右键账单可编辑 / 删除 / 复制</li>
             </ul>
+            <!-- v0.12：退出登录 -->
+            <button class="btn btn-outline-danger w-100 mt-3" type="button" data-logout>退出登录</button>
           </div>
 
           <div class="panel export-card">
@@ -1382,6 +1386,50 @@
 </div>
 
 <!-- Bootstrap 的 JS（弹窗 / Tooltip 靠它），必须在使用弹窗的标签之后加载 -->
+
+<!-- ================= v0.12：账单导入（微信 / 支付宝 CSV、Excel） ================= -->
+<div class="modal fade" id="import-modal" tabindex="-1" aria-labelledby="import-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content import-modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="import-modal-title">导入微信 / 支付宝账单</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <div class="import-drop" id="import-drop">
+          <input type="file" id="import-file" accept=".csv,.xlsx,.xls" hidden>
+          <p class="import-drop-title">拖入或点击选择账单文件</p>
+          <p class="import-drop-hint">支持微信 / 支付宝导出的 CSV、Excel（自动识别 GBK / UTF-8），单文件上限 8MB</p>
+          <button class="btn btn-primary btn-sm" type="button" id="import-pick-btn">选择文件</button>
+        </div>
+        <p class="import-status" id="import-status"></p>
+        <div class="import-summary" id="import-summary" hidden></div>
+        <div class="import-table-wrap" id="import-table-wrap" hidden>
+          <table class="table import-table">
+            <thead>
+              <tr>
+                <th scope="col"><input type="checkbox" id="import-select-all" checked aria-label="全选"></th>
+                <th scope="col">日期</th>
+                <th scope="col">类型</th>
+                <th scope="col">分类</th>
+                <th scope="col">账户</th>
+                <th scope="col" class="text-end">金额</th>
+                <th scope="col">商户 / 备注</th>
+              </tr>
+            </thead>
+            <tbody id="import-preview-body"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="import-count" id="import-count"></span>
+        <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-primary" type="button" id="import-confirm-btn" disabled>确认导入</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
 <!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
 <script src="/static/vendor/math.min.js"></script>
@@ -1389,9 +1437,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/access-guard.js?v=0.11.8"></script>
+<script src="/static/auth-v012.js?v=0.12.0"></script>
+<script src="/static/access-guard.js?v=0.12.0"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.11.8"></script>
+<script src="/static/script.js?v=0.12.0"></script>
 
 </body>
 </html>

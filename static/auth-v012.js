@@ -1,0 +1,591 @@
+/* v0.12 多用户前端：JWT 注入、登录/注册守卫、退出登录、账单导入预览。
+ * 这个文件必须在 script.js 之前加载：它会包一层 window.fetch，
+ * 之后页面里任何请求都会自动带 Authorization: Bearer <token>。
+ */
+(function () {
+  "use strict";
+
+  var TOKEN_KEY = "ai_accounting_token";
+  var USER_KEY = "ai_accounting_user";
+  var PUBLIC_AUTH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/sms-login"];
+
+  var originalFetch = window.fetch ? window.fetch.bind(window) : null;
+
+  function getToken() {
+    try {
+      return localStorage.getItem(TOKEN_KEY) || "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function getUser() {
+    try {
+      return JSON.parse(localStorage.getItem(USER_KEY) || "null");
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveSession(data) {
+    try {
+      localStorage.setItem(TOKEN_KEY, data.token || "");
+      localStorage.setItem(USER_KEY, JSON.stringify(data.user || {}));
+    } catch (error) {
+      /* 隐私模式下 localStorage 可能不可用，登录态只保存在当前页 */
+    }
+  }
+
+  function clearSession() {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(USER_KEY);
+    } catch (error) {
+      /* 同上 */
+    }
+  }
+
+  function isPublicAuthPath(url) {
+    for (var i = 0; i < PUBLIC_AUTH_PATHS.length; i += 1) {
+      if (url.indexOf(PUBLIC_AUTH_PATHS[i]) === 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  window.dshAuth = {
+    token: getToken,
+    user: getUser,
+    logout: function () {
+      clearSession();
+      window.location.reload();
+    },
+  };
+
+  if (originalFetch) {
+    window.fetch = function (input, init) {
+      init = init || {};
+      var url = typeof input === "string" ? input : (input && input.url) || "";
+      var headers = new Headers(init.headers || {});
+      var token = getToken();
+      if (token && !headers.has("Authorization")) {
+        headers.set("Authorization", "Bearer " + token);
+      }
+      init.headers = headers;
+      return originalFetch(input, init).then(function (response) {
+        if (response.status === 401 && url.indexOf("/api/") === 0 && !isPublicAuthPath(url)) {
+          // 只对「没登录/登录过期」弹登录框；后台访问密码的 401 交给 access-guard 处理
+          response
+            .clone()
+            .json()
+            .then(function (body) {
+              if (body && body.code === "auth_required") {
+                showGate();
+              }
+            })
+            .catch(function () {
+              showGate();
+            });
+        }
+        return response;
+      });
+    };
+  }
+
+  /* ---------------- 登录 / 注册遮罩 ---------------- */
+
+  var gateElement = null;
+  var gateMode = "login";
+
+  function buildGate() {
+    if (gateElement) {
+      return gateElement;
+    }
+    gateElement = document.createElement("div");
+    gateElement.className = "auth-gate";
+    gateElement.id = "auth-gate";
+    gateElement.innerHTML =
+      '<div class="auth-card">' +
+        '<div class="auth-brand">' +
+          '<span class="auth-logo">¥</span>' +
+          "<h1>AI 记账</h1>" +
+          "<p>登录后，账本数据只属于你</p>" +
+        "</div>" +
+        '<div class="auth-tabs">' +
+          '<button type="button" data-auth-tab="login" class="is-active">登录</button>' +
+          '<button type="button" data-auth-tab="register">注册</button>' +
+        "</div>" +
+        '<form id="auth-form" novalidate>' +
+          '<label class="auth-label">邮箱' +
+            '<input id="auth-email" class="form-control" type="email" autocomplete="email" placeholder="you@example.com">' +
+          "</label>" +
+          '<label class="auth-label">密码' +
+            '<input id="auth-password" class="form-control" type="password" autocomplete="current-password" placeholder="至少 6 位">' +
+          "</label>" +
+          '<label class="auth-label auth-phone" hidden>手机号（可选）' +
+            '<input id="auth-phone" class="form-control" type="tel" autocomplete="tel" placeholder="用于以后找回密码">' +
+          "</label>" +
+          '<p class="auth-error" id="auth-error" hidden></p>' +
+          '<button class="btn btn-primary w-100 auth-submit" type="submit" id="auth-submit">登录</button>' +
+        "</form>" +
+        '<p class="auth-tip">默认管理员：1937097795@qq.com / 123456</p>' +
+      "</div>";
+    document.body.appendChild(gateElement);
+
+    gateElement.addEventListener("click", function (event) {
+      var tab = event.target.closest("[data-auth-tab]");
+      if (!tab) {
+        return;
+      }
+      switchMode(tab.getAttribute("data-auth-tab"));
+    });
+
+    gateElement.querySelector("#auth-form").addEventListener("submit", submitGate);
+    return gateElement;
+  }
+
+  function switchMode(mode) {
+    gateMode = mode === "register" ? "register" : "login";
+    if (!gateElement) {
+      return;
+    }
+    gateElement.querySelectorAll("[data-auth-tab]").forEach(function (tab) {
+      tab.classList.toggle("is-active", tab.getAttribute("data-auth-tab") === gateMode);
+    });
+    gateElement.querySelector(".auth-phone").hidden = gateMode !== "register";
+    gateElement.querySelector("#auth-submit").textContent = gateMode === "register" ? "注册并进入" : "登录";
+    gateElement.querySelector("#auth-password").setAttribute(
+      "autocomplete",
+      gateMode === "register" ? "new-password" : "current-password"
+    );
+    var errorElement = gateElement.querySelector("#auth-error");
+    errorElement.hidden = true;
+  }
+
+  function gateError(message) {
+    if (!gateElement) {
+      return;
+    }
+    var errorElement = gateElement.querySelector("#auth-error");
+    errorElement.textContent = message || "";
+    errorElement.hidden = !message;
+  }
+
+  async function submitGate(event) {
+    event.preventDefault();
+    if (!gateElement) {
+      return;
+    }
+    var email = gateElement.querySelector("#auth-email").value.trim();
+    var password = gateElement.querySelector("#auth-password").value;
+    var phone = gateElement.querySelector("#auth-phone").value.trim();
+    var button = gateElement.querySelector("#auth-submit");
+
+    if (!email || !password) {
+      gateError("邮箱和密码都要填");
+      return;
+    }
+    if (password.length < 6) {
+      gateError("密码至少 6 位");
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = gateMode === "register" ? "注册中…" : "登录中…";
+    gateError("");
+    try {
+      var response = await originalFetch(
+        gateMode === "register" ? "/api/auth/register" : "/api/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            gateMode === "register"
+              ? { email: email, password: password, phone: phone }
+              : { email: email, password: password }
+          ),
+        }
+      );
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        gateError(data.error || "登录失败，请稍后再试");
+        return;
+      }
+      saveSession(data);
+      // 重新加载：让 script.js 在带 Token 的状态下重新初始化所有数据
+      window.location.reload();
+    } catch (error) {
+      gateError((error && error.message) || "网络异常，请重试");
+    } finally {
+      button.disabled = false;
+      button.textContent = gateMode === "register" ? "注册并进入" : "登录";
+    }
+  }
+
+  function showGate() {
+    buildGate();
+    gateElement.hidden = false;
+    document.body.classList.add("auth-locked");
+    var emailInput = gateElement.querySelector("#auth-email");
+    if (emailInput) {
+      window.setTimeout(function () {
+        emailInput.focus();
+      }, 80);
+    }
+  }
+
+  function hideGate() {
+    if (!gateElement) {
+      return;
+    }
+    gateElement.hidden = true;
+    document.body.classList.remove("auth-locked");
+  }
+
+  function verifySession() {
+    if (!getToken()) {
+      showGate();
+      return;
+    }
+    originalFetch("/api/auth/me", {
+      headers: { Authorization: "Bearer " + getToken() },
+    })
+      .then(function (response) {
+        if (!response.ok) {
+          clearSession();
+          showGate();
+          return;
+        }
+        return response.json().then(function (data) {
+          if (data && data.user) {
+            try {
+              localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+            } catch (error) {
+              /* 忽略 */
+            }
+          }
+          hideGate();
+        });
+      })
+      .catch(function () {
+        // 断网时不把用户踢下线，继续用本地 Token
+        hideGate();
+      });
+  }
+
+  /* ---------------- 退出登录：任何 [data-logout] 按钮 ---------------- */
+
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-logout]");
+    if (!button) {
+      return;
+    }
+    event.preventDefault();
+    clearSession();
+    window.location.reload();
+  });
+
+  /* ---------------- 账单导入 ---------------- */
+
+  var importState = { items: [], source: "wechat", filename: "" };
+
+  function setImportStatus(text, isError) {
+    var element = document.getElementById("import-status");
+    if (!element) {
+      return;
+    }
+    element.textContent = text || "";
+    element.classList.toggle("is-error", Boolean(isError));
+  }
+
+  function money(value) {
+    var number = Number(value || 0);
+    return "¥" + number.toFixed(2);
+  }
+
+  function typeLabel(value) {
+    return value === "income" ? "收入" : value === "expense" ? "支出" : "其他";
+  }
+
+  function renderImportPreview() {
+    var body = document.getElementById("import-preview-body");
+    var wrap = document.getElementById("import-table-wrap");
+    var summary = document.getElementById("import-summary");
+    var count = document.getElementById("import-count");
+    var confirmButton = document.getElementById("import-confirm-btn");
+    if (!body || !wrap || !summary) {
+      return;
+    }
+    var duplicates = importState.items.filter(function (item) {
+      return item.is_duplicate;
+    }).length;
+    summary.hidden = false;
+    summary.innerHTML =
+      "共解析出 <strong>" + importState.items.length + "</strong> 条流水，" +
+      (duplicates
+        ? '其中 <strong class="import-dup">' + duplicates + "</strong> 条与最近 10 天账目疑似重复（已默认取消勾选）"
+        : "没有发现重复账目");
+    wrap.hidden = false;
+
+    body.innerHTML = importState.items
+      .map(function (item, index) {
+        var checked = item.is_duplicate ? "" : " checked";
+        return (
+          '<tr class="' + (item.is_duplicate ? "is-duplicate" : "") + '" data-import-row="' + index + '">' +
+            '<td><input type="checkbox" data-import-check="' + index + '"' + checked + "></td>" +
+            "<td>" + escapeHtml(item.date) + "</td>" +
+            "<td>" + typeLabel(item.type) + "</td>" +
+            "<td>" + escapeHtml(item.category || "其他") + "</td>" +
+            "<td>" + escapeHtml(item.account || "") + "</td>" +
+            '<td class="text-end">' + money(item.amount) + "</td>" +
+            "<td>" + escapeHtml(item.note || item.merchant || "") +
+              (item.is_duplicate ? '<span class="import-dup-tag">疑似重复</span>' : "") +
+            "</td>" +
+          "</tr>"
+        );
+      })
+      .join("");
+
+    updateImportCount();
+    if (confirmButton) {
+      confirmButton.disabled = false;
+    }
+    if (count) {
+      count.textContent = "";
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function updateImportCount() {
+    var count = document.getElementById("import-count");
+    var body = document.getElementById("import-preview-body");
+    if (!count || !body) {
+      return;
+    }
+    var checked = body.querySelectorAll("[data-import-check]:checked").length;
+    count.textContent = "已选择 " + checked + " / " + importState.items.length + " 条";
+  }
+
+  async function parseImportFile(file) {
+    if (!file) {
+      return;
+    }
+    var confirmButton = document.getElementById("import-confirm-btn");
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+    setImportStatus("正在解析 " + file.name + " …");
+    var form = new FormData();
+    form.append("file", file);
+    try {
+      var response = await fetch("/api/import/parse", { method: "POST", body: form });
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        setImportStatus(data.error || "解析失败，请确认文件格式", true);
+        return;
+      }
+      importState.items = data.items || [];
+      importState.source = data.source || "wechat";
+      importState.filename = data.filename || "";
+      setImportStatus(
+        "识别为" + (importState.source === "alipay" ? "支付宝" : "微信") + "账单" +
+          (data.skipped ? "，已跳过 " + data.skipped + " 条无效流水" : "")
+      );
+      renderImportPreview();
+    } catch (error) {
+      setImportStatus((error && error.message) || "网络异常，请重试", true);
+    }
+  }
+
+  async function confirmImport() {
+    var body = document.getElementById("import-preview-body");
+    var confirmButton = document.getElementById("import-confirm-btn");
+    if (!body || !importState.items.length) {
+      return;
+    }
+    var selected = [];
+    body.querySelectorAll("[data-import-check]").forEach(function (checkbox) {
+      if (checkbox.checked) {
+        var index = Number(checkbox.getAttribute("data-import-check"));
+        if (importState.items[index]) {
+          selected.push(importState.items[index]);
+        }
+      }
+    });
+    if (!selected.length) {
+      setImportStatus("至少勾选一条流水再导入", true);
+      return;
+    }
+    if (confirmButton) {
+      confirmButton.disabled = true;
+      confirmButton.textContent = "导入中…";
+    }
+    setImportStatus("正在写入 " + selected.length + " 条流水…");
+    try {
+      var response = await fetch("/api/import/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: importState.source,
+          filename: importState.filename,
+          items: selected,
+        }),
+      });
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        setImportStatus(data.error || "导入失败，请重试", true);
+        return;
+      }
+      setImportStatus(
+        "导入完成：成功 " + (data.imported || 0) + " 条" +
+          (data.duplicated ? "，跳过重复 " + data.duplicated + " 条" : "") +
+          (data.failed && data.failed.length ? "，失败 " + data.failed.length + " 条" : "")
+      );
+      if (typeof window.refresh === "function") {
+        window.refresh().catch(function () {});
+      }
+      importState.items = [];
+      document.getElementById("import-table-wrap").hidden = true;
+      document.getElementById("import-summary").hidden = true;
+      if (confirmButton) {
+        confirmButton.textContent = "确认导入";
+      }
+    } catch (error) {
+      setImportStatus((error && error.message) || "网络异常，请重试", true);
+    } finally {
+      if (confirmButton) {
+        confirmButton.disabled = false;
+        if (confirmButton.textContent === "导入中…") {
+          confirmButton.textContent = "确认导入";
+        }
+      }
+    }
+  }
+
+  function initImportUi() {
+    var trigger = document.getElementById("import-bill-btn");
+    var modalElement = document.getElementById("import-modal");
+    if (!trigger || !modalElement) {
+      return;
+    }
+    var modal = null;
+    function showModal() {
+      if (window.bootstrap && window.bootstrap.Modal) {
+        modal = modal || new window.bootstrap.Modal(modalElement);
+        modal.show();
+      } else {
+        modalElement.classList.add("show");
+        modalElement.style.display = "block";
+      }
+    }
+
+    trigger.addEventListener("click", function (event) {
+      event.preventDefault();
+      showModal();
+    });
+
+    var fileInput = document.getElementById("import-file");
+    var pickButton = document.getElementById("import-pick-btn");
+    var dropZone = document.getElementById("import-drop");
+
+    if (pickButton && fileInput) {
+      pickButton.addEventListener("click", function () {
+        fileInput.click();
+      });
+    }
+    if (dropZone && fileInput) {
+      dropZone.addEventListener("click", function (event) {
+        if (event.target !== fileInput) {
+          fileInput.click();
+        }
+      });
+      ["dragenter", "dragover"].forEach(function (name) {
+        dropZone.addEventListener(name, function (event) {
+          event.preventDefault();
+          dropZone.classList.add("is-dragover");
+        });
+      });
+      ["dragleave", "drop"].forEach(function (name) {
+        dropZone.addEventListener(name, function (event) {
+          event.preventDefault();
+          dropZone.classList.remove("is-dragover");
+        });
+      });
+      dropZone.addEventListener("drop", function (event) {
+        var file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        parseImportFile(file);
+      });
+    }
+    if (fileInput) {
+      fileInput.addEventListener("change", function () {
+        parseImportFile(fileInput.files && fileInput.files[0]);
+      });
+    }
+
+    var selectAll = document.getElementById("import-select-all");
+    if (selectAll) {
+      selectAll.addEventListener("change", function () {
+        var body = document.getElementById("import-preview-body");
+        if (!body) {
+          return;
+        }
+        body.querySelectorAll("[data-import-check]").forEach(function (checkbox) {
+          checkbox.checked = selectAll.checked;
+        });
+        updateImportCount();
+      });
+    }
+
+    var previewBody = document.getElementById("import-preview-body");
+    if (previewBody) {
+      previewBody.addEventListener("change", function (event) {
+        if (event.target.closest("[data-import-check]")) {
+          updateImportCount();
+        }
+      });
+    }
+
+    var confirmButton = document.getElementById("import-confirm-btn");
+    if (confirmButton) {
+      confirmButton.addEventListener("click", function () {
+        confirmImport();
+      });
+    }
+  }
+
+  function boot() {
+    verifySession();
+    initImportUi();
+    // 侧栏底部补一个退出入口（我的页里也有一个）
+    var sidebarVersion = document.getElementById("sidebar-version");
+    if (sidebarVersion && !document.querySelector("[data-sidebar-logout]")) {
+      var link = document.createElement("button");
+      link.type = "button";
+      link.className = "sidebar-logout";
+      link.setAttribute("data-sidebar-logout", "1");
+      link.setAttribute("data-logout", "1");
+      link.textContent = "退出登录";
+      sidebarVersion.parentNode.insertBefore(link, sidebarVersion.nextSibling);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot);
+  } else {
+    boot();
+  }
+})();

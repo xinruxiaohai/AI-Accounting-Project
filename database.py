@@ -1,3 +1,4 @@
+import contextvars
 import datetime
 import difflib
 import json
@@ -69,6 +70,185 @@ def get_conn():
     return conn
 
 
+# ---------------- 多用户（v0.12） ----------------
+
+# 当前请求的用户 id。app.py 在 before_request 里按 JWT 调 set_current_user()，
+# 数据库层所有「按用户隔离」的查询统一从这里取，避免把 user_id 一路透传到几十个函数签名。
+_CURRENT_USER_ID = contextvars.ContextVar("current_user_id", default=1)
+
+ADMIN_USER_ID = 1
+ADMIN_EMAIL = "1937097795@qq.com"
+ADMIN_INITIAL_PASSWORD = "123456"
+DEFAULT_USER_ID_START = 10
+USER_ID_RESERVED_MAX = 9
+
+
+def set_current_user(user_id):
+    """设置本请求的用户 id；None / 非法值一律按 1 号（超级管理员）兜底。"""
+    try:
+        _CURRENT_USER_ID.set(int(user_id or ADMIN_USER_ID))
+    except (TypeError, ValueError):
+        _CURRENT_USER_ID.set(ADMIN_USER_ID)
+
+
+def current_user_id():
+    try:
+        return int(_CURRENT_USER_ID.get() or ADMIN_USER_ID)
+    except (TypeError, ValueError):
+        return ADMIN_USER_ID
+
+
+def _uid():
+    return current_user_id()
+
+
+def _row_to_user(row):
+    return {
+        "id": row["id"],
+        "email": row["email"],
+        "phone": row["phone"],
+        "created_at": row["created_at"],
+    }
+
+
+def create_user(email, password_hash, phone=""):
+    """新建用户，返回 (用户字典, 错误信息)。id 由 AUTOINCREMENT 分配（管理员占 1~9）。"""
+    email = (email or "").strip().lower()
+    if not email or "@" not in email:
+        return None, "邮箱格式不正确"
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute(
+                "SELECT id FROM users WHERE email = ?", (email,)
+            ).fetchone()
+            if exists is not None:
+                return None, "该邮箱已注册"
+            cursor = conn.execute(
+                "INSERT INTO users (email, password_hash, phone, created_at) "
+                "VALUES (?, ?, ?, datetime('now','localtime'))",
+                (email, password_hash, (phone or "").strip()),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, email, phone, created_at FROM users WHERE id = ?", (new_id,)
+        ).fetchone()
+        return _row_to_user(row), None
+    finally:
+        conn.close()
+
+
+def get_user_by_email(email):
+    """按邮箱取用户（含 password_hash，只给登录校验用，绝不返回给前端）。"""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, email, password_hash, phone, created_at FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        if row is None:
+            return None
+        user = _row_to_user(row)
+        user["password_hash"] = row["password_hash"]
+        return user
+    finally:
+        conn.close()
+
+
+def get_user(user_id):
+    """按 id 取用户（不含密码哈希）。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, email, phone, created_at FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+        return _row_to_user(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def seed_default_accounts_for(user_id):
+    """新用户注册后给一套默认账户（现金 / 微信 / 支付宝 / 银行卡），余额都是 0。"""
+    conn = get_conn()
+    try:
+        with conn:
+            for index, name in enumerate(("现金", "微信", "支付宝", "银行卡")):
+                conn.execute(
+                    "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name, sort_order) "
+                    "VALUES (?, ?, 0, ?, ?)",
+                    (int(user_id), name, DEFAULT_GROUP, index),
+                )
+    finally:
+        conn.close()
+
+
+def list_users():
+    """后台用户列表（不含密码）。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, email, phone, created_at FROM users ORDER BY id"
+        ).fetchall()
+        return [_row_to_user(row) for row in rows]
+    finally:
+        conn.close()
+
+
+# ---------------- 账单导入（v0.12） ----------------
+
+IMPORT_SOURCES = ("wechat", "alipay", "unknown")
+
+
+def add_import_history(source, total, imported, duplicated, filename=""):
+    """记一次导入，返回入库后的字典（id 等）。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO import_history "
+                "       (user_id, source, filename, total, imported, duplicated, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, datetime('now','localtime'))",
+                (
+                    _uid(),
+                    (source or "unknown")[:20],
+                    (filename or "")[:200],
+                    int(total or 0),
+                    int(imported or 0),
+                    int(duplicated or 0),
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, user_id, source, filename, total, imported, duplicated, created_at "
+            "FROM import_history WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return dict(row)
+    finally:
+        conn.close()
+
+
+def list_import_history(limit=50):
+    """最近导入记录（当前用户），新的在前。"""
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit = 50
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, user_id, source, filename, total, imported, duplicated, created_at "
+            "FROM import_history WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (_uid(), limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
 def _balance_effects(record_type, account, to_account, amount, fee):
     """把一笔账换算成「哪些账户的余额要加减多少」。
 
@@ -108,7 +288,9 @@ def _debt_effects(debt_type, account, amount):
 
 def _debt_balance_problem(conn, account):
     """借贷必须落到一个真实存在的资金账户上，否则余额无处加减。"""
-    row = conn.execute("SELECT 1 FROM accounts WHERE name = ?", (account,)).fetchone()
+    row = conn.execute(
+        "SELECT 1 FROM accounts WHERE name = ? AND user_id = ?", (account, _uid())
+    ).fetchone()
     return None if row is not None else "账户「%s」不存在" % account
 
 
@@ -122,13 +304,13 @@ def _transfer_problem(conn, account, to_account, amount, fee):
     # 转账不像支出可以透支：两个账户必须真实存在，否则钱会转移到一个凭空冒出来的账户里
     for name in (account, to_account):
         row = conn.execute(
-            "SELECT name FROM accounts WHERE name = ?", (name,)
+            "SELECT name FROM accounts WHERE name = ? AND user_id = ?", (name, _uid())
         ).fetchone()
         if row is None:
             return "账户不存在：%s" % name
 
     balance = conn.execute(
-        "SELECT balance FROM accounts WHERE name = ?", (account,)
+        "SELECT balance FROM accounts WHERE name = ? AND user_id = ?", (account, _uid())
     ).fetchone()["balance"]
     cost = amount + fee
     # 留 1e-9 的余量：0.1 + 0.2 这种浮点误差不该被判成「余额不足」
@@ -159,11 +341,12 @@ def _apply_balance(conn, account, delta):
     补一条 0 余额的记录，再 UPDATE —— 否则余额变更会静默丢失。
     """
     conn.execute(
-        "INSERT OR IGNORE INTO accounts (name, balance, group_name) VALUES (?, 0, ?)",
-        (account, DEFAULT_GROUP),
+        "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name) VALUES (?, ?, 0, ?)",
+        (_uid(), account, DEFAULT_GROUP),
     )
     conn.execute(
-        "UPDATE accounts SET balance = balance + ? WHERE name = ?", (delta, account)
+        "UPDATE accounts SET balance = balance + ? WHERE name = ? AND user_id = ?",
+        (delta, account, _uid()),
     )
 
 
@@ -208,7 +391,8 @@ def _seed_accounts(conn):
     """按 ACCOUNT_SEEDS 补齐默认账户。INSERT OR IGNORE 不会覆盖已有余额。"""
     for name, group_name in ACCOUNT_SEEDS:
         conn.execute(
-            "INSERT OR IGNORE INTO accounts (name, balance, group_name) VALUES (?, 0, ?)",
+            "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name) "
+            "VALUES (1, ?, 0, ?)",
             (name, group_name),
         )
 
@@ -270,6 +454,130 @@ def _backfill_category_ids(conn):
          WHERE category_id IS NULL
         """
     )
+
+
+def _ensure_user_schema(conn):
+    """v0.12 多用户基建：users / import_history 建表、核心表补 user_id、老数据回填 1 号。
+
+    迁移只做结构，不删任何数据：
+    - 账户表若是 v0.11 的 name 单主键，重建成 (user_id, name) 复合主键，
+      老账户全部归 1 号管理员，余额/分组/排序原样保留；
+    - records / debts / contacts / categories / ai_memory / ai_correction_log /
+      notifications / feedback 补 user_id 列，老数据回填 1；
+    - 建 1 号超级管理员（邮箱与初始密码见常量），并把 users 的 sqlite_sequence
+      钉在 9，保证普通注册从 id=10 开始，1-9 号永远留给系统账号。
+    """
+    from werkzeug.security import generate_password_hash
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            email         TEXT    NOT NULL UNIQUE,
+            password_hash TEXT    NOT NULL,
+            phone         TEXT    NOT NULL DEFAULT '',
+            created_at    TEXT    NOT NULL DEFAULT ''
+        )
+        """
+    )
+    user_columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)")]
+    if "phone" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "created_at" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS import_history (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL DEFAULT 1,
+            source     TEXT    NOT NULL DEFAULT 'wechat',
+            filename   TEXT    NOT NULL DEFAULT '',
+            total      INTEGER NOT NULL DEFAULT 0,
+            imported   INTEGER NOT NULL DEFAULT 0,
+            duplicated INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL DEFAULT ''
+        )
+        """
+    )
+
+    # 1) 账户表：老库是 name 单主键，多用户同名账户会撞车，必须重建成 (user_id, name)
+    account_columns = [row["name"] for row in conn.execute("PRAGMA table_info(accounts)")]
+    if "user_id" not in account_columns:
+        conn.execute("ALTER TABLE accounts RENAME TO accounts_legacy_v0118")
+        conn.execute(
+            """
+            CREATE TABLE accounts (
+                user_id    INTEGER NOT NULL DEFAULT 1,
+                name       TEXT    NOT NULL,
+                balance    REAL    NOT NULL DEFAULT 0,
+                group_name TEXT    NOT NULL DEFAULT '资金账户',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, name)
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO accounts (user_id, name, balance, group_name, sort_order) "
+            "SELECT 1, name, balance, group_name, sort_order FROM accounts_legacy_v0118"
+        )
+        conn.execute("DROP TABLE accounts_legacy_v0118")
+
+    # 2) 其余核心表补 user_id：老数据全部归 1 号管理员
+    core_tables = (
+        "records",
+        "debts",
+        "contacts",
+        "categories",
+        "ai_memory",
+        "ai_correction_log",
+        "ai_feedback",
+        "notifications",
+        "feedback",
+    )
+    existing_tables = {
+        row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    for table in core_tables:
+        if table not in existing_tables:
+            continue
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(%s)" % table)]
+        if "user_id" not in columns:
+            conn.execute("ALTER TABLE %s ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1" % table)
+        conn.execute("UPDATE %s SET user_id = 1 WHERE user_id IS NULL OR user_id <= 0" % table)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_%s_user ON %s (user_id)" % (table, table)
+        )
+
+    # 3) 1 号超级管理员：只建一次，之后改密码走接口
+    admin = conn.execute("SELECT id FROM users WHERE id = ?", (ADMIN_USER_ID,)).fetchone()
+    if admin is None:
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, phone, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                ADMIN_USER_ID,
+                ADMIN_EMAIL,
+                generate_password_hash(ADMIN_INITIAL_PASSWORD),
+                "",
+                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+
+    # 4) ID 预留：把 users 自增序列钉在 9，普通注册必然从 10 开始
+    sequence = conn.execute(
+        "SELECT seq FROM sqlite_sequence WHERE name = 'users'"
+    ).fetchone()
+    if sequence is None:
+        conn.execute(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES ('users', ?)",
+            (USER_ID_RESERVED_MAX,),
+        )
+    elif sequence["seq"] < USER_ID_RESERVED_MAX:
+        conn.execute(
+            "UPDATE sqlite_sequence SET seq = ? WHERE name = 'users'",
+            (USER_ID_RESERVED_MAX,),
+        )
 
 
 def init_db():
@@ -368,10 +676,12 @@ def init_db():
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS accounts (
-                    name       TEXT PRIMARY KEY,
+                    user_id    INTEGER NOT NULL DEFAULT 1,
+                    name       TEXT NOT NULL,
                     balance    REAL NOT NULL DEFAULT 0,
                     group_name TEXT NOT NULL DEFAULT '资金账户',
-                    sort_order INTEGER NOT NULL DEFAULT 0
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, name)
                 )
                 """
             )
@@ -566,6 +876,10 @@ def init_db():
                 """
             )
 
+        # v0.12：多用户基建（users / import_history / 核心表 user_id / 账户复合主键 / 1 号管理员）
+        with conn:
+            _ensure_user_schema(conn)
+
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
         with conn:
             _seed_categories(conn)
@@ -578,8 +892,8 @@ def init_db():
                 conn.execute("UPDATE categories SET sort_order = id")
             # 老账目里出现过的自定义账户也补进账户表，否则列表里查不到它
             conn.execute(
-                "INSERT OR IGNORE INTO accounts (name, balance, group_name) "
-                "SELECT DISTINCT account, 0, ? FROM records",
+                "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name) "
+                "SELECT DISTINCT user_id, account, 0, ? FROM records",
                 (DEFAULT_GROUP,),
             )
             # 账户回填放在补账户之后：新补进来的行 rowid 最大，理应排最后
@@ -747,8 +1061,8 @@ def delete_category(category_id):
 
             used = conn.execute(
                 "SELECT COUNT(*) AS c FROM records "
-                "WHERE category_id = ? AND deleted_at IS NULL",
-                (category_id,),
+                "WHERE user_id = ? AND category_id = ? AND deleted_at IS NULL",
+                (_uid(), category_id),
             ).fetchone()["c"]
             if used:
                 return False, "还有 %d 条账目在用这个分类，删了会让它们失去分类" % used
@@ -809,16 +1123,13 @@ def get_all_categories():
 # ---------------- 账户 ----------------
 
 def list_accounts():
-    """返回所有账户及余额、大类。按插入顺序排，展示时不会一会儿现金一会儿银行卡。
-
-    余额是 SQLite 里一条条 UPDATE 累加出来的浮点数，会留 78.19999999999999 这种尾巴。
-    这里是所有「读账户」的必经之路，出口统一收敛到两位小数，
-    保证前端 / 模板 / 统计永远只拿到 78.2。
-    """
+    """当前用户的账户列表（复合主键 user_id + name），余额统一收敛到两位小数。"""
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name, balance, group_name FROM accounts ORDER BY sort_order, rowid"
+            "SELECT name, balance, group_name FROM accounts "
+            "WHERE user_id = ? ORDER BY sort_order, rowid",
+            (_uid(),),
         ).fetchall()
         accounts = []
         for row in rows:
@@ -836,30 +1147,30 @@ def list_accounts_grouped():
     groups = [{"name": group, "accounts": []} for group in ACCOUNT_GROUPS]
     index = {group["name"]: group for group in groups}
     for account in accounts:
-        # 大类名不认识（老数据/手改过库）就塞进第一个组，不让账户凭空消失
         index.get(account["group_name"], groups[0])["accounts"].append(account)
     return groups
 
 
 def create_account(name, group_name=DEFAULT_GROUP, balance=0):
-    """新建账户，返回 (账户字典, 错误信息)。"""
+    """新建账户，返回 (账户字典, 错误信息)。同名账户只在当前用户空间内判重。"""
     conn = get_conn()
     try:
         with conn:
             if group_name not in ACCOUNT_GROUPS:
                 return None, "未知的账户大类：%s" % group_name
             exists = conn.execute(
-                "SELECT name FROM accounts WHERE name = ?", (name,)
+                "SELECT name FROM accounts WHERE name = ? AND user_id = ?", (name, _uid())
             ).fetchone()
             if exists is not None:
                 return None, "账户已存在"
             account_order = conn.execute(
-                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM accounts"
+                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM accounts WHERE user_id = ?",
+                (_uid(),),
             ).fetchone()["m"]
             conn.execute(
-                "INSERT INTO accounts (name, balance, group_name, sort_order) "
-                "VALUES (?, ?, ?, ?)",
-                (name, round(balance, 2), group_name, account_order + 1),
+                "INSERT INTO accounts (user_id, name, balance, group_name, sort_order) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (_uid(), name, round(balance, 2), group_name, account_order + 1),
             )
             return {"name": name, "balance": round(balance, 2), "group_name": group_name}, None
     finally:
@@ -872,19 +1183,19 @@ def update_account(name, balance=None, group_name=None):
     try:
         with conn:
             row = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ?", (name,)
+                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                (name, _uid()),
             ).fetchone()
             if row is None:
                 return None, "账户不存在"
             if group_name is not None and group_name not in ACCOUNT_GROUPS:
                 return None, "未知的账户大类：%s" % group_name
 
-            # 只改大类时余额原样返回，但也要收敛，否则前端拿到库里的浮点尾巴
             new_balance = round(row["balance"], 2) if balance is None else round(balance, 2)
             new_group = row["group_name"] if group_name is None else group_name
             conn.execute(
-                "UPDATE accounts SET balance = ?, group_name = ? WHERE name = ?",
-                (new_balance, new_group, name),
+                "UPDATE accounts SET balance = ?, group_name = ? WHERE name = ? AND user_id = ?",
+                (new_balance, new_group, name, _uid()),
             )
             return {"name": name, "balance": new_balance, "group_name": new_group}, None
     finally:
@@ -897,33 +1208,29 @@ def delete_account(name):
     try:
         with conn:
             row = conn.execute(
-                "SELECT name FROM accounts WHERE name = ?", (name,)
+                "SELECT name FROM accounts WHERE name = ? AND user_id = ?", (name, _uid())
             ).fetchone()
             if row is None:
                 return False, "账户不存在"
 
             used = conn.execute(
                 "SELECT COUNT(*) AS c FROM records "
-                "WHERE (account = ? OR (type = 'transfer' AND to_account = ?)) "
+                "WHERE user_id = ? "
+                "  AND (account = ? OR (type = 'transfer' AND to_account = ?)) "
                 "  AND deleted_at IS NULL",
-                (name, name),
+                (_uid(), name, name),
             ).fetchone()["c"]
             if used:
                 return False, "还有 %d 条账目和这个账户有关，先处理掉再删" % used
 
-            conn.execute("DELETE FROM accounts WHERE name = ?", (name,))
+            conn.execute("DELETE FROM accounts WHERE name = ? AND user_id = ?", (name, _uid()))
             return True, None
     finally:
         conn.close()
 
 
 def rename_account(old_name, new_name):
-    """账户改名（v0.11.6）：accounts 主键 + 所有引用这个账户名的账目/借贷一起改。
-
-    account / to_account / debts.account 都是纯文本列（没有外键），所以改名必须
-    在这里一次性同步，否则旧名字的账目会变成「幽灵账户」。
-    返回 (账户字典, 错误信息)。
-    """
+    """账户改名（v0.11.6）：当前用户的主键 + 账目/借贷引用一起改。"""
     old_name = str(old_name or "").strip()
     new_name = str(new_name or "").strip()
     if not old_name:
@@ -935,8 +1242,8 @@ def rename_account(old_name, new_name):
     try:
         with conn:
             row = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ?",
-                (old_name,),
+                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                (old_name, _uid()),
             ).fetchone()
             if row is None:
                 return None, "账户不存在"
@@ -947,23 +1254,26 @@ def rename_account(old_name, new_name):
                     "group_name": row["group_name"],
                 }, None
             exists = conn.execute(
-                "SELECT name FROM accounts WHERE name = ?", (new_name,)
+                "SELECT name FROM accounts WHERE name = ? AND user_id = ?", (new_name, _uid())
             ).fetchone()
             if exists is not None:
                 return None, "账户名「%s」已存在" % new_name
 
             conn.execute(
-                "UPDATE accounts SET name = ? WHERE name = ?", (new_name, old_name)
+                "UPDATE accounts SET name = ? WHERE name = ? AND user_id = ?",
+                (new_name, old_name, _uid()),
             )
             conn.execute(
-                "UPDATE records SET account = ? WHERE account = ?", (new_name, old_name)
+                "UPDATE records SET account = ? WHERE account = ? AND user_id = ?",
+                (new_name, old_name, _uid()),
             )
             conn.execute(
-                "UPDATE records SET to_account = ? WHERE to_account = ?",
-                (new_name, old_name),
+                "UPDATE records SET to_account = ? WHERE to_account = ? AND user_id = ?",
+                (new_name, old_name, _uid()),
             )
             conn.execute(
-                "UPDATE debts SET account = ? WHERE account = ?", (new_name, old_name)
+                "UPDATE debts SET account = ? WHERE account = ? AND user_id = ?",
+                (new_name, old_name, _uid()),
             )
             return {
                 "name": new_name,
@@ -975,12 +1285,7 @@ def rename_account(old_name, new_name):
 
 
 def merge_account(source, target):
-    """把 source 账户合并进 target（v0.11.6）：余额相加、账目/借贷迁移，再删掉 source。
-
-    用于 AI 自动建户后用户发现「这其实是我已有的账户」：合并后不会生成任何
-    未记账的差额，因为源账户余额原样加进目标账户。
-    返回 (合并后的目标账户字典, 错误信息)。
-    """
+    """把 source 账户合并进 target（v0.11.6），两个账户都必须在当前用户空间。"""
     source = str(source or "").strip()
     target = str(target or "").strip()
     if not source or not target:
@@ -992,30 +1297,38 @@ def merge_account(source, target):
     try:
         with conn:
             src = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ?", (source,)
+                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                (source, _uid()),
             ).fetchone()
             if src is None:
                 return None, "账户「%s」不存在" % source
             tgt = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ?", (target,)
+                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                (target, _uid()),
             ).fetchone()
             if tgt is None:
                 return None, "账户「%s」不存在" % target
 
             new_balance = round(float(src["balance"] or 0) + float(tgt["balance"] or 0), 2)
             conn.execute(
-                "UPDATE accounts SET balance = ? WHERE name = ?", (new_balance, target)
+                "UPDATE accounts SET balance = ? WHERE name = ? AND user_id = ?",
+                (new_balance, target, _uid()),
             )
             conn.execute(
-                "UPDATE records SET account = ? WHERE account = ?", (target, source)
+                "UPDATE records SET account = ? WHERE account = ? AND user_id = ?",
+                (target, source, _uid()),
             )
             conn.execute(
-                "UPDATE records SET to_account = ? WHERE to_account = ?", (target, source)
+                "UPDATE records SET to_account = ? WHERE to_account = ? AND user_id = ?",
+                (target, source, _uid()),
             )
             conn.execute(
-                "UPDATE debts SET account = ? WHERE account = ?", (target, source)
+                "UPDATE debts SET account = ? WHERE account = ? AND user_id = ?",
+                (target, source, _uid()),
             )
-            conn.execute("DELETE FROM accounts WHERE name = ?", (source,))
+            conn.execute(
+                "DELETE FROM accounts WHERE name = ? AND user_id = ?", (source, _uid())
+            )
             return {
                 "name": target,
                 "balance": new_balance,
@@ -1026,10 +1339,7 @@ def merge_account(source, target):
 
 
 def set_records_category(record_ids, category_name):
-    """批量改分类（v0.11.6）：只动 category / category_id，不重算余额、不校验账户。
-
-    返回 (成功改动的条数, 错误信息)。分类不存在会自动建一个二级分类。
-    """
+    """批量改分类（v0.11.6）：只动 category / category_id，不重算余额。"""
     if not isinstance(record_ids, (list, tuple)) or not record_ids:
         return 0, "record_ids 必须是非空数组"
     try:
@@ -1049,8 +1359,8 @@ def set_records_category(record_ids, category_name):
             for record_id in ids:
                 cursor = conn.execute(
                     "UPDATE records SET category = ?, category_id = ? "
-                    "WHERE id = ? AND deleted_at IS NULL",
-                    (category["name"], category["id"], record_id),
+                    "WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                    (category["name"], category["id"], record_id, _uid()),
                 )
                 changed += cursor.rowcount
             return changed, None
@@ -1059,11 +1369,7 @@ def set_records_category(record_ids, category_name):
 
 
 def reorder_accounts(names):
-    """按拖拽后的顺序重排账户（跨大类一起排），返回错误信息（成功为 None）。
-
-    账户列表是「全量顺序」，分组只是展示时再按大类切开，
-    所以拖到别的组里也不算错——只要名字都在。
-    """
+    """按拖拽后的顺序重排当前用户的账户。"""
     if not isinstance(names, list) or not names:
         return "names 必须是非空数组"
     if len(names) != len(set(names)):
@@ -1073,15 +1379,16 @@ def reorder_accounts(names):
     try:
         with conn:
             rows = conn.execute(
-                "SELECT name FROM accounts WHERE name IN (%s)"
+                "SELECT name FROM accounts WHERE user_id = ? AND name IN (%s)"
                 % ",".join("?" for _ in names),
-                names,
+                [_uid()] + names,
             ).fetchall()
             if len(rows) != len(names):
                 return "有账户不存在，刷新后再试"
             for index, name in enumerate(names):
                 conn.execute(
-                    "UPDATE accounts SET sort_order = ? WHERE name = ?", (index, name)
+                    "UPDATE accounts SET sort_order = ? WHERE name = ? AND user_id = ?",
+                    (index, name, _uid()),
                 )
             return None
     finally:
@@ -1131,13 +1438,14 @@ def add_record(
             cur = conn.execute(
                 """
                 INSERT INTO records
-                       (amount, category, category_id, note, date, account, type,
+                       (user_id, amount, category, category_id, note, date, account, type,
                         formula, to_account, fee, is_reimbursable,
                         reimbursement_contact_id, reimbursed_amount, total_reimbursement,
                         image_path, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
                 """,
                 (
+                    _uid(),
                     amount,
                     category,
                     category_id,
@@ -1192,8 +1500,9 @@ def update_record(
     try:
         with conn:
             old = conn.execute(
-                "SELECT account, amount, type, to_account, fee FROM records WHERE id = ?",
-                (record_id,),
+                "SELECT account, amount, type, to_account, fee FROM records "
+                "WHERE id = ? AND user_id = ?",
+                (record_id, _uid()),
             ).fetchone()
             if old is None:
                 return False, None
@@ -1217,7 +1526,7 @@ def update_record(
                 UPDATE records
                    SET amount = ?, category = ?, category_id = ?, note = ?, date = ?,
                        account = ?, type = ?, formula = ?, to_account = ?, fee = ?
-                 WHERE id = ?
+                 WHERE id = ? AND user_id = ?
                 """,
                 (
                     amount,
@@ -1231,6 +1540,7 @@ def update_record(
                     to_account,
                     fee,
                     record_id,
+                    _uid(),
                 ),
             )
             _apply_effects(
@@ -1250,13 +1560,16 @@ def delete_record(record_id):
     try:
         with conn:
             old = conn.execute(
-                "SELECT account, amount, type, to_account, fee FROM records WHERE id = ?",
-                (record_id,),
+                "SELECT account, amount, type, to_account, fee FROM records "
+                "WHERE id = ? AND user_id = ?",
+                (record_id, _uid()),
             ).fetchone()
             if old is None:
                 return False
 
-            conn.execute("DELETE FROM records WHERE id = ?", (record_id,))
+            conn.execute(
+                "DELETE FROM records WHERE id = ? AND user_id = ?", (record_id, _uid())
+            )
             _apply_effects(
                 conn,
                 _reverse_effects(
@@ -1290,8 +1603,8 @@ def list_records(account=None, category_id=None, parent_id=None):
     顺带 LEFT JOIN 出二级分类的父级名和报销人姓名，前端一次拿全。
     """
     sql = _RECORD_SELECT
-    conditions = ["r.deleted_at IS NULL"]
-    params = []
+    conditions = ["r.deleted_at IS NULL", "r.user_id = ?"]
+    params = [_uid()]
     if account:
         # 转账会同时牵动转出和转入两个账户，查任何一个账户都该看到这笔转账
         conditions.append("(r.account = ? OR (r.type = 'transfer' AND r.to_account = ?))")
@@ -1336,7 +1649,7 @@ def search_records(keyword, limit=200):
 
     sql = (
         _RECORD_SELECT
-        + " WHERE r.deleted_at IS NULL AND ("
+        + " WHERE r.deleted_at IS NULL AND r.user_id = ? AND ("
         + "r.note LIKE ? ESCAPE '\\' OR r.category LIKE ? ESCAPE '\\'"
         + " OR r.account LIKE ? ESCAPE '\\' OR r.to_account LIKE ? ESCAPE '\\'"
         + " OR CAST(r.amount AS TEXT) LIKE ? ESCAPE '\\'"
@@ -1344,7 +1657,7 @@ def search_records(keyword, limit=200):
     )
     conn = get_conn()
     try:
-        rows = conn.execute(sql, (like, like, like, like, like, limit)).fetchall()
+        rows = conn.execute(sql, (_uid(), like, like, like, like, like, limit)).fetchall()
         records = [dict(row) for row in rows]
         for record in records:
             record["date"] = normalize_date(record["date"])
@@ -1394,7 +1707,9 @@ def get_record(record_id):
     """按 id 取一条账目（带报销字段与报销人姓名），不存在返回 None。"""
     conn = get_conn()
     try:
-        row = conn.execute(_RECORD_SELECT + " WHERE r.id = ?", (record_id,)).fetchone()
+        row = conn.execute(
+            _RECORD_SELECT + " WHERE r.id = ? AND r.user_id = ?", (record_id, _uid())
+        ).fetchone()
         if row is None:
             return None
         record = dict(row)
@@ -1422,8 +1737,9 @@ def set_record_reimbursement(
     try:
         with conn:
             row = conn.execute(
-                "SELECT type, amount FROM records WHERE id = ? AND deleted_at IS NULL",
-                (record_id,),
+                "SELECT type, amount FROM records "
+                "WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                (record_id, _uid()),
             ).fetchone()
             if row is None:
                 return False, None
@@ -1434,9 +1750,9 @@ def set_record_reimbursement(
                     UPDATE records
                        SET is_reimbursable = 0, reimbursement_contact_id = NULL,
                            reimbursed_amount = 0, total_reimbursement = 0
-                     WHERE id = ?
+                     WHERE id = ? AND user_id = ?
                     """,
-                    (record_id,),
+                    (record_id, _uid()),
                 )
                 return True, None
 
@@ -1465,9 +1781,9 @@ def set_record_reimbursement(
                 UPDATE records
                    SET is_reimbursable = 1, reimbursement_contact_id = ?,
                        reimbursed_amount = ?, total_reimbursement = ?
-                 WHERE id = ?
+                 WHERE id = ? AND user_id = ?
                 """,
-                (contact_id, paid, total, record_id),
+                (contact_id, paid, total, record_id, _uid()),
             )
             return True, None
     finally:
@@ -1480,7 +1796,9 @@ def list_deleted_records():
     try:
         rows = conn.execute(
             _RECORD_SELECT
-            + " WHERE r.deleted_at IS NOT NULL ORDER BY r.deleted_at DESC, r.id DESC"
+            + " WHERE r.deleted_at IS NOT NULL AND r.user_id = ? "
+            "ORDER BY r.deleted_at DESC, r.id DESC",
+            (_uid(),),
         ).fetchall()
         records = [dict(row) for row in rows]
         for record in records:
@@ -1497,14 +1815,14 @@ def soft_delete_record(record_id):
         with conn:
             old = conn.execute(
                 "SELECT account, amount, type, to_account, fee FROM records "
-                "WHERE id = ? AND deleted_at IS NULL",
-                (record_id,),
+                "WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                (record_id, _uid()),
             ).fetchone()
             if old is None:
                 return False
             conn.execute(
-                "UPDATE records SET deleted_at = ? WHERE id = ?",
-                (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), record_id),
+                "UPDATE records SET deleted_at = ? WHERE id = ? AND user_id = ?",
+                (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), record_id, _uid()),
             )
             _apply_effects(
                 conn,
@@ -1526,12 +1844,15 @@ def restore_record(record_id):
         with conn:
             old = conn.execute(
                 "SELECT account, amount, type, to_account, fee FROM records "
-                "WHERE id = ? AND deleted_at IS NOT NULL",
-                (record_id,),
+                "WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL",
+                (record_id, _uid()),
             ).fetchone()
             if old is None:
                 return False
-            conn.execute("UPDATE records SET deleted_at = NULL WHERE id = ?", (record_id,))
+            conn.execute(
+                "UPDATE records SET deleted_at = NULL WHERE id = ? AND user_id = ?",
+                (record_id, _uid()),
+            )
             _apply_effects(
                 conn,
                 _balance_effects(
@@ -1549,7 +1870,8 @@ def purge_record(record_id):
     try:
         with conn:
             cur = conn.execute(
-                "DELETE FROM records WHERE id = ? AND deleted_at IS NOT NULL", (record_id,)
+                "DELETE FROM records WHERE id = ? AND user_id = ? AND deleted_at IS NOT NULL",
+                (record_id, _uid()),
             )
             return cur.rowcount > 0
     finally:
@@ -1566,14 +1888,17 @@ def get_statistics():
     try:
         income_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
-            "WHERE type = 'income' AND deleted_at IS NULL"
+            "WHERE user_id = ? AND type = 'income' AND deleted_at IS NULL",
+            (_uid(),),
         ).fetchone()["total"]
         expense_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
-            "WHERE type = 'expense' AND deleted_at IS NULL"
+            "WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL",
+            (_uid(),),
         ).fetchone()["total"]
         balance_total = conn.execute(
-            "SELECT COALESCE(SUM(balance), 0) AS total FROM accounts"
+            "SELECT COALESCE(SUM(balance), 0) AS total FROM accounts WHERE user_id = ?",
+            (_uid(),),
         ).fetchone()["total"]
         reimb = conn.execute(
             "SELECT "
@@ -2528,11 +2853,12 @@ def find_recent_duplicate(
     sql = (
         _RECORD_SELECT
         + " WHERE r.deleted_at IS NULL"
+        + "   AND r.user_id = ?"
         + "   AND ABS(r.amount - ?) < 0.005"
         + "   AND r.created_at <> ''"
         + "   AND r.created_at >= datetime('now','localtime', ?)"
     )
-    params = [amount_value, "-%d minutes" % minutes]
+    params = [_uid(), amount_value, "-%d minutes" % minutes]
     if exclude_id:
         sql += " AND r.id <> ?"
         params.append(exclude_id)
