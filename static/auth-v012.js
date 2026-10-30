@@ -135,6 +135,9 @@
             '<input id="auth-phone" class="form-control" type="tel" autocomplete="tel" placeholder="用于以后找回密码">' +
           "</label>" +
           '<div class="auth-register-extra" hidden>' +
+            '<label class="auth-label">昵称' +
+              '<input id="auth-nickname" class="form-control" type="text" maxlength="20" placeholder="侧边栏显示的名字（不填就用邮箱前缀）">' +
+            "</label>" +
             '<label class="auth-label">邮箱验证码' +
               '<span class="auth-code-row">' +
                 '<input id="auth-code" class="form-control" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字">' +
@@ -210,6 +213,8 @@
     var email = gateElement.querySelector("#auth-email").value.trim();
     var password = gateElement.querySelector("#auth-password").value;
     var phone = gateElement.querySelector("#auth-phone").value.trim();
+    var nicknameInput = gateElement.querySelector("#auth-nickname");
+    var nickname = nicknameInput ? nicknameInput.value.trim() : "";
     var button = gateElement.querySelector("#auth-submit");
 
     if (!email || !password) {
@@ -218,6 +223,15 @@
     }
     if (password.length < 6) {
       gateError("密码至少 6 位");
+      return;
+    }
+    // v0.12.2：后端同样会校验，这里先拦一次，少走一轮请求
+    var kinds = 0;
+    if (/[0-9]/.test(password)) { kinds += 1; }
+    if (/[A-Za-z]/.test(password)) { kinds += 1; }
+    if (/[^0-9A-Za-z]/.test(password)) { kinds += 1; }
+    if (kinds < 2) {
+      gateError("密码需包含数字、字母、标点中的至少两种");
       return;
     }
 
@@ -248,7 +262,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             gateMode === "register"
-              ? { email: email, password: password, phone: phone, code: code }
+              ? { email: email, password: password, phone: phone, nickname: nickname, code: code }
               : { email: email, password: password }
           ),
         }
@@ -406,6 +420,7 @@
               /* 忽略 */
             }
           }
+          updateSidebarUser();
           hideGate();
         });
       })
@@ -711,20 +726,296 @@
     }
   }
 
+  /* ---------------- v0.12.2：侧栏昵称 ---------------- */
+
+  function updateSidebarUser() {
+    var slot = document.getElementById("sidebar-user-name");
+    if (!slot) {
+      return;
+    }
+    var user = getUser() || {};
+    var name = user.nickname || (user.email ? String(user.email).split("@")[0] : "");
+    if (!name) {
+      slot.hidden = true;
+      return;
+    }
+    slot.textContent = name;
+    slot.title = user.email || "";
+    slot.hidden = false;
+  }
+
+  function setSettingsMessage(elementId, message, ok) {
+    var element = document.getElementById(elementId);
+    if (!element) {
+      return;
+    }
+    element.textContent = message || "";
+    element.hidden = !message;
+    element.classList.toggle("is-ok", !!ok);
+  }
+
+  function bindSettingsTabs() {
+    var tabs = Array.prototype.slice.call(
+      document.querySelectorAll("[data-settings-tab]")
+    );
+    if (!tabs.length) {
+      return;
+    }
+    var personalPane = document.getElementById("settings-pane-personal");
+    var accountPane = document.getElementById("settings-pane-account");
+    var personalFooter = document.getElementById("settings-footer-personal");
+    var accountClose = document.getElementById("settings-account-close");
+
+    function showPane(name) {
+      var isAccount = name === "account";
+      tabs.forEach(function (tab) {
+        var active = tab.getAttribute("data-settings-tab") === name;
+        tab.classList.toggle("is-active", active);
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      if (personalPane) { personalPane.hidden = isAccount; }
+      if (accountPane) { accountPane.hidden = !isAccount; }
+      if (personalFooter) { personalFooter.classList.toggle("d-none", isAccount); }
+      if (accountClose) { accountClose.classList.toggle("d-none", !isAccount); }
+      if (isAccount) {
+        fillAccountPane();
+      }
+    }
+
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        showPane(tab.getAttribute("data-settings-tab"));
+      });
+    });
+  }
+
+  function fillAccountPane() {
+    var user = getUser() || {};
+    var emailLabel = document.getElementById("settings-account-email");
+    if (emailLabel) {
+      emailLabel.textContent = "当前账号：" + (user.email || "—");
+    }
+    var nicknameInput = document.getElementById("settings-nickname");
+    if (nicknameInput && !nicknameInput.value) {
+      nicknameInput.value = user.nickname || "";
+    }
+    var resetEmail = document.getElementById("settings-reset-email");
+    if (resetEmail && !resetEmail.value && user.email) {
+      resetEmail.value = user.email;
+    }
+  }
+
+  function saveNickname() {
+    var input = document.getElementById("settings-nickname");
+    if (!input) {
+      return;
+    }
+    setSettingsMessage("settings-nickname-error", "");
+    fetch("/api/auth/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname: input.value.trim() }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setSettingsMessage("settings-nickname-error", result.data.error || "保存失败");
+          return;
+        }
+        var user = result.data.user || {};
+        try {
+          localStorage.setItem(USER_KEY, JSON.stringify(user));
+        } catch (error) {
+          /* 忽略 */
+        }
+        updateSidebarUser();
+        showFunnyToast("昵称已保存");
+      })
+      .catch(function () {
+        setSettingsMessage("settings-nickname-error", "网络异常，请重试");
+      });
+  }
+
+  function changePassword() {
+    var oldInput = document.getElementById("settings-old-password");
+    var newInput = document.getElementById("settings-new-password");
+    var confirmInput = document.getElementById("settings-confirm-password");
+    if (!oldInput || !newInput || !confirmInput) {
+      return;
+    }
+    var oldPassword = oldInput.value;
+    var newPassword = newInput.value;
+    var confirmPassword = confirmInput.value;
+    setSettingsMessage("settings-password-error", "");
+    if (!oldPassword || !newPassword) {
+      setSettingsMessage("settings-password-error", "旧密码和新密码都要填");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setSettingsMessage("settings-password-error", "两次输入的新密码不一致");
+      return;
+    }
+    fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        old_password: oldPassword,
+        new_password: newPassword,
+        confirm_password: confirmPassword,
+      }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setSettingsMessage("settings-password-error", result.data.error || "修改失败");
+          return;
+        }
+        oldInput.value = "";
+        newInput.value = "";
+        confirmInput.value = "";
+        setSettingsMessage("settings-password-error", "密码已更新，下次请用新密码登录", true);
+      })
+      .catch(function () {
+        setSettingsMessage("settings-password-error", "网络异常，请重试");
+      });
+  }
+
+  function sendResetCode() {
+    var emailInput = document.getElementById("settings-reset-email");
+    var button = document.getElementById("settings-reset-send-code");
+    if (!emailInput || !button) {
+      return;
+    }
+    var email = emailInput.value.trim();
+    if (!email) {
+      setSettingsMessage("settings-reset-error", "先填注册邮箱");
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "发送中…";
+    fetch("/api/auth/send-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email, purpose: "reset" }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setSettingsMessage("settings-reset-error", result.data.error || "发送失败");
+          button.disabled = false;
+          button.textContent = "发送验证码";
+          return;
+        }
+        setSettingsMessage("settings-reset-error", "验证码已发送（Mock 模式：请查看后端控制台）", true);
+        var seconds = 60;
+        button.textContent = seconds + "s 后重发";
+        var timer = window.setInterval(function () {
+          seconds -= 1;
+          if (seconds <= 0) {
+            window.clearInterval(timer);
+            button.disabled = false;
+            button.textContent = "发送验证码";
+            return;
+          }
+          button.textContent = seconds + "s 后重发";
+        }, 1000);
+      })
+      .catch(function () {
+        setSettingsMessage("settings-reset-error", "网络异常，请重试");
+        button.disabled = false;
+        button.textContent = "发送验证码";
+      });
+  }
+
+  function resetPassword() {
+    var emailInput = document.getElementById("settings-reset-email");
+    var codeInput = document.getElementById("settings-reset-code");
+    var passwordInput = document.getElementById("settings-reset-password");
+    var confirmInput = document.getElementById("settings-reset-confirm");
+    if (!emailInput || !codeInput || !passwordInput || !confirmInput) {
+      return;
+    }
+    setSettingsMessage("settings-reset-error", "");
+    var code = codeInput.value.trim();
+    if (!/^\d{6}$/.test(code)) {
+      setSettingsMessage("settings-reset-error", "请填 6 位邮箱验证码");
+      return;
+    }
+    if (passwordInput.value !== confirmInput.value) {
+      setSettingsMessage("settings-reset-error", "两次输入的新密码不一致");
+      return;
+    }
+    fetch("/api/auth/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: emailInput.value.trim(),
+        code: code,
+        new_password: passwordInput.value,
+        confirm_password: confirmInput.value,
+      }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setSettingsMessage("settings-reset-error", result.data.error || "重置失败");
+          return;
+        }
+        codeInput.value = "";
+        passwordInput.value = "";
+        confirmInput.value = "";
+        setSettingsMessage("settings-reset-error", "密码已重置，请用新密码登录", true);
+      })
+      .catch(function () {
+        setSettingsMessage("settings-reset-error", "网络异常，请重试");
+      });
+  }
+
+  function initAccountSettings() {
+    bindSettingsTabs();
+    var nicknameButton = document.getElementById("settings-nickname-save");
+    if (nicknameButton) {
+      nicknameButton.addEventListener("click", saveNickname);
+    }
+    var changeButton = document.getElementById("settings-change-password-btn");
+    if (changeButton) {
+      changeButton.addEventListener("click", changePassword);
+    }
+    var sendButton = document.getElementById("settings-reset-send-code");
+    if (sendButton) {
+      sendButton.addEventListener("click", sendResetCode);
+    }
+    var resetButton = document.getElementById("settings-reset-submit");
+    if (resetButton) {
+      resetButton.addEventListener("click", resetPassword);
+    }
+    var modal = document.getElementById("settings-modal");
+    if (modal) {
+      modal.addEventListener("shown.bs.modal", fillAccountPane);
+    }
+  }
+
   function boot() {
     verifySession();
     initImportUi();
-    // 侧栏底部补一个退出入口（我的页里也有一个）
-    var sidebarVersion = document.getElementById("sidebar-version");
-    if (sidebarVersion && !document.querySelector("[data-sidebar-logout]")) {
-      var link = document.createElement("button");
-      link.type = "button";
-      link.className = "sidebar-logout";
-      link.setAttribute("data-sidebar-logout", "1");
-      link.setAttribute("data-logout", "1");
-      link.textContent = "退出登录";
-      sidebarVersion.parentNode.insertBefore(link, sidebarVersion.nextSibling);
-    }
+    updateSidebarUser();
+    initAccountSettings();
   }
 
   if (document.readyState === "loading") {

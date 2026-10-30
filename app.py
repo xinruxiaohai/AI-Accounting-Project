@@ -136,6 +136,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/auth/register",
     "/api/auth/sms-login",
     "/api/auth/send-code",
+    "/api/auth/reset-password",
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
@@ -188,6 +189,7 @@ def _public_user(user):
         "id": user.get("id"),
         "email": user.get("email"),
         "phone": user.get("phone") or "",
+        "nickname": user.get("nickname") or "",
         "created_at": user.get("created_at") or "",
     }
 
@@ -239,6 +241,22 @@ def _normalize_email(value):
     return (value or "").strip().lower()
 
 
+def _password_strength_error(password):
+    """v0.12.2 强密码：至少 6 位，且数字 / 字母 / 标点里至少占两种。返回错误文案或 None。"""
+    if not isinstance(password, str) or len(password) < 6:
+        return "密码至少 6 位"
+    kinds = 0
+    if re.search(r"[0-9]", password):
+        kinds += 1
+    if re.search(r"[A-Za-z]", password):
+        kinds += 1
+    if re.search(r"[^0-9A-Za-z]", password):
+        kinds += 1
+    if kinds < 2:
+        return "密码需包含数字、字母、标点中的至少两种"
+    return None
+
+
 # ---------------- v0.12.1：注册邮箱验证码（Mock 模式） ----------------
 
 # 验证码只存在进程内存里：5 分钟过期、用完即删；重启后全部失效（Mock 模式足够）
@@ -246,13 +264,18 @@ EMAIL_CODE_TTL_SECONDS = 300
 _EMAIL_CODES = {}
 
 
-def _verify_email_code(email, code):
-    """校验邮箱验证码并一次性消费，返回 (是否通过, 错误信息)。"""
+def _verify_email_code(email, code, purpose="register"):
+    """校验邮箱验证码并一次性消费，返回 (是否通过, 错误信息)。
+
+    v0.12.2：验证码带用途（register 注册 / reset 找回密码），拿注册码去改密会被拒绝。
+    """
     entry = _EMAIL_CODES.get(email)
     now_ts = time.time()
     if not entry:
         return False, "请先获取邮箱验证码"
-    saved_code, expires_at = entry
+    saved_code, expires_at, saved_purpose = entry
+    if saved_purpose != purpose:
+        return False, "验证码用途不匹配，请重新获取"
     if now_ts > expires_at:
         _EMAIL_CODES.pop(email, None)
         return False, "验证码已过期，请重新获取"
@@ -272,18 +295,23 @@ def auth_send_code():
     email = _normalize_email(data.get("email"))
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return jsonify(error="请输入正确的邮箱"), 400
-    if database.get_user_by_email(email) is not None:
+    purpose = "reset" if (data.get("purpose") or "").strip() == "reset" else "register"
+    exists = database.get_user_by_email(email) is not None
+    if purpose == "register" and exists:
         return jsonify(error="该邮箱已注册，请直接登录"), 409
+    if purpose == "reset" and not exists:
+        return jsonify(error="该邮箱还没有注册"), 404
 
     code = "%06d" % random.SystemRandom().randint(0, 999999)
-    _EMAIL_CODES[email] = (code, time.time() + EMAIL_CODE_TTL_SECONDS)
+    purpose = "reset" if (data.get("purpose") or "").strip() == "reset" else "register"
+    _EMAIL_CODES[email] = (code, time.time() + EMAIL_CODE_TTL_SECONDS, purpose)
     # Mock 发件：当前只打印控制台；接真实邮件服务后这里替换成发送逻辑
     print(
         "[v0.12.1][邮箱验证码] %s -> %s（%d 秒内有效）"
         % (email, code, EMAIL_CODE_TTL_SECONDS),
         flush=True,
     )
-    return jsonify(ok=True, expires_in=EMAIL_CODE_TTL_SECONDS, mock=True)
+    return jsonify(ok=True, expires_in=EMAIL_CODE_TTL_SECONDS, mock=True, purpose=purpose)
 
 
 @app.route("/api/auth/register", methods=["POST"])
@@ -296,10 +324,14 @@ def auth_register():
 
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return jsonify(error="请输入正确的邮箱"), 400
-    if len(password) < 6:
-        return jsonify(error="密码至少 6 位"), 400
+    strength_error = _password_strength_error(password)
+    if strength_error is not None:
+        return jsonify(error=strength_error), 400
     if len(phone) > 30:
         return jsonify(error="手机号太长了"), 400
+    nickname = (data.get("nickname") or "").strip() if isinstance(data.get("nickname"), str) else ""
+    if len(nickname) > 20:
+        return jsonify(error="昵称最多 20 个字"), 400
 
     code = (data.get("code") or "").strip() if isinstance(data.get("code"), str) else ""
     code_ok, code_error = _verify_email_code(email, code)
@@ -307,7 +339,7 @@ def auth_register():
         return jsonify(error=code_error), 400
 
     user, error_message = database.create_user(
-        email, generate_password_hash(password), phone
+        email, generate_password_hash(password), phone, nickname
     )
     if error_message is not None:
         return jsonify(error=error_message), 400
@@ -326,11 +358,110 @@ def auth_login():
     email = _normalize_email(data.get("email"))
     password = data.get("password") if isinstance(data.get("password"), str) else ""
 
+    locked, locked_until, retry_after = database.get_login_lock(email)
+    if locked:
+        minutes = max(1, int((retry_after + 59) // 60))
+        return (
+            jsonify(
+                error="密码错误次数过多，账号已锁定，请 %d 分钟后再试" % minutes,
+                code="account_locked",
+                locked_until=locked_until,
+                retry_after=retry_after,
+            ),
+            423,
+        )
+
     user = database.get_user_by_email(email)
     if user is None or not check_password_hash(user.get("password_hash") or "", password):
-        return jsonify(error="邮箱或密码不正确"), 401
+        fails, lock_until = database.record_login_failure(email)
+        if lock_until:
+            return (
+                jsonify(
+                    error="密码连续输错 %d 次，账号已锁定 %d 分钟"
+                    % (database.LOGIN_MAX_FAILS, database.LOGIN_LOCK_MINUTES),
+                    code="account_locked",
+                    locked_until=lock_until,
+                    retry_after=database.LOGIN_LOCK_MINUTES * 60,
+                ),
+                423,
+            )
+        remain = max(1, database.LOGIN_MAX_FAILS - fails)
+        return jsonify(error="邮箱或密码不正确，还可尝试 %d 次" % remain, code="bad_password"), 401
 
+    database.clear_login_failures(email)
     return jsonify(token=_issue_token(user), user=_public_user(user))
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+@login_required
+def auth_change_password():
+    """登录态改密：校验旧密码 → 强密码校验 → 更新哈希并清空失败计数。"""
+    data = request.get_json(silent=True) or {}
+    old_password = data.get("old_password") if isinstance(data.get("old_password"), str) else ""
+    new_password = data.get("new_password") if isinstance(data.get("new_password"), str) else ""
+    confirm = data.get("confirm_password")
+
+    # g.current_user 来自 get_user（故意不带密码哈希），校验旧密码要单独回表取
+    user = database.get_user_by_email(g.current_user["email"])
+    if user is None:
+        return jsonify(error="用户不存在"), 404
+    if not check_password_hash(user.get("password_hash") or "", old_password):
+        return jsonify(error="旧密码不正确"), 400
+    strength_error = _password_strength_error(new_password)
+    if strength_error is not None:
+        return jsonify(error=strength_error), 400
+    if confirm is not None and confirm != new_password:
+        return jsonify(error="两次输入的新密码不一致"), 400
+    if check_password_hash(user.get("password_hash") or "", new_password):
+        return jsonify(error="新密码不能和旧密码相同"), 400
+
+    if not database.update_user_password(user["id"], generate_password_hash(new_password)):
+        return jsonify(error="用户不存在"), 404
+    database.clear_login_failures(user["email"])
+    return jsonify(ok=True, message="密码已更新，请用新密码登录")
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def auth_reset_password():
+    """忘记旧密码：邮箱验证码直接改密（验证码用途必须是 reset）。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+    code = (data.get("code") or "").strip() if isinstance(data.get("code"), str) else ""
+    new_password = data.get("new_password") if isinstance(data.get("new_password"), str) else ""
+    confirm = data.get("confirm_password")
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify(error="请输入正确的邮箱"), 400
+    user = database.get_user_by_email(email)
+    if user is None:
+        return jsonify(error="该邮箱还没有注册"), 404
+    strength_error = _password_strength_error(new_password)
+    if strength_error is not None:
+        return jsonify(error=strength_error), 400
+    if confirm is not None and confirm != new_password:
+        return jsonify(error="两次输入的新密码不一致"), 400
+    code_ok, code_error = _verify_email_code(email, code, "reset")
+    if not code_ok:
+        return jsonify(error=code_error), 400
+
+    if not database.update_user_password(user["id"], generate_password_hash(new_password)):
+        return jsonify(error="用户不存在"), 404
+    database.clear_login_failures(email)
+    return jsonify(ok=True, message="密码已重置，请用新密码登录")
+
+
+@app.route("/api/auth/profile", methods=["PUT"])
+@login_required
+def auth_update_profile():
+    """改昵称（侧边栏展示用）；空值回退成邮箱前缀。"""
+    data = request.get_json(silent=True) or {}
+    nickname = data.get("nickname") if isinstance(data.get("nickname"), str) else ""
+    if len(nickname.strip()) > 20:
+        return jsonify(error="昵称最多 20 个字"), 400
+    user = database.update_user_nickname(g.current_user["id"], nickname)
+    if user is None:
+        return jsonify(error="用户不存在"), 404
+    return jsonify(user=_public_user(user))
 
 
 @app.route("/api/auth/me", methods=["GET"])
@@ -2746,7 +2877,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.12.1-DEV"
+APP_VERSION_FALLBACK = "v0.12.2-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

@@ -107,12 +107,16 @@ def _row_to_user(row):
         "id": row["id"],
         "email": row["email"],
         "phone": row["phone"],
+        "nickname": row["nickname"] if "nickname" in row.keys() else "",
         "created_at": row["created_at"],
     }
 
 
-def create_user(email, password_hash, phone=""):
-    """新建用户，返回 (用户字典, 错误信息)。id 由 AUTOINCREMENT 分配（管理员占 1~9）。"""
+def create_user(email, password_hash, phone="", nickname=""):
+    """新建用户，返回 (用户字典, 错误信息)。id 由 AUTOINCREMENT 分配（管理员占 1~9）。
+
+    nickname 是侧边栏展示用的昵称；不填就取邮箱 @ 前面的部分，保证永远有名字可显示。
+    """
     email = (email or "").strip().lower()
     if not email or "@" not in email:
         return None, "邮箱格式不正确"
@@ -124,14 +128,16 @@ def create_user(email, password_hash, phone=""):
             ).fetchone()
             if exists is not None:
                 return None, "该邮箱已注册"
+            nickname = (nickname or "").strip() or email.split("@")[0]
             cursor = conn.execute(
-                "INSERT INTO users (email, password_hash, phone, created_at) "
-                "VALUES (?, ?, ?, datetime('now','localtime'))",
-                (email, password_hash, (phone or "").strip()),
+                "INSERT INTO users (email, password_hash, phone, nickname, created_at) "
+                "VALUES (?, ?, ?, ?, datetime('now','localtime'))",
+                (email, password_hash, (phone or "").strip(), nickname[:30]),
             )
             new_id = cursor.lastrowid
         row = conn.execute(
-            "SELECT id, email, phone, created_at FROM users WHERE id = ?", (new_id,)
+            "SELECT id, email, phone, nickname, created_at FROM users WHERE id = ?",
+            (new_id,),
         ).fetchone()
         return _row_to_user(row), None
     finally:
@@ -146,7 +152,7 @@ def get_user_by_email(email):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, email, password_hash, phone, created_at FROM users WHERE email = ?",
+            "SELECT id, email, password_hash, phone, nickname, created_at FROM users WHERE email = ?",
             (email,),
         ).fetchone()
         if row is None:
@@ -163,7 +169,7 @@ def get_user(user_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, email, phone, created_at FROM users WHERE id = ?", (user_id,)
+            "SELECT id, email, phone, nickname, created_at FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         return _row_to_user(row) if row is not None else None
     finally:
@@ -190,11 +196,131 @@ def list_users():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, email, phone, created_at FROM users ORDER BY id"
+            "SELECT id, email, phone, nickname, created_at FROM users ORDER BY id"
         ).fetchall()
         return [_row_to_user(row) for row in rows]
     finally:
         conn.close()
+
+# ---------------- 登录安全与账号设置（v0.12.2） ----------------
+
+LOGIN_MAX_FAILS = 5
+LOGIN_LOCK_MINUTES = 15
+
+
+def _login_lock_until(conn, email):
+    """读该邮箱的锁定截止时间（已过期就顺手清掉），没有锁定返回 None。"""
+    row = conn.execute(
+        "SELECT fail_count, locked_until FROM login_attempts WHERE email = ?", (email,)
+    ).fetchone()
+    if row is None:
+        return None
+    locked_until = (row["locked_until"] or "").strip()
+    if not locked_until:
+        return None
+    try:
+        until = datetime.datetime.strptime(locked_until, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+    if until <= datetime.datetime.now():
+        conn.execute(
+            "UPDATE login_attempts SET fail_count = 0, locked_until = '' WHERE email = ?",
+            (email,),
+        )
+        return None
+    return until
+
+
+def get_login_lock(email):
+    """登录前查锁定状态：返回 (是否锁定, 解锁时间字符串, 剩余秒数)。"""
+    email = (email or "").strip().lower()
+    if not email:
+        return False, "", 0
+    conn = get_conn()
+    try:
+        with conn:
+            until = _login_lock_until(conn, email)
+            if until is None:
+                return False, "", 0
+            remaining = int((until - datetime.datetime.now()).total_seconds())
+            return True, until.strftime("%Y-%m-%d %H:%M:%S"), max(0, remaining)
+    finally:
+        conn.close()
+
+
+def record_login_failure(email):
+    """记一次密码错误；连续 5 次锁定 15 分钟。返回 (失败次数, 锁定截止时间或 None)。"""
+    email = (email or "").strip().lower()
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT fail_count FROM login_attempts WHERE email = ?", (email,)
+            ).fetchone()
+            count = (row["fail_count"] if row is not None else 0) + 1
+            locked_until = ""
+            if count >= LOGIN_MAX_FAILS:
+                until = datetime.datetime.now() + datetime.timedelta(minutes=LOGIN_LOCK_MINUTES)
+                locked_until = until.strftime("%Y-%m-%d %H:%M:%S")
+                count = 0  # 锁定后重新计数，下轮从 0 开始
+            conn.execute(
+                "INSERT INTO login_attempts (email, fail_count, locked_until) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(email) DO UPDATE SET "
+                "  fail_count = excluded.fail_count, locked_until = excluded.locked_until",
+                (email, count, locked_until),
+            )
+            return count, (locked_until or None)
+    finally:
+        conn.close()
+
+
+def clear_login_failures(email):
+    """登录成功 / 改密成功后清空失败计数与锁定。"""
+    email = (email or "").strip().lower()
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE login_attempts SET fail_count = 0, locked_until = '' WHERE email = ?",
+                (email,),
+            )
+    finally:
+        conn.close()
+
+
+def update_user_password(user_id, password_hash):
+    """改密：只更新 password_hash，返回是否命中用户。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, int(user_id)),
+            )
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def update_user_nickname(user_id, nickname):
+    """更新昵称；空昵称回退成邮箱前缀。返回最新用户字典或 None。"""
+    nickname = (nickname or "").strip()
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()
+            if row is None:
+                return None
+            if not nickname:
+                nickname = str(row["email"]).split("@")[0]
+            conn.execute(
+                "UPDATE users SET nickname = ? WHERE id = ?", (nickname[:30], int(user_id))
+            )
+        return get_user(user_id)
+    finally:
+        conn.close()
+
 
 
 # ---------------- 账单导入（v0.12） ----------------
@@ -483,6 +609,23 @@ def _ensure_user_schema(conn):
     user_columns = [row["name"] for row in conn.execute("PRAGMA table_info(users)")]
     if "phone" not in user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    if "nickname" not in user_columns:
+        # v0.12.2：老用户没昵称，回填成邮箱 @ 前面的部分，侧边栏永远有字可显示
+        conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT NOT NULL DEFAULT ''")
+        conn.execute(
+            "UPDATE users SET nickname = substr(email, 1, instr(email, '@') - 1) "
+            "WHERE nickname = ''"
+        )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS login_attempts (
+            email        TEXT PRIMARY KEY,
+            fail_count   INTEGER NOT NULL DEFAULT 0,
+            locked_until TEXT    NOT NULL DEFAULT ''
+        )
+        """
+    )
     if "created_at" not in user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
 

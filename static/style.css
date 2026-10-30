@@ -7704,3 +7704,63 @@ body.auth-locked {
   background: #e8f3ff;
   color: #1d4ed8;
 }
+
+/* v0.12.2：设置中心 Tab 与账户/密码面板 */
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border, #e6e8ee);
+}
+
+.settings-tab {
+  border: 0;
+  background: transparent;
+  padding: 9px 14px;
+  font-size: 14px;
+  color: var(--text-muted, #8a8f99);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.settings-tab.is-active {
+  color: var(--brand, #2f6bff);
+  border-bottom-color: var(--brand, #2f6bff);
+  font-weight: 600;
+}
+
+.settings-inline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-inline .form-control {
+  flex: 1;
+}
+
+.settings-field {
+  margin-bottom: 8px;
+}
+
+.settings-group.settings-danger {
+  border-top: 1px dashed var(--border, #e6e8ee);
+  padding-top: 14px;
+}
+
+.settings-error.is-ok {
+  color: #1a8f4c;
+}
+
+.sidebar-user {
+  margin: 8px 4px 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main, #263043);
+  background: rgba(47, 107, 255, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
