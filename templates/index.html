@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.6">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.7">
 </head>
 <body>
 
@@ -37,6 +37,7 @@
     <button class="sidebar-brand sidebar-brand-btn" type="button" id="sidebar-avatar"
             aria-label="打开个人中心">
       <span class="brand-avatar" id="sidebar-avatar-letter">A</span>
+      <img class="brand-avatar-img" id="sidebar-avatar-img" alt="" hidden>
       <span class="brand-text" id="sidebar-brand-name">AI记账管家</span>
     </button>
 
@@ -96,7 +97,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.6-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.7-DEV</div>
     </div>
   </aside>
 
@@ -1293,35 +1294,97 @@
   </div>
 </div>
 
-<!-- ================= v0.12.6：个人中心（点左上角头像打开） ================= -->
+<!-- ================= v0.12.7：个人中心大弹窗（点左上角头像打开） ================= -->
 <div class="modal fade" id="profile-modal" tabindex="-1" aria-labelledby="profile-title"
      aria-hidden="true" data-bs-keyboard="true">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable profile-dialog">
     <div class="modal-content profile-modal">
       <div class="modal-header border-0">
         <h5 class="modal-title" id="profile-title">个人中心</h5>
         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
       </div>
       <div class="modal-body">
-        <div class="profile-hero">
-          <span class="profile-avatar" id="profile-avatar">A</span>
-          <div class="profile-hero-main">
-            <div class="profile-name" id="profile-name">—</div>
-            <div class="profile-sub" id="profile-days">记账第 1 天</div>
+        <div class="pc-hero">
+          <button class="pc-avatar-btn" type="button" id="profile-avatar-btn" title="点击更换头像">
+            <span class="pc-avatar" id="profile-avatar">A</span>
+            <img class="pc-avatar-img" id="profile-avatar-img" alt="用户头像" hidden>
+            <span class="pc-avatar-cam" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 8h3l1.5-2h7L17 8h3v11H4z"></path>
+                <circle cx="12" cy="13" r="3.2"></circle>
+              </svg>
+            </span>
+          </button>
+          <input type="file" id="profile-avatar-input" accept="image/*" hidden>
+          <div class="pc-hero-main">
+            <div class="pc-name-row">
+              <span class="pc-name" id="profile-name">—</span>
+              <button class="pc-edit" type="button" data-profile-action="nickname" title="修改昵称" aria-label="修改昵称">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="m4 20 4.2-1 10-10a2.1 2.1 0 0 0-3-3l-10 10z"></path>
+                  <path d="M13.5 6.5 17 10"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="pc-days" id="profile-days">记账第 1 天</div>
           </div>
         </div>
-        <ul class="profile-meta">
-          <li>
-            <span class="profile-meta-label">UID</span>
-            <b id="profile-uid">—</b>
-            <button class="profile-copy" type="button" id="profile-copy-uid">复制</button>
+
+        <div class="pc-section-title">基础信息</div>
+        <ul class="pc-list">
+          <li class="pc-row" data-profile-action="nickname" role="button" tabindex="0">
+            <span class="pc-label">昵称</span>
+            <span class="pc-value" id="profile-nickname">—</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
           </li>
-          <li><span class="profile-meta-label">注册日期</span><b id="profile-created">—</b></li>
-          <li><span class="profile-meta-label">绑定状态</span><b id="profile-bind">邮箱已绑定</b></li>
+          <li class="pc-row is-static">
+            <span class="pc-label">注册日期</span>
+            <span class="pc-value" id="profile-created">—</span>
+          </li>
+        </ul>
+
+        <div class="pc-section-title">账号信息</div>
+        <ul class="pc-list">
+          <li class="pc-row">
+            <span class="pc-label">ID</span>
+            <span class="pc-value" id="profile-uid">—</span>
+            <button class="pc-copy" type="button" id="profile-copy-uid">复制</button>
+          </li>
+          <li class="pc-row" data-profile-action="member" role="button" tabindex="0">
+            <span class="pc-label">会员</span>
+            <span class="pc-value pc-muted" id="profile-member">普通用户</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
+          </li>
+        </ul>
+
+        <div class="pc-section-title">账号绑定</div>
+        <ul class="pc-list">
+          <li class="pc-row" data-profile-action="email" role="button" tabindex="0">
+            <span class="pc-label">邮箱</span>
+            <span class="pc-value" id="profile-bind">—</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
+          </li>
+          <li class="pc-row" data-profile-action="phone" role="button" tabindex="0">
+            <span class="pc-label">手机</span>
+            <span class="pc-value" id="profile-phone">未绑定</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
+          </li>
+          <li class="pc-row" data-profile-action="wechat" role="button" tabindex="0">
+            <span class="pc-label">微信</span>
+            <span class="pc-value pc-muted" id="profile-wechat">未绑定</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
+          </li>
+          <li class="pc-row" data-profile-action="qq" role="button" tabindex="0">
+            <span class="pc-label">QQ</span>
+            <span class="pc-value pc-muted" id="profile-qq">未绑定</span>
+            <span class="pc-arrow" aria-hidden="true">›</span>
+          </li>
         </ul>
       </div>
-      <div class="modal-footer border-0">
-        <button class="btn btn-warning w-100 profile-logout" type="button" data-logout>退出登录</button>
+      <div class="modal-footer border-0 pc-footer">
+        <button class="btn w-100 profile-logout" type="button" data-logout>退出登录</button>
       </div>
     </div>
   </div>
@@ -1646,10 +1709,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.6"></script>
-<script src="/static/access-guard.js?v=0.12.6"></script>
+<script src="/static/auth-v012.js?v=0.12.7"></script>
+<script src="/static/access-guard.js?v=0.12.7"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.6"></script>
+<script src="/static/script.js?v=0.12.7"></script>
 
 </body>
 </html>

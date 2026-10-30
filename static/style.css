@@ -8378,3 +8378,326 @@ body.auth-locked {
   background: rgba(16, 185, 129, 0.18);
   color: #6ee7b7;
 }
+
+/* ================= v0.12.7：专业化图标 / 个人中心大弹窗 / 通知布局 ================= */
+
+/* 1. 统一圆形图标：分类=浅色圆底彩图标，账户=品牌色圆底白图标 */
+.entity-badge {
+  display: inline-grid;
+  place-items: center;
+  width: var(--badge-size, 38px);
+  height: var(--badge-size, 38px);
+  border-radius: 50%;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+.entity-badge .entity-icon-svg {
+  width: 58%;
+  height: 58%;
+  display: block;
+}
+.entity-badge img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.entity-badge.has-image {
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.07);
+}
+.entity-icon {
+  display: block;
+}
+
+/* 2. 首页 / 账单页 / 资产页流水：图标 + 分类 + 时间备注 + 金额 */
+.feed-row {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 11px;
+  padding: 10px;
+}
+.feed-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.feed-main {
+  gap: 3px;
+}
+.feed-cat {
+  font-size: 13.5px;
+}
+.feed-note {
+  font-size: 11.5px;
+}
+
+/* 3. 账户列表：左侧彩色圆形图标 */
+.account-row-icon {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+/* 4. 账单表格里的图标 + 文字 */
+.bills-entity {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+.bills-entity > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 5. 通知列表：标题可长，时间与展开按钮永远固定在右上角，不换行挤出竖排 */
+.notice-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+.notice-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.notice-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.notice-date {
+  white-space: nowrap;
+}
+.notice-toggle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-blue);
+}
+.notice-item.is-collapsed .notice-item-head::after {
+  content: none;
+}
+
+/* 6. 个人中心大弹窗 */
+.brand-avatar-img {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  object-fit: cover;
+  box-shadow: 0 2px 8px rgba(5, 150, 105, 0.35);
+}
+.profile-dialog {
+  max-width: 440px;
+}
+.profile-modal {
+  border-radius: 22px;
+  border: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+.profile-modal .modal-header {
+  padding: 18px 20px 0;
+}
+.profile-modal .modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.profile-modal .modal-body {
+  padding: 4px 20px 8px;
+}
+.pc-hero {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0 16px;
+}
+.pc-avatar-btn {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.pc-avatar {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #fb923c, #f43f5e);
+  color: #fff;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.pc-avatar-img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.pc-avatar-cam {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: #475569;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+}
+.pc-avatar-cam svg {
+  width: 12px;
+  height: 12px;
+}
+.pc-hero-main {
+  min-width: 0;
+  flex: 1;
+}
+.pc-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pc-name {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc-edit {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+}
+.pc-edit:hover {
+  background: var(--surface-2);
+  color: var(--brand-blue);
+}
+.pc-edit svg {
+  width: 16px;
+  height: 16px;
+}
+.pc-days {
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.pc-section-title {
+  margin: 14px 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.pc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.pc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 10px 2px;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  outline: none;
+}
+.pc-row:hover {
+  background: var(--surface-2);
+}
+.pc-row.is-static {
+  cursor: default;
+}
+.pc-row.is-static:hover {
+  background: transparent;
+}
+.pc-label {
+  flex: 0 0 auto;
+  font-size: 13.5px;
+  color: var(--text-main);
+}
+.pc-value {
+  margin-left: auto;
+  font-size: 13.5px;
+  color: var(--text-main);
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 65%;
+}
+.pc-muted {
+  color: var(--text-dim);
+}
+.pc-arrow {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+  color: #cbd5e1;
+}
+.pc-copy {
+  margin-left: 6px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-muted);
+  border-radius: 8px;
+  padding: 3px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pc-copy:hover {
+  color: var(--brand-blue);
+  border-color: var(--brand-blue);
+}
+.pc-footer {
+  padding: 10px 20px 20px;
+}
+.profile-logout {
+  background: linear-gradient(135deg, #fb923c, #f97316) !important;
+  border: 0 !important;
+  color: #fff !important;
+  border-radius: 14px;
+  height: 46px;
+  font-size: 15px;
+  font-weight: 700;
+  box-shadow: 0 8px 20px rgba(249, 115, 22, 0.28);
+}
+.profile-logout:hover {
+  filter: brightness(1.04);
+}
+[data-theme="dark"] .pc-avatar-cam {
+  background: #1e293b;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+[data-theme="dark"] .pc-arrow {
+  color: #475569;
+}

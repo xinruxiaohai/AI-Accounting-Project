@@ -6,7 +6,7 @@
  *   - 静态资源：stale-while-revalidate，先用缓存秒开，后台顺手更新
  *   - /api/ 与后台页面：完全不缓存，避免把旧余额当成新数据
  */
-const CACHE_NAME = "ai-accounting-v0.07.2";
+const CACHE_NAME = "ai-accounting-v0.12.7";
 const CACHE_PREFIX = "ai-accounting-";
 const PRECACHE_URLS = [
   "/",

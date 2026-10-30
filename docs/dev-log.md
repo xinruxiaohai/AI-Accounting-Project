@@ -433,3 +433,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 侧边栏与个人中心：左上角 AI Logo 换成头像按钮（昵称首字母圆形色块 + 昵称），删除底部昵称+UID 文本；新增 #profile-modal 展示大头像、昵称、记账第 X 天、UID（复制按钮）、注册日期、绑定邮箱与橙色退出登录。
 - 忘记密码链接移入 #change-password-modal 内部（#change-forgot-link），点击先关闭改密弹窗再打开重置密码弹窗；导入/导出合并为一张卡片并改写成用户友好文案。
 - 自测：temp/test_v0126.py 10/10；回归 v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile / node --check 通过。
+
+## v0.12.7-DEV（2026-10-30）
+
+- 图标系统专业化重写：script.js 用 ICON_PATHS（20 个 stroke SVG）+ 分类/账户规则 + 品牌色圆底（entityIconHtml），首页流水 46 行、账户 10 个、账单表 36 行全部渲染圆形图标；自定义图标优先用 <img>，设置应用后 refresh() 即时重绘；顺带修复账单表 categoryLabel(record) 传参错误导致的空分类。
+- 个人中心改为大弹窗：头像（相机角标，点击上传，≤5MB）、昵称、记账第 X 天、注册日期、UID+复制、会员/邮箱/手机/微信/QQ 行带 ›、底部橙色退出登录；新增 users.avatar 列迁移、PUT /api/auth/avatar 与受登录保护的 POST /api/auth/avatar/upload（_save_upload_image 复用）。
+- admin 后台：html/body 与 .admin-page 改 height:100vh + overflow-y:auto + padding-bottom:80px，长内容可滚到底，发布按钮不再被遮挡。
+- 通知中心：.notice-item-head 改 flex + nowrap，时间与展开/收起放入右侧 .notice-side 且 flex-shrink:0，长标题不再把按钮挤成竖排。
+- 真实 Chrome CDP 验证（temp/dom_v0127.mjs）：三类列表图标计数、个人中心 8 行信息与记账天数、头像上传回读、通知展开前后状态、admin scrollHeight>clientHeight 均通过。
+- 回归：test_v0127 5/5、v0126 10/10、v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile、node --check 通过。

@@ -190,6 +190,7 @@ def _public_user(user):
         "email": user.get("email"),
         "phone": user.get("phone") or "",
         "nickname": user.get("nickname") or "",
+        "avatar": user.get("avatar") or "",
         "created_at": user.get("created_at") or "",
     }
 
@@ -462,6 +463,34 @@ def auth_update_profile():
     if user is None:
         return jsonify(error="用户不存在"), 404
     return jsonify(user=_public_user(user))
+
+
+@app.route("/api/auth/avatar", methods=["PUT"])
+@login_required
+def auth_update_avatar():
+    """个人中心上传头像：先调 /api/upload 拿到 URL，再把 URL 记到当前用户。"""
+    data = request.get_json(silent=True) or {}
+    url = data.get("avatar") if isinstance(data.get("avatar"), str) else ""
+    url = url.strip()
+    if url and not url.startswith("/static/uploads/"):
+        return jsonify(error="头像地址不合法"), 400
+    user = database.update_user_avatar(g.current_user["id"], url)
+    if user is None:
+        return jsonify(error="用户不存在"), 404
+    return jsonify(user=_public_user(user))
+
+
+@app.route("/api/auth/avatar/upload", methods=["POST"])
+@login_required
+def auth_upload_avatar():
+    """个人中心直接上传头像；不走受后台访问密码保护的 /api/upload。"""
+    url, error = _save_upload_image(request.files.get("file"))
+    if error:
+        return jsonify(error=error), 400
+    user = database.update_user_avatar(g.current_user["id"], url)
+    if user is None:
+        return jsonify(error="用户不存在"), 404
+    return jsonify(url=url, user=_public_user(user)), 201
 
 
 @app.route("/api/auth/me", methods=["GET"])
@@ -2699,28 +2728,35 @@ def publish_notification(notify_id):
     return jsonify(notification)
 
 
-@app.route("/api/upload", methods=["POST"])
-def upload_image():
-    """接收 multipart 表单里的 file 字段，存进 static/uploads，返回可直接访问的 URL。"""
-    upload = request.files.get("file")
+def _save_upload_image(upload):
+    """校验并保存一张图片；返回 (url, None)，失败返回 (None, 中文错误)。"""
     if upload is None or not upload.filename:
-        return jsonify(error="没有收到文件，字段名应为 file"), 400
+        return None, "没有收到文件，字段名应为 file"
 
     ext = os.path.splitext(upload.filename)[1].lower()
     if ext not in ALLOWED_IMAGE_EXTENSIONS:
-        return jsonify(error="只支持 png / jpg / jpeg / gif / webp 图片"), 400
+        return None, "只支持 png / jpg / jpeg / gif / webp 图片"
 
     data = upload.read()
     if not data:
-        return jsonify(error="图片是空文件"), 400
+        return None, "图片是空文件"
     if len(data) > MAX_UPLOAD_BYTES:
-        return jsonify(error="图片不能超过 5MB"), 400
+        return None, "图片不能超过 5MB"
 
     # 文件名用 uuid 重命名：避免中文名、空格、同名覆盖，也顺带切断路径穿越
     filename = uuid.uuid4().hex + ext
     with open(os.path.join(UPLOAD_DIR, filename), "wb") as handle:
         handle.write(data)
-    return jsonify(url="/static/uploads/" + filename, filename=filename), 201
+    return "/static/uploads/" + filename, None
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_image():
+    """接收 multipart 表单里的 file 字段，存进 static/uploads，返回可直接访问的 URL。"""
+    url, error = _save_upload_image(request.files.get("file"))
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(url=url, filename=url.rsplit("/", 1)[-1]), 201
 
 
 # ---------------- 访问密码接口（v0.11.1） ----------------
@@ -2877,7 +2913,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.12.6-DEV"
+APP_VERSION_FALLBACK = "v0.12.7-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

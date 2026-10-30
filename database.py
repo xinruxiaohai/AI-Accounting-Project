@@ -108,6 +108,7 @@ def _row_to_user(row):
         "email": row["email"],
         "phone": row["phone"],
         "nickname": row["nickname"] if "nickname" in row.keys() else "",
+        "avatar": (row["avatar"] if "avatar" in row.keys() else "") or "",
         "created_at": row["created_at"],
     }
 
@@ -136,7 +137,7 @@ def create_user(email, password_hash, phone="", nickname=""):
             )
             new_id = cursor.lastrowid
         row = conn.execute(
-            "SELECT id, email, phone, nickname, created_at FROM users WHERE id = ?",
+            "SELECT id, email, phone, nickname, avatar, created_at FROM users WHERE id = ?",
             (new_id,),
         ).fetchone()
         return _row_to_user(row), None
@@ -152,7 +153,7 @@ def get_user_by_email(email):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, email, password_hash, phone, nickname, created_at FROM users WHERE email = ?",
+            "SELECT id, email, password_hash, phone, nickname, avatar, created_at FROM users WHERE email = ?",
             (email,),
         ).fetchone()
         if row is None:
@@ -169,7 +170,7 @@ def get_user(user_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, email, phone, nickname, created_at FROM users WHERE id = ?", (user_id,)
+            "SELECT id, email, phone, nickname, avatar, created_at FROM users WHERE id = ?", (user_id,)
         ).fetchone()
         return _row_to_user(row) if row is not None else None
     finally:
@@ -196,7 +197,7 @@ def list_users():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, email, phone, nickname, created_at FROM users ORDER BY id"
+            "SELECT id, email, phone, nickname, avatar, created_at FROM users ORDER BY id"
         ).fetchall()
         return [_row_to_user(row) for row in rows]
     finally:
@@ -321,6 +322,20 @@ def update_user_nickname(user_id, nickname):
     finally:
         conn.close()
 
+
+def update_user_avatar(user_id, avatar):
+    """更新头像 URL；空串表示恢复成昵称首字母。返回最新用户字典或 None。"""
+    avatar = (avatar or "").strip()
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute("SELECT id FROM users WHERE id = ?", (int(user_id),)).fetchone()
+            if exists is None:
+                return None
+            conn.execute("UPDATE users SET avatar = ? WHERE id = ?", (avatar[:500], int(user_id)))
+        return get_user(user_id)
+    finally:
+        conn.close()
 
 
 # ---------------- 账单导入（v0.12） ----------------
@@ -602,6 +617,8 @@ def _ensure_user_schema(conn):
             email         TEXT    NOT NULL UNIQUE,
             password_hash TEXT    NOT NULL,
             phone         TEXT    NOT NULL DEFAULT '',
+            nickname      TEXT    NOT NULL DEFAULT '',
+            avatar        TEXT    NOT NULL DEFAULT '',
             created_at    TEXT    NOT NULL DEFAULT ''
         )
         """
@@ -628,6 +645,9 @@ def _ensure_user_schema(conn):
     )
     if "created_at" not in user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+    if "avatar" not in user_columns:
+        # v0.12.7：个人中心支持上传头像；空串表示继续用昵称首字母色块
+        conn.execute("ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''")
 
     conn.execute(
         """

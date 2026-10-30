@@ -845,16 +845,41 @@
     return Math.max(1, diff + 1);
   }
 
+  function avatarUrlOf(user) {
+    return user && user.avatar ? String(user.avatar) : "";
+  }
+
+  // 有自定义头像就显示图片，否则回退成昵称首字母色块。
+  function applyAvatar(letterEl, imgEl, user) {
+    var url = avatarUrlOf(user);
+    if (letterEl) {
+      letterEl.textContent = avatarLetter(user);
+      letterEl.hidden = !!url;
+    }
+    if (imgEl) {
+      if (url) {
+        imgEl.src = url;
+        imgEl.hidden = false;
+      } else {
+        imgEl.removeAttribute("src");
+        imgEl.hidden = true;
+      }
+    }
+  }
+
   function fillProfileModal(user) {
     var person = user || getUser() || {};
     var name = displayName(person);
     var letterEl = document.getElementById("profile-avatar");
-    if (letterEl) {
-      letterEl.textContent = avatarLetter(person);
-    }
+    var avatarImg = document.getElementById("profile-avatar-img");
+    applyAvatar(letterEl, avatarImg, person);
     var nameEl = document.getElementById("profile-name");
     if (nameEl) {
       nameEl.textContent = name;
+    }
+    var nickEl = document.getElementById("profile-nickname");
+    if (nickEl) {
+      nickEl.textContent = person.nickname || name;
     }
     var daysEl = document.getElementById("profile-days");
     if (daysEl) {
@@ -870,7 +895,13 @@
     }
     var bindEl = document.getElementById("profile-bind");
     if (bindEl) {
-      bindEl.textContent = person.email ? "邮箱已绑定 · " + person.email : "未绑定邮箱";
+      bindEl.textContent = person.email || "未绑定";
+    }
+    var phoneEl = document.getElementById("profile-phone");
+    if (phoneEl) {
+      var phone = String(person.phone || "");
+      phoneEl.textContent = phone ? phone.replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2") : "未绑定";
+      phoneEl.classList.toggle("pc-muted", !phone);
     }
   }
 
@@ -881,10 +912,11 @@
     if (nameEl) {
       nameEl.textContent = name;
     }
-    var letterEl = document.getElementById("sidebar-avatar-letter");
-    if (letterEl) {
-      letterEl.textContent = avatarLetter(user);
-    }
+    applyAvatar(
+      document.getElementById("sidebar-avatar-letter"),
+      document.getElementById("sidebar-avatar-img"),
+      user
+    );
     var avatarBtn = document.getElementById("sidebar-avatar");
     if (avatarBtn) {
       var uidText = user.id === undefined || user.id === null ? "" : "UID " + user.id;
@@ -949,6 +981,82 @@
     document.body.removeChild(input);
   }
 
+  function openSettingsAt(tab, focusId) {
+    var modalEl = document.getElementById("settings-modal");
+    if (!modalEl || !window.bootstrap) {
+      return;
+    }
+    var profileEl = document.getElementById("profile-modal");
+    if (profileEl) {
+      window.bootstrap.Modal.getOrCreateInstance(profileEl).hide();
+    }
+    var instance = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+    var once = function () {
+      modalEl.removeEventListener("shown.bs.modal", once);
+      var tabBtn = modalEl.querySelector('[data-settings-tab="' + tab + '"]');
+      if (tabBtn) {
+        tabBtn.click();
+      }
+      if (focusId) {
+        var field = document.getElementById(focusId);
+        if (field) {
+          setTimeout(function () {
+            field.focus();
+          }, 120);
+        }
+      }
+    };
+    modalEl.addEventListener("shown.bs.modal", once);
+    instance.show();
+  }
+
+  function uploadAvatar(file) {
+    if (!file) {
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      if (typeof toast === "function") {
+        toast("头像图片不能超过 5MB", "error");
+      }
+      return;
+    }
+    var token = getToken();
+    var form = new FormData();
+    form.append("file", file);
+    if (typeof toast === "function") {
+      toast("头像上传中…");
+    }
+    originalFetch("/api/auth/avatar/upload", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token },
+      body: form,
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok || !result.data.user) {
+          throw new Error(result.data.error || "头像上传失败");
+        }
+        try {
+          localStorage.setItem(USER_KEY, JSON.stringify(result.data.user));
+        } catch (error) {
+          /* 忽略 */
+        }
+        updateSidebarUser();
+        if (typeof toast === "function") {
+          toast("头像已更新", "success");
+        }
+      })
+      .catch(function (error) {
+        if (typeof toast === "function") {
+          toast(error.message || "头像上传失败", "error");
+        }
+      });
+  }
+
   function bindProfileUi() {
     var avatarBtn = document.getElementById("sidebar-avatar");
     var profileEl = document.getElementById("profile-modal");
@@ -965,6 +1073,49 @@
     var copyBtn = document.getElementById("profile-copy-uid");
     if (copyBtn) {
       copyBtn.addEventListener("click", copyUid);
+    }
+
+    // v0.12.7：头像点击上传 + 信息行跳转设置/提示
+    var avatarPick = document.getElementById("profile-avatar-btn");
+    var avatarInput = document.getElementById("profile-avatar-input");
+    if (avatarPick && avatarInput) {
+      avatarPick.addEventListener("click", function () {
+        avatarInput.click();
+      });
+      avatarInput.addEventListener("change", function () {
+        var file = avatarInput.files && avatarInput.files[0];
+        avatarInput.value = "";
+        uploadAvatar(file);
+      });
+    }
+    if (profileEl) {
+      profileEl.addEventListener("click", function (event) {
+        var row = event.target.closest("[data-profile-action]");
+        if (!row) {
+          return;
+        }
+        var action = row.getAttribute("data-profile-action");
+        if (action === "nickname") {
+          openSettingsAt("personal", "settings-nickname");
+        } else if (action === "email" || action === "phone") {
+          openSettingsAt("account");
+        } else if (action === "member") {
+          if (typeof toast === "function") {
+            toast("会员体系正在筹备中，先把账记明白更重要", "info");
+          }
+        } else if (action === "wechat" || action === "qq") {
+          if (typeof toast === "function") {
+            toast("微信 / QQ 绑定暂未开放，敬请期待", "info");
+          }
+        }
+      });
+      profileEl.addEventListener("keydown", function (event) {
+        var row = event.target.closest && event.target.closest("[data-profile-action]");
+        if (row && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          row.click();
+        }
+      });
     }
   }
 

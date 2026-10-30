@@ -1202,11 +1202,8 @@ function renderAccountGroups() {
                 (selected ? " checked" : "") +
                 ' tabindex="-1" aria-label="选择账户">'
               : "") +
-            '<span class="account-dot" style="background:' +
-            accountTone(account.name) +
-            '">' +
-            (iconImgHtml("account", account.name) ||
-              escapeHtml(String(account.name || "?").slice(0, 1))) +
+            '<span class="account-row-icon">' +
+            entityIconHtml("account", account.name, 34, "solid") +
             "</span>" +
             '<span class="account-row-main">' +
             '<span class="account-row-name">' +
@@ -2821,14 +2818,16 @@ function feedRowHtml(record, snapshots, options) {
   if (options.showAccount) {
     sub.push(escapeHtml(record.account || ""));
   }
+  const meta = escapeHtml(timeOf(record)) + (sub.length ? " · " + sub.join(" · ") : "");
+  const iconName = record.type === "transfer" ? "转账" : record.category;
   return (
     '<div class="feed-row" role="button" tabindex="0" data-id="' +
     record.id +
     '">' +
-    '<span class="feed-time">' + escapeHtml(timeOf(record)) + "</span>" +
+    '<span class="feed-badge">' + entityIconHtml("category", iconName, 38) + "</span>" +
     '<span class="feed-main">' +
     '<span class="feed-cat">' + categoryLabel(record) + "</span>" +
-    (sub.length ? '<span class="feed-note">' + sub.join(" · ") + "</span>" : "") +
+    '<span class="feed-note">' + meta + "</span>" +
     "</span>" +
     '<span class="feed-right">' +
     '<span class="feed-amount">' + feedAmountHtml(record) + "</span>" +
@@ -5742,8 +5741,11 @@ function renderNotifications() {
         '<span class="notice-title">' +
         escapeHtml(item.title) +
         "</span>" +
+        '<span class="notice-side">' +
         '<span class="notice-date">' +
         escapeHtml(dateText) +
+        "</span>" +
+        '<span class="notice-toggle">' + (collapsed ? "展开" : "收起") + "</span>" +
         "</span>" +
         "</div>" +
         '<div class="notice-body">' +
@@ -5764,6 +5766,10 @@ function renderNotifications() {
       }
       const collapsed = article.classList.toggle("is-collapsed");
       head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      const label = head.querySelector(".notice-toggle");
+      if (label) {
+        label.textContent = collapsed ? "展开" : "收起";
+      }
     };
     box.addEventListener("click", function (event) {
       const head = event.target.closest("[data-notice-toggle]");
@@ -5954,42 +5960,107 @@ function iconFor(kind, name) {
   return bucket[name] || null;
 }
 
-// v0.12.6：系统默认图标兜底。自定义图标优先用 <img>，否则用内联 SVG + emoji 字形，
-// 保证账单表与账户列表的文字左侧永远有图标，而不是只有干巴巴的文字。
-const DEFAULT_ICON_GLYPHS = {
-  category: {
-    "餐饮": "🍜", "交通": "🚕", "购物": "🛍️", "居住": "🏠", "娱乐": "🎮", "医疗": "💊",
-    "学习": "📚", "人情": "🎁", "工资": "💼", "奖金": "🎉", "投资": "📈", "理财": "📈",
-    "利息收入": "🏦", "利息支出": "🏦", "退款": "↩️", "其他": "🏷️",
-  },
-  account: {
-    "现金": "💵", "微信": "💬", "支付宝": "🅰️", "银行卡": "💳", "信用卡": "💳",
-    "花呗": "🌸", "余额宝": "💰", "招商银行": "🏦", "工商银行": "🏦", "建设银行": "🏦",
-    "农业银行": "🏦", "中国银行": "🏦", "交通银行": "🏦", "邮储银行": "🏦", "云闪付": "📲",
-  },
+// v0.12.7：系统默认图标改用矢量 SVG（不再用 emoji 字形），并配圆形浅色底/品牌色圆底。
+const ICON_PATHS = {
+  food: '<path d="M6 3v7a2 2 0 0 0 2 2v9"/><path d="M10 3v7a2 2 0 0 1-2 2"/><path d="M5 3v5"/><path d="M10 3v5"/><path d="M15.5 3c-1.6 1.4-2.5 3.3-2.5 5.2 0 1.7.9 2.9 2.5 3.1V21"/>',
+  transport: '<rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 10h14"/><path d="M8 18v2"/><path d="M16 18v2"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/>',
+  shopping: '<path d="M5 8h14l-1 12H6L5 8Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+  home: '<path d="M4 11 12 4l8 7"/><path d="M6 10v10h12V10"/><path d="M10 20v-5h4v5"/>',
+  fun: '<rect x="3" y="7" width="18" height="11" rx="5"/><path d="M8 11v4"/><path d="M6 13h4"/><circle cx="16" cy="12" r="1"/><circle cx="18" cy="14" r="1"/>',
+  medical: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v8"/><path d="M8 12h8"/>',
+  study: '<path d="M12 6.5C10.5 5 8.5 4.5 6 4.5v13c2.5 0 4.5.5 6 2 1.5-1.5 3.5-2 6-2v-13c-2.5 0-4.5.5-6 2Z"/><path d="M12 6.5v13"/>',
+  gift: '<path d="M4 11h16v9H4z"/><path d="M3 7h18v4H3z"/><path d="M12 7v13"/><path d="M12 7C10 7 8 6 8 4.5S9.5 3 10.5 4 12 7 12 7Zm0 0c2 0 4-1 4-2.5S14.5 3 13.5 4 12 7 12 7Z"/>',
+  salary: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M9 7V5h6v2"/><path d="M3 12h18"/>',
+  invest: '<path d="M4 19h16"/><path d="m5 15 4-4 3 3 6-7"/><path d="M18 7h3v3"/>',
+  refund: '<path d="M9 7H5v4"/><path d="M5 11a8 8 0 1 1 2 6"/>',
+  tag: '<path d="M4 4h8l8 8-8 8-8-8V4Z"/><circle cx="8.5" cy="8.5" r="1.2"/>',
+  transfer: '<path d="M4 8h13"/><path d="m13 4 4 4-4 4"/><path d="M20 16H7"/><path d="m11 12-4 4 4 4"/>',
+  wechat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12Z"/><path d="M9 12h.01"/><path d="M12 12h.01"/><path d="M15 12h.01"/>',
+  alipay: '<text x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="700" fill="currentColor" stroke="none">支</text>',
+  bank: '<path d="m3 9 9-5 9 5"/><path d="M5 9v9"/><path d="M9 9v9"/><path d="M15 9v9"/><path d="M19 9v9"/><path d="M3 21h18"/>',
+  cash: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M7 9v.01"/><path d="M17 15v.01"/>',
+  card: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/>',
+  coin: '<ellipse cx="12" cy="7" rx="7" ry="3"/><path d="M5 7v5c0 1.7 3.1 3 7 3s7-1.3 7-3V7"/><path d="M5 12v5c0 1.7 3.1 3 7 3s7-1.3 7-3v-5"/>',
+  wallet: '<path d="M4 7a2 2 0 0 1 2-2h12v14H6a2 2 0 0 1-2-2V7Z"/><path d="M16 12h4v4h-4a2 2 0 0 1 0-4Z"/>',
+  cloud: '<path d="M7 18a4 4 0 0 1-.5-8A5.5 5.5 0 0 1 17 9.5 4 4 0 0 1 17 18H7Z"/>',
 };
 
-function defaultIconGlyph(kind, name) {
-  const map = DEFAULT_ICON_GLYPHS[kind] || {};
-  const key = String(name || "");
-  if (map[key]) {
-    return map[key];
-  }
-  for (const candidate of Object.keys(map)) {
-    if (key.indexOf(candidate) >= 0 || candidate.indexOf(key) >= 0) {
-      return map[candidate];
+const CATEGORY_ICON_RULES = [
+  ["餐饮", "food"], ["早餐", "food"], ["午餐", "food"], ["晚餐", "food"], ["外卖", "food"], ["零食", "food"], ["咖啡", "food"],
+  ["交通", "transport"], ["打车", "transport"], ["地铁", "transport"], ["公交", "transport"], ["加油", "transport"],
+  ["购物", "shopping"], ["日用", "shopping"], ["服饰", "shopping"], ["数码", "shopping"],
+  ["居住", "home"], ["房租", "home"], ["水电", "home"], ["物业", "home"],
+  ["娱乐", "fun"], ["游戏", "fun"], ["电影", "fun"], ["旅游", "fun"],
+  ["医疗", "medical"], ["药品", "medical"], ["健康", "medical"],
+  ["学习", "study"], ["教育", "study"], ["书籍", "study"],
+  ["人情", "gift"], ["礼物", "gift"], ["红包", "gift"],
+  ["工资", "salary"], ["奖金", "salary"], ["报销", "salary"],
+  ["投资", "invest"], ["理财", "invest"], ["利息", "invest"], ["收益", "invest"], ["基金", "invest"],
+  ["退款", "refund"], ["退货", "refund"], ["转账", "transfer"], ["还款", "transfer"],
+];
+const ACCOUNT_ICON_RULES = [
+  ["微信", "wechat"], ["支付宝", "alipay"], ["余额宝", "coin"], ["零钱通", "coin"], ["理财", "coin"], ["基金", "coin"],
+  ["信用卡", "card"], ["花呗", "card"], ["白条", "card"], ["现金", "cash"], ["云闪付", "cloud"],
+  ["银行", "bank"], ["储蓄", "bank"],
+];
+const CATEGORY_TONES = {
+  food: ["#f97316", "#fff1e6"], transport: ["#2563eb", "#e8f0fe"], shopping: ["#ec4899", "#fce7f3"],
+  home: ["#8b5cf6", "#f1ebfe"], fun: ["#a855f7", "#f5ecff"], medical: ["#ef4444", "#fee2e2"],
+  study: ["#0ea5e9", "#e0f2fe"], gift: ["#f43f5e", "#ffe4e6"], salary: ["#16a34a", "#dcfce7"],
+  invest: ["#d97706", "#fef3c7"], refund: ["#0d9488", "#ccfbf1"], transfer: ["#6366f1", "#eef2ff"],
+  tag: ["#64748b", "#f1f5f9"],
+};
+const ICON_ACCOUNT_COLORS = {
+  wechat: "#07c160", alipay: "#1677ff", bank: "#2f6bff", cash: "#f59e0b",
+  card: "#e11d48", coin: "#d97706", wallet: "#64748b", cloud: "#0ea5e9",
+};
+
+function iconKeyOf(kind, name) {
+  const text = String(name || "");
+  const rules = kind === "account" ? ACCOUNT_ICON_RULES : CATEGORY_ICON_RULES;
+  for (const pair of rules) {
+    if (text.indexOf(pair[0]) >= 0) {
+      return pair[1];
     }
   }
-  return kind === "category" ? "🏷️" : "💳";
+  return kind === "account" ? "wallet" : "tag";
 }
 
-function defaultIconSvg(kind, name, px) {
-  const glyph = escapeHtml(defaultIconGlyph(kind, name));
-  return '<svg class="entity-icon entity-icon-default" viewBox="0 0 24 24" width="' + px +
-    '" height="' + px + '" aria-hidden="true"><text x="12" y="18.5" text-anchor="middle" ' +
-    'font-size="15">' + glyph + "</text></svg>";
+function iconToneOf(kind, key) {
+  if (kind === "account") {
+    return { solid: ICON_ACCOUNT_COLORS[key] || ICON_ACCOUNT_COLORS.wallet, bg: "#f8fafc", fg: ICON_ACCOUNT_COLORS[key] || ICON_ACCOUNT_COLORS.wallet };
+  }
+  const tone = CATEGORY_TONES[key] || CATEGORY_TONES.tag;
+  return { solid: tone[0], bg: tone[1], fg: tone[0] };
 }
 
+function iconVectorSvg(key) {
+  return '<svg class="entity-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (ICON_PATHS[key] || ICON_PATHS.tag) + "</svg>";
+}
+
+/**
+ * 账单/账户列表统一图标：圆形底 + 矢量图标；用户自定义图标优先显示为图片。
+ * variant="solid" 用于账户列表（品牌色圆底 + 白色图标），默认是浅色圆底。
+ */
+function entityIconHtml(kind, name, size, variant) {
+  const px = Math.max(18, Number(size) || 38);
+  const icon = iconFor(kind, name);
+  const key = iconKeyOf(kind, name);
+  const tone = iconToneOf(kind, key);
+  const solid = variant === "solid";
+  const hasImage = !!(icon && icon.path);
+  const bg = hasImage ? "#f8fafc" : solid ? tone.solid : tone.bg;
+  const fg = hasImage ? "#334155" : solid ? "#ffffff" : tone.fg;
+  const inner = hasImage
+    ? '<img src="' + escapeHtml(icon.path) + '" alt="" loading="lazy">'
+    : iconVectorSvg(key);
+  return '<span class="entity-badge' + (solid ? " is-solid" : "") + (hasImage ? " has-image" : "") +
+    '" style="--badge-size:' + px + "px;background:" + bg + ";color:" + fg + '">' + inner + "</span>";
+}
+
+// 兼容旧调用点：返回裸图标（不带圆形底）。
 function iconImgHtml(kind, name, size) {
   const px = Math.max(14, Number(size) || 18);
   const icon = iconFor(kind, name);
@@ -5997,7 +6068,9 @@ function iconImgHtml(kind, name, size) {
     return '<img class="entity-icon" src="' + escapeHtml(icon.path) + '" alt="" style="width:' + px +
       "px;height:" + px + 'px">';
   }
-  return defaultIconSvg(kind, name, px);
+  return '<svg class="entity-icon" viewBox="0 0 24 24" width="' + px + '" height="' + px +
+    '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    (ICON_PATHS[iconKeyOf(kind, name)] || ICON_PATHS.tag) + "</svg>";
 }
 
 async function loadIconLibrary() {
@@ -8186,14 +8259,16 @@ function renderBillsTable() {
       '">' +
       billsTypeLabel(record.type) +
       "</span></td>" +
-      "<td>" +
-      iconImgHtml("category", record.category) +
-      escapeHtml(categoryLabel(record.category)) +
-      "</td>" +
-      "<td>" +
-      iconImgHtml("account", record.account) +
+      '<td><span class="bills-entity">' +
+      entityIconHtml("category", record.type === "transfer" ? "转账" : record.category, 26) +
+      "<span>" +
+      categoryLabel(record) +
+      "</span></span></td>" +
+      '<td><span class="bills-entity">' +
+      entityIconHtml("account", record.account, 26) +
+      "<span>" +
       escapeHtml(record.account || "") +
-      "</td>" +
+      "</span></span></td>" +
       '<td class="bills-amount">' +
       billsAmountHtml(record) +
       "</td>" +
