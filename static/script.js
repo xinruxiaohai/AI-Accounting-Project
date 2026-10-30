@@ -21,6 +21,7 @@ const PAGE_TITLES = {
   home: "首页",
   assets: "资产",
   bills: "账单",
+  charts: "图表",
   profile: "我的",
 };
 
@@ -719,6 +720,9 @@ function applyTypeUi() {
   }
 
   updateSubCategoryVisibility();
+  // v0.13：支出/收入切换后网格跟着刷新（转账/借贷整块隐藏）
+  hideCategoryFlyout();
+  renderCategoryGrid();
 }
 
 /* ==================== 分类 ==================== */
@@ -822,6 +826,248 @@ function selectedCategoryId() {
   return parent && parent.value ? Number(parent.value) : null;
 }
 
+
+/* ==================== v0.13 可视化分类网格 ==================== */
+
+/** 当前选中的一级分类 id（二级选中时回溯到父级） */
+function selectedTopCategoryId() {
+  const selected = selectedCategoryId();
+  const found = findCategory(selected);
+  if (!found) {
+    return null;
+  }
+  return found.parent ? Number(found.parent.id) : Number(found.node.id);
+}
+
+function updateCategoryHint() {
+  const hint = $("category-hint");
+  if (!hint) {
+    return;
+  }
+  const found = findCategory(selectedCategoryId());
+  if (!found) {
+    hint.textContent = "请选择分类";
+    hint.classList.remove("is-picked");
+    return;
+  }
+  hint.textContent = found.parent
+    ? "已选：" + found.parent.name + " / " + found.node.name
+    : "已选：" + found.node.name;
+  hint.classList.add("is-picked");
+}
+
+function hideCategoryFlyout() {
+  const flyout = $("category-flyout");
+  if (flyout) {
+    flyout.classList.add("d-none");
+    flyout.removeAttribute("data-parent-id");
+  }
+}
+
+/** 网格：大图标 + 名称；有二级的分类右上角带数量角标 */
+function renderCategoryGrid() {
+  const grid = $("category-grid");
+  if (!grid) {
+    return;
+  }
+  if (isTransferType() || isDebtType()) {
+    hideCategoryFlyout();
+    return;
+  }
+  const income = currentType() === "income";
+  grid.dataset.type = income ? "income" : "expense";
+  const topId = selectedTopCategoryId();
+  grid.innerHTML = state.categories
+    .map(function (top) {
+      const active = Number(top.id) === Number(topId);
+      return (
+        '<button type="button" class="cat-item' +
+        (active ? " is-active" : "") +
+        '" data-cat-id="' +
+        top.id +
+        '" role="option" aria-selected="' +
+        (active ? "true" : "false") +
+        '">' +
+        '<span class="cat-item-icon">' +
+        entityIconHtml("category", top.name, 42) +
+        "</span>" +
+        '<span class="cat-item-name">' +
+        escapeHtml(top.name) +
+        "</span>" +
+        (top.children.length
+          ? '<span class="cat-item-more">' + top.children.length + "</span>"
+          : "") +
+        "</button>"
+      );
+    })
+    .join("");
+  updateCategoryHint();
+}
+
+/** 只切换选中样式，不重建节点（重建会把当前 click 的 target 摘掉） */
+function syncCategoryGridSelection() {
+  const grid = $("category-grid");
+  if (!grid) {
+    return;
+  }
+  const topId = selectedTopCategoryId();
+  Array.prototype.forEach.call(grid.querySelectorAll(".cat-item"), function (item) {
+    const active = Number(item.getAttribute("data-cat-id")) === Number(topId);
+    item.classList.toggle("is-active", active);
+    item.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  updateCategoryHint();
+}
+
+function positionCategoryFlyout(itemElement) {
+  const flyout = $("category-flyout");
+  const picker = $("cat-picker");
+  if (!flyout || !picker) {
+    return;
+  }
+  const item = itemElement || picker.querySelector(".cat-item.is-active");
+  if (!item) {
+    return;
+  }
+  // 右侧空间不够就贴到下方，避免小屏被弹窗裁掉
+  const roomRight = picker.clientWidth - (item.offsetLeft + item.offsetWidth);
+  const below = roomRight < 220;
+  flyout.classList.toggle("is-below", below);
+  if (below) {
+    flyout.style.left = Math.max(0, Math.min(item.offsetLeft, picker.clientWidth - 232)) + "px";
+    flyout.style.top = item.offsetTop + item.offsetHeight + 8 + "px";
+  } else {
+    flyout.style.left = item.offsetLeft + item.offsetWidth + 10 + "px";
+    flyout.style.top = Math.max(0, item.offsetTop - 6) + "px";
+  }
+}
+
+function openCategoryFlyout(topId, itemElement) {
+  const flyout = $("category-flyout");
+  const list = $("category-flyout-list");
+  const title = $("category-flyout-title");
+  const children = childrenOf(topId);
+  if (!flyout || !list || !children.length) {
+    hideCategoryFlyout();
+    return;
+  }
+  if (title) {
+    title.textContent = categoryNameOf(topId) + " 的二级分类";
+  }
+  const currentChild = $("sub-category") ? $("sub-category").value : "";
+  list.innerHTML = children
+    .map(function (child) {
+      return (
+        '<button type="button" class="cat-flyout-item' +
+        (String(currentChild) === String(child.id) ? " is-active" : "") +
+        '" data-cat-child="' +
+        child.id +
+        '">' +
+        escapeHtml(child.name) +
+        "</button>"
+      );
+    })
+    .join("");
+  flyout.dataset.parentId = String(topId);
+  flyout.classList.remove("d-none");
+  positionCategoryFlyout(itemElement);
+}
+
+/** 点一级分类：立刻选中它（默认就记在一级上），有二级才再弹小卡片让用户可选 */
+function selectTopCategory(topId, itemElement) {
+  const select = $("category");
+  if (!select) {
+    return;
+  }
+  select.value = String(topId);
+  fillCategoryChild(topId, "");
+  const childSelect = $("sub-category");
+  if (childSelect) {
+    childSelect.value = "";
+  }
+  clearFieldError(select);
+  syncCategoryGridSelection();
+  openCategoryFlyout(topId, (itemElement || document.querySelector(".cat-item.is-active")));
+}
+
+function selectChildCategory(childId) {
+  const childSelect = $("sub-category");
+  const parentSelect = $("category");
+  const found = findCategory(childId);
+  if (!childSelect || !parentSelect || !found || !found.parent) {
+    return;
+  }
+  parentSelect.value = String(found.parent.id);
+  fillCategoryChild(found.parent.id, childId);
+  childSelect.value = String(childId);
+  const list = $("category-flyout-list");
+  if (list) {
+    Array.prototype.forEach.call(list.querySelectorAll("[data-cat-child]"), function (button) {
+      button.classList.toggle(
+        "is-active",
+        Number(button.getAttribute("data-cat-child")) === Number(childId)
+      );
+    });
+  }
+  syncCategoryGridSelection();
+  // 选完二级让浮层让位，不挡下面的金额/账户
+  window.setTimeout(hideCategoryFlyout, 220);
+}
+
+function bindCategoryPicker() {
+  const grid = $("category-grid");
+  if (!grid || grid.dataset.bound === "1") {
+    return;
+  }
+  grid.dataset.bound = "1";
+  grid.addEventListener("click", function (event) {
+    const item = event.target.closest(".cat-item");
+    if (!item) {
+      return;
+    }
+    selectTopCategory(Number(item.getAttribute("data-cat-id")), item);
+  });
+
+  const list = $("category-flyout-list");
+  if (list) {
+    list.addEventListener("click", function (event) {
+      const button = event.target.closest("[data-cat-child]");
+      if (!button) {
+        return;
+      }
+      selectChildCategory(Number(button.getAttribute("data-cat-child")));
+    });
+  }
+
+  // 「不细分」= 清空二级，只记在一级分类上
+  const skip = $("category-flyout-skip");
+  if (skip) {
+    skip.addEventListener("click", function () {
+      const childSelect = $("sub-category");
+      if (childSelect) {
+        childSelect.value = "";
+      }
+      updateCategoryHint();
+      hideCategoryFlyout();
+    });
+  }
+
+  // 点别处收起浮层；弹窗关闭也收起
+  document.addEventListener("click", function (event) {
+    const picker = $("cat-picker");
+    if (!picker || !document.documentElement.contains(event.target)) {
+      return;
+    }
+    if (!picker.contains(event.target)) {
+      hideCategoryFlyout();
+    }
+  });
+  const modalElement = $("record-modal");
+  if (modalElement) {
+    modalElement.addEventListener("hidden.bs.modal", hideCategoryFlyout);
+  }
+}
+
 function categoryLabel(record) {
   if (record.type === "transfer") {
     return escapeHtml(record.account) + " → " + escapeHtml(record.to_account);
@@ -865,6 +1111,7 @@ async function loadCategories() {
   parentSelect.value = keep;
 
   renderCategoryTree();
+  renderCategoryGrid();
 }
 
 function renderCategoryTree() {
@@ -4330,6 +4577,7 @@ function resetRecordForm() {
 
   fillCategoryParent(null);
   fillCategoryChild($("category").value, "");
+  hideCategoryFlyout();
   $("sub-category").value = "";
 
   setType("expense");
@@ -4370,6 +4618,7 @@ function fillRecordForm(record) {
       fillCategoryChild(found.node.id, "");
     }
   }
+  renderCategoryGrid();
 }
 
 function openRecordModal(options) {
@@ -4478,8 +4727,9 @@ async function saveRecord() {
           }
         }
       }
-      await api("/api/records", jsonOptions("POST", payload));
-      toast("记账成功", "success");
+      const created = await api("/api/records", jsonOptions("POST", payload));
+      // v0.13：手动记账成功也走右下角气泡，和 AI 记账保持同一套反馈
+      showRecordSuccessBubble(created, values);
       // 新账目按时间倒序排在第一页，回到首页才看得见
       resetPaging();
     }
@@ -4493,8 +4743,132 @@ async function saveRecord() {
   }
 }
 
+/**
+ * v0.13：全站危险操作统一确认弹窗，替代原生 window.confirm。
+ * 返回 Promise<boolean>：点「确认」true，取消 / 关闭 / 按 Esc 都是 false。
+ */
+let pendingConfirm = null;
+
+function confirmAction(options) {
+  const opts = typeof options === "string" ? { text: options } : options || {};
+  const modalElement = $("action-confirm-modal");
+  const titleElement = $("action-confirm-title");
+  const textElement = $("action-confirm-text");
+  const extraElement = $("action-confirm-extra");
+  const okButton = $("action-confirm-ok");
+  // 极端兜底：弹窗节点或 Bootstrap 缺失时退回原生确认，绝不静默执行删除
+  if (!modalElement || !titleElement || !textElement || !okButton || !window.bootstrap) {
+    return Promise.resolve(window.confirm(opts.text || "确定继续吗？"));
+  }
+  // 上一个还没决断的确认直接当取消处理，避免两个 Promise 互相覆盖
+  if (pendingConfirm) {
+    pendingConfirm(false);
+  }
+  titleElement.textContent = opts.title || "确认操作";
+  textElement.textContent = opts.text || "确定继续吗？";
+  if (extraElement) {
+    extraElement.hidden = !opts.extra;
+    extraElement.textContent = opts.extra || "";
+  }
+  okButton.textContent = opts.confirmText || "确认删除";
+  okButton.className = "btn " + (opts.danger === false ? "btn-primary" : "btn-danger");
+
+  const modal = window.bootstrap.Modal.getOrCreateInstance(modalElement);
+  return new Promise(function (resolve) {
+    let settled = false;
+    function finish(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      pendingConfirm = null;
+      okButton.removeEventListener("click", onOk);
+      modalElement.removeEventListener("hidden.bs.modal", onHidden);
+      modalElement.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    }
+    function onOk(event) {
+      if (event) {
+        event.preventDefault();
+      }
+      finish(true);
+      modal.hide();
+    }
+    function onHidden() {
+      finish(false);
+    }
+    function onKeydown(event) {
+      if (event.key !== "Enter") {
+        return;
+      }
+      const tag = String(event.target.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "button") {
+        return;
+      }
+      event.preventDefault();
+      onOk(event);
+    }
+    pendingConfirm = finish;
+    okButton.addEventListener("click", onOk);
+    modalElement.addEventListener("hidden.bs.modal", onHidden);
+    modalElement.addEventListener("keydown", onKeydown);
+    modal.show();
+    window.setTimeout(function () {
+      okButton.focus();
+    }, 180);
+  });
+}
+
+/**
+ * v0.13：手动记账成功气泡。复用 AI 的成功气泡样式，并直接挂上「哪里不对直接说」表单，
+ * 让手感与 AI 记账完全一致。
+ */
+function showRecordSuccessBubble(data, values) {
+  const record = (data && data.record) || data || {};
+  const recordId = (data && data.id) || record.id || null;
+  const bubble = createBubble("record");
+  if (!bubble) {
+    toast("记账成功", "success");
+    return;
+  }
+  let summary = aiRecordSummary(record);
+  if (!summary || summary === "已写入账本") {
+    const categoryName =
+      (values && values.category_id ? categoryNameOf(values.category_id) : "") ||
+      record.category ||
+      "";
+    const parts = [];
+    const amount = values && values.amount !== undefined ? values.amount : record.amount;
+    if (amount !== undefined && amount !== null) {
+      parts.push(money(amount));
+    }
+    if (categoryName) {
+      parts.push(categoryName);
+    }
+    if (values && values.account) {
+      parts.push(values.account);
+    }
+    summary = parts.length ? parts.join(" · ") : "已写入账本";
+  }
+  bubbleFinish(bubble, {
+    title: "记账成功",
+    message: "已记入 " + summary,
+    recordId: recordId,
+  });
+  bubbleAppendNote(bubble, "哪里不对直接说，比如：改成微信");
+  if (recordId) {
+    attachBubbleRevise(bubble, recordId);
+  }
+}
+
 async function removeRecord(recordId) {
-  if (!window.confirm("确定删除这条记录吗？删除后余额会一起退回去。")) {
+  const accepted = await confirmAction({
+    title: "删除这条账单",
+    text: "确定删除这条记录吗？",
+    extra: "删除后账户余额会一起退回去，操作不可撤销。",
+    confirmText: "删除账单",
+  });
+  if (!accepted) {
     return;
   }
   const lockKey = "record-delete-" + recordId;
@@ -4722,7 +5096,13 @@ async function addCategory() {
 }
 
 async function removeCategory(categoryId) {
-  if (!window.confirm("删除这个分类？有子分类或已有账目时不允许删。")) {
+  const accepted = await confirmAction({
+    title: "删除分类",
+    text: "删除这个分类？",
+    extra: "有子分类或已有账目时不允许删。",
+    confirmText: "删除分类",
+  });
+  if (!accepted) {
     return;
   }
   const lockKey = "category-delete-" + categoryId;
@@ -4780,7 +5160,13 @@ async function addAccount() {
 }
 
 async function removeAccount(name) {
-  if (!window.confirm("删除账户「" + name + "」？账户下还有账目时不允许删。")) {
+  const accepted = await confirmAction({
+    title: "删除账户",
+    text: "删除账户「" + name + "」？",
+    extra: "账户下还有账目时不允许删。",
+    confirmText: "删除账户",
+  });
+  if (!accepted) {
     return;
   }
   const lockKey = "account-delete-" + name;
@@ -4816,6 +5202,11 @@ function switchPage(page) {
 
   if (target === "bills") {
     renderBillsPage();
+  }
+
+  // v0.13：图表看板独立脚本，切到该页才懒加载数据并重绘
+  if (target === "charts" && typeof window.renderChartsPage === "function") {
+    window.renderChartsPage();
   }
 
   // 首页从隐藏变回可见时 ECharts 需要重新量一次容器宽度
@@ -5548,7 +5939,13 @@ async function openAlbumRecord(recordId) {
 async function deleteAlbumImage(recordId) {
   const record = findRecordById(recordId);
   const label = record ? money(record.amount) + " · " + (record.category || "其他") : "这条账单";
-  if (!window.confirm("只删除" + label + "的截图，账单本身保留。确定删除图片？")) {
+  const accepted = await confirmAction({
+    title: "删除凭证截图",
+    text: "确定删除" + label + "的截图？",
+    extra: "只删图片，账单本身保留。",
+    confirmText: "删除图片",
+  });
+  if (!accepted) {
     return;
   }
   try {
@@ -6354,9 +6751,10 @@ function bindEvents() {
     if ($("fab-shot-file")) {
       $("fab-shot-file").addEventListener("change", onFabShotPicked);
     }
-    // 鼠标移进悬浮球：立刻取消倒计时，操作途中菜单不会被收走
+    // v0.13：鼠标悬停立刻展开（不用先点钢笔），移出后才开始 3 秒倒计时
     $("fab").addEventListener("mouseenter", function () {
       window.clearTimeout(fabAutoTimer);
+      openFab();
     });
     // 鼠标移出悬浮球（含全部子图标）后才开始 3 秒倒计时
     $("fab").addEventListener("mouseleave", function () {
@@ -6778,6 +7176,15 @@ function bindEvents() {
   }
   if ($("settings-btn")) {
     $("settings-btn").addEventListener("click", function () {
+      // v0.13：点击设置图标先来一个 180° 旋转微动效
+      const button = $("settings-btn");
+      button.classList.remove("is-spinning");
+      // 读一次 offsetWidth 强制重排，连点也能重新播动画
+      void button.offsetWidth;
+      button.classList.add("is-spinning");
+      window.setTimeout(function () {
+        button.classList.remove("is-spinning");
+      }, 620);
       // v0.11.7：顶栏齿轮直接打开独立「系统设置」弹窗
       const modalElement = $("settings-modal");
       if (modalElement && window.bootstrap) {
@@ -7460,7 +7867,13 @@ async function restoreTrashRecord(id) {
 }
 
 async function purgeTrashRecord(id) {
-  if (!window.confirm("彻底删除后无法恢复，确定吗？")) {
+  const accepted = await confirmAction({
+    title: "彻底删除",
+    text: "彻底删除后无法恢复，确定吗？",
+    extra: "这条账单会从回收站里永久移除。",
+    confirmText: "彻底删除",
+  });
+  if (!accepted) {
     return;
   }
   try {
@@ -7902,6 +8315,7 @@ async function init() {
   applySidebar();
 
   bindEvents();
+  bindCategoryPicker();
   bindDebtModalButtons();
   bindIconSettings();
   initV0116Ui();

@@ -8701,3 +8701,579 @@ body.auth-locked {
 [data-theme="dark"] .pc-arrow {
   color: #475569;
 }
+/* ===================== v0.13.0 UI 跃升 ===================== */
+/*
+ * 1. 全局微动效：设置图标旋转、按钮按下缩放、导航橙色高亮竖线
+ * 2. 记账弹窗：可视化分类网格 + 二级悬浮卡片
+ * 3. 图表看板：左侧子菜单 / 周期切换 / 三列总览 / 趋势图 / 汇总表
+ * 4. 自定义确认弹窗（替代 window.confirm）
+ */
+
+/* ---------- 1. 侧栏导航：选中项左侧橙色竖线 ---------- */
+.nav-item {
+  position: relative;
+}
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, #fb923c 0%, #f97316 100%);
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.55);
+}
+#app.is-collapsed .nav-item.active::before {
+  left: -4px;
+  height: 16px;
+}
+
+/* ---------- 2. 微动效 ---------- */
+#settings-btn svg {
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+#settings-btn.is-spinning svg {
+  transform: rotate(180deg);
+}
+
+.btn,
+.icon-btn,
+.chart-period-btn,
+.chart-series-btn,
+.chart-nav-btn,
+.cat-item,
+.cat-flyout-item {
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease,
+    box-shadow 0.15s ease, color 0.15s ease;
+}
+.btn:active:not(:disabled),
+.icon-btn:active,
+.chart-period-btn:active,
+.chart-series-btn:active,
+.chart-nav-btn:active,
+.cat-item:active {
+  transform: scale(0.96);
+}
+
+/* ---------- 3. 记账弹窗：可视化分类网格 ---------- */
+.record-dialog {
+  max-width: 760px;
+}
+#record-modal .modal-body {
+  padding-bottom: 10px;
+}
+
+.cat-picker {
+  position: relative;
+}
+.cat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
+  gap: 8px;
+  padding: 4px 2px 6px;
+}
+.cat-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 10px 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  min-height: 84px;
+}
+.cat-item:hover {
+  border-color: rgba(249, 115, 22, 0.45);
+  background: var(--surface);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+.cat-item.is-active {
+  border-color: #f97316;
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.12) 0%, rgba(249, 115, 22, 0.04) 100%);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+}
+.cat-item-icon {
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.cat-item-icon .entity-badge {
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+}
+.cat-item-name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+  pointer-events: none;
+}
+.cat-item.is-active .cat-item-name {
+  color: #ea580c;
+  font-weight: 600;
+}
+.cat-item-more {
+  position: absolute;
+  top: 5px;
+  right: 6px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+.cat-item.is-active .cat-item-more {
+  background: rgba(249, 115, 22, 0.18);
+  color: #ea580c;
+}
+
+.cat-flyout {
+  position: absolute;
+  z-index: 6;
+  width: 216px;
+  padding: 10px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+  animation: catFlyoutIn 0.16s ease-out;
+}
+@keyframes catFlyoutIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.cat-flyout::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 16px;
+  width: 10px;
+  height: 10px;
+  border-left: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  transform: rotate(45deg);
+}
+.cat-flyout.is-below::before {
+  left: 18px;
+  top: -6px;
+  border-left: 1px solid var(--line);
+  border-bottom: none;
+  border-top: 1px solid var(--line);
+}
+.cat-flyout-head {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 4px 8px;
+  border-bottom: 1px dashed var(--line);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cat-flyout-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 232px;
+  overflow-y: auto;
+}
+.cat-flyout-item {
+  border: none;
+  background: transparent;
+  color: var(--text-main);
+  text-align: left;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.cat-flyout-item:hover {
+  background: var(--surface-3);
+}
+.cat-flyout-item.is-active {
+  background: rgba(249, 115, 22, 0.13);
+  color: #ea580c;
+  font-weight: 600;
+}
+.cat-flyout-skip {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.cat-flyout-skip:hover {
+  border-color: #f97316;
+  color: #ea580c;
+}
+.cat-picked-hint {
+  margin: 8px 2px 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.cat-picked-hint.is-picked {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ---------- 4. 自定义确认弹窗 ---------- */
+.action-confirm-modal .modal-dialog {
+  max-width: 400px;
+}
+.action-confirm-text {
+  margin: 0 0 6px;
+  font-size: 14px;
+  color: var(--text-main);
+}
+.action-confirm-extra {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.action-confirm-modal .modal-footer .btn {
+  min-width: 88px;
+}
+
+/* ---------- 5. 图表看板 ---------- */
+#page-charts {
+  padding: 18px 24px 28px;
+}
+.chart-shell {
+  display: grid;
+  grid-template-columns: 152px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.chart-subnav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-sm);
+}
+.chart-subnav-item {
+  position: relative;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13.5px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.chart-subnav-item:hover {
+  background: var(--surface-3);
+  color: var(--text-main);
+}
+.chart-subnav-item.active {
+  background: rgba(249, 115, 22, 0.1);
+  color: #ea580c;
+  font-weight: 600;
+}
+.chart-subnav-item.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 3px;
+  background: #f97316;
+}
+.chart-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.chart-periods {
+  display: inline-flex;
+  padding: 4px;
+  gap: 2px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+}
+.chart-period-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.chart-period-btn.active {
+  background: var(--surface);
+  color: var(--text-strong);
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+.chart-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.chart-nav-btn {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.chart-nav-btn:hover {
+  color: #ea580c;
+  border-color: rgba(249, 115, 22, 0.5);
+}
+.chart-nav-btn svg {
+  width: 16px;
+  height: 16px;
+}
+.chart-period-label {
+  min-width: 120px;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.chart-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 22px 16px;
+  border-radius: 16px;
+}
+.chart-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 10px;
+}
+.chart-metric + .chart-metric {
+  border-left: 1px solid var(--line);
+}
+.chart-metric-label {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.chart-metric-value {
+  font-size: 27px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.chart-metric.is-expense .chart-metric-value {
+  color: var(--neg);
+}
+.chart-metric.is-income .chart-metric-value {
+  color: var(--pos);
+}
+.chart-metric.is-net .chart-metric-value {
+  color: var(--text-strong);
+}
+.chart-metric.is-net .chart-metric-value.is-negative {
+  color: var(--neg);
+}
+
+.chart-card {
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+}
+.chart-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.chart-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.chart-series-switch {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-3);
+}
+.chart-series-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.chart-series-btn.active {
+  background: var(--surface);
+  color: #ea580c;
+  font-weight: 600;
+  box-shadow: var(--shadow-sm);
+}
+.chart-canvas {
+  width: 100%;
+  height: 306px;
+}
+.chart-summary-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.chart-summary-table {
+  margin: 0;
+  --bs-table-bg: transparent;
+  --bs-table-color: var(--text-main);
+  --bs-table-border-color: var(--line);
+  font-size: 13px;
+}
+.chart-summary-table thead th {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+}
+.chart-summary-table tbody td {
+  border-bottom: 1px solid var(--line);
+  padding: 9px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-summary-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+.chart-summary-table .is-income {
+  color: var(--pos);
+}
+.chart-summary-table .is-expense {
+  color: var(--neg);
+}
+.chart-summary-table .is-negative {
+  color: var(--neg);
+}
+.chart-summary-table .chart-summary-total td {
+  font-weight: 700;
+  background: var(--surface-2);
+  border-bottom: none;
+}
+.chart-card .table-responsive {
+  max-height: 340px;
+  overflow-y: auto;
+}
+.empty-cell {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 26px 10px !important;
+}
+
+/* 小屏：子菜单横排，总览缩字体 */
+@media (max-width: 900px) {
+  .chart-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chart-subnav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    padding: 6px;
+  }
+  .chart-subnav-item {
+    white-space: nowrap;
+  }
+  .chart-subnav-item.active::before {
+    display: none;
+  }
+  .chart-metric-value {
+    font-size: 21px;
+  }
+  .chart-canvas {
+    height: 260px;
+  }
+  .cat-item {
+    min-height: 78px;
+  }
+}
+@media (max-width: 640px) {
+  .record-dialog {
+    max-width: 100%;
+  }
+  .chart-overview {
+    padding: 16px 8px;
+  }
+  .chart-metric {
+    padding: 2px 4px;
+  }
+}
+
+/* 深色模式细节 */
+[data-theme="dark"] .cat-item {
+  background: var(--surface-2);
+}
+[data-theme="dark"] .cat-item.is-active {
+  background: linear-gradient(180deg, rgba(249, 115, 22, 0.2) 0%, rgba(249, 115, 22, 0.06) 100%);
+}
+[data-theme="dark"] .cat-flyout,
+[data-theme="dark"] .chart-subnav,
+[data-theme="dark"] .chart-period-btn.active,
+[data-theme="dark"] .chart-series-btn.active {
+  background: var(--surface-2);
+}
+[data-theme="dark"] .chart-periods,
+[data-theme="dark"] .chart-series-switch {
+  background: var(--surface-3);
+}
+[data-theme="dark"] .action-confirm-extra {
+  background: var(--surface-2);
+}

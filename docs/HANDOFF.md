@@ -15,10 +15,10 @@ AI 记账管家 项目交接文档
 二、当前环境 / 技术栈
 - 系统 Windows；Python venv 在项目内：.\venv\Scripts\python.exe app.py。
 - Flask + sqlite3（records.db）+ 原生 JS/CSS + Bootstrap 5 + ECharts + PyJWT + pandas/openpyxl。
-- 前端：templates/index.html、static/script.js、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
-- 当前版本：v0.12.7-DEV（v0.12.6 全部能力 + 账单/账户列表专业化圆形 SVG 图标、个人中心大弹窗与头像上传、admin 独立滚动、通知展开按钮 Flex 防挤压）。
+- 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
+- 当前版本：v0.13.0-DEV（v0.12.7 全部能力 + 图表看板页【图表】、记账弹窗可视化分类网格与二级浮层、自定义确认弹窗 confirmAction 取代原生 alert/confirm、微动效）。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV。
-- 已知坑：.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形。
+- 已知坑：.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
 
 三、核心数据模型
 - users：id, email UNIQUE, password_hash, phone, nickname, avatar, created_at。管理员 id=1（1937097795@qq.com / 123456），1-9 预留，普通注册从 10 起。
@@ -34,10 +34,10 @@ AI 记账管家 项目交接文档
 - 账单/账户/统计：/api/records（增删改查、trash/restore/purge、batch/delete、batch/category、duplicate-check）、/api/accounts（改名/合并/批量删）、/api/categories、/api/statistics、/api/search。
 - AI：/api/records/ai、/api/records/ai/stream（SSE）、/api/records/ai/image；均支持 previous_record_id 覆盖更新、force 跳过防重，返回 confidence/auto_corrected；/api/records/<id>/ai-revise（自然语言或结构化全量覆盖）、/api/records/<id>/correction、/api/ai-memory、/api/ai-correction-log、/api/feedback。
 - 鉴权：/api/auth/register、login、me、profile、avatar（PUT 路径 / avatar/upload 直传文件）、change-password、send-code、reset-password；sms-login 返回 501 占位。JWT HS256 7 天，未登录统一 401 auth_required。
-- 其它：/api/import/parse|confirm、/api/debts/<id>/settle、/api/icons、/api/user-icons、/api/notifications（draft/publish/visible_at）、/api/access/*（后台密码）、/api/version。
+- 其它：/api/import/parse|confirm、/api/debts/<id>/settle、/api/icons、/api/user-icons、/api/notifications（draft/publish/visible_at）、/api/access/*（后台密码）、/api/version（优先 Git Tag，其次 APP_VERSION_FALLBACK）。
 
 五、下一步计划
-- v0.12.7 已完成：真实 Chrome（CDP）验证首页 46 条流水全部带圆形 SVG 图标、10 个账户品牌色图标、账单页 36 行图标、个人中心大弹窗与头像上传、通知展开/收起按钮 Flex 不再竖排、admin 可滚动到底。
-- 随后进入 v0.13：1) 报销进阶（部分报销进度、按报销人筛选、报销导出）；2) 数据安全（SQLite 一键备份/恢复，CSV 增加报销与截图字段）；3) 报表页（月/年趋势、分类占比图表）；4) 云存档（static/uploads 截图上云）；5) 移动端与可访问性细节。
+- v0.13.0 已完成：真实 Chrome（CDP）验证分类网格 8 个一级分类图标、二级浮层（216px、z-index 6、含「不细分」）、手动记账成功气泡可继续纠错、确认弹窗取消/确认双路径、图表页年/季/月/周切换与翻页、浅色 #475569 与深色 #cbd5e1 轴色、markLine 三条虚线、设置图标 180° 旋转。
+- 图表页后续可加：分类占比（环形）、账户维度筛选、导出图片；v0.14 方向：1) 报销进阶（部分报销进度、按报销人筛选、报销导出）；2) 数据安全（SQLite 一键备份/恢复，CSV 增加报销与截图字段）；3) 云存档（static/uploads 截图上云）；4) 移动端与可访问性细节。
 - 封版流程：语法检查 → 接口回归 → 更新 dev-log/prompts → commit + tag → detect_version() 验证。
 - 备注：本机暂连不上 GitHub，网络恢复后 push main 与全部历史 tag。

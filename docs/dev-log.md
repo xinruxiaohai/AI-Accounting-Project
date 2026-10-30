@@ -442,3 +442,11 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 通知中心：.notice-item-head 改 flex + nowrap，时间与展开/收起放入右侧 .notice-side 且 flex-shrink:0，长标题不再把按钮挤成竖排。
 - 真实 Chrome CDP 验证（temp/dom_v0127.mjs）：三类列表图标计数、个人中心 8 行信息与记账天数、头像上传回读、通知展开前后状态、admin scrollHeight>clientHeight 均通过。
 - 回归：test_v0127 5/5、v0126 10/10、v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile、node --check 通过。
+
+## v0.13.0-DEV（2026-10-30）
+
+- 全局交互：新增 confirmAction(options) 自定义确认弹窗（Promise<boolean>，Enter 确认、Esc/遮罩取消），替换删除账单/分类/账户/凭证截图/彻底删除 5 处 window.confirm；#settings-btn 点击 180° 旋转 0.62s；.btn/.icon-btn/.cat-item :active 缩放 0.96；悬浮球 mouseenter 立即展开、mouseleave 3 秒收回；手动记账成功后复用右下角气泡（标题「记账成功」，可直接说「改成微信」触发 ai-revise）。
+- 记账弹窗分类重构：隐藏 select 保留为状态存储，新增 .cat-grid 大图标网格（entityIconHtml 42px、右上角二级数量角标）与 216px 二级浮层 .cat-flyout（右侧空间不足自动 is-below），浮层含「不细分（直接使用一级分类）」，点一级即默认选中该一级；支出/收入切换自动重绘；点击只切换 .is-active 而不再重建 DOM，避免 event.target 被摘出文档导致浮层被外部点击监听误收。
+- 图表看板：侧栏新增【图表】（active 时左侧 3px 橙色渐变竖线），新页面 #page-charts 含左侧二级菜单、顶部年/季/月/周 + 前后翻页、三列收支结余大数字、ECharts 渐变填充折线（smooth 0.32 + areaStyle）与最高/最低/均值三条虚线 markLine、底部支出/收入/结余切换、汇总表（日期/收入/支出/结余 + 合计行）；逻辑独立在 static/charts-v013.js（年 12 月桶 / 季 3 月桶 / 月按天 / 周周一起 7 天），浅色轴 #475569、深色 #cbd5e1。
+- 真实 Chrome CDP 验证：temp/dom_v013.mjs + temp/dom_v013b.mjs 覆盖分类网格与浮层、成功气泡（记录已清理）、确认弹窗双路径、四周期标签与行数、翻页、深浅色、图标旋转中间态，全程无 JS 报错。
+- 自测：temp/test_v0130.py 5/5；回归 v0127 5/5、v0126 10/10、v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile / node --check 通过。

@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.7">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.0">
 </head>
 <body>
 
@@ -72,6 +72,12 @@
         </svg>
         <span>账单</span>
       </a>
+      <a class="nav-item" href="#" data-page="charts" data-bs-toggle="tooltip" data-bs-placement="right" title="图表看板">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 20V4"></path><path d="M4 20h16"></path><path d="M8 16v-5"></path><path d="M13 16V7"></path><path d="M18 16v-8"></path>
+        </svg>
+        <span>图表</span>
+      </a>
       <a class="nav-item" href="#" data-page="profile" data-bs-toggle="tooltip" data-bs-placement="right" title="我的">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="8.5" r="3.8"></circle><path d="M4.5 20.5c1.6-3.4 4.3-5 7.5-5s5.9 1.6 7.5 5"></path>
@@ -97,7 +103,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.7-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.13.0-DEV</div>
     </div>
   </aside>
 
@@ -545,6 +551,85 @@
         </div>
       </section>
 
+      <!-- ============ 图表看板（v0.13.0） ============ -->
+      <section class="page" id="page-charts">
+        <div class="chart-shell">
+          <aside class="chart-subnav" aria-label="图表子菜单">
+            <button class="chart-subnav-item active" type="button" data-chart-section="overview">收支总览</button>
+            <button class="chart-subnav-item" type="button" data-chart-section="trend">极值趋势</button>
+            <button class="chart-subnav-item" type="button" data-chart-section="summary">汇总表</button>
+          </aside>
+          <div class="chart-main">
+            <div class="chart-toolbar">
+              <div class="chart-periods" role="group" aria-label="时间维度">
+                <button class="chart-period-btn" type="button" data-chart-period="year">年</button>
+                <button class="chart-period-btn" type="button" data-chart-period="quarter">季</button>
+                <button class="chart-period-btn active" type="button" data-chart-period="month">月</button>
+                <button class="chart-period-btn" type="button" data-chart-period="week">周</button>
+              </div>
+              <div class="chart-nav">
+                <button class="chart-nav-btn" type="button" id="chart-prev" aria-label="上一个周期">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m14 6-6 6 6 6"></path></svg>
+                </button>
+                <span class="chart-period-label" id="chart-period-label">本月</span>
+                <button class="chart-nav-btn" type="button" id="chart-next" aria-label="下一个周期">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m10 6 6 6-6 6"></path></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="chart-overview panel" id="chart-overview">
+              <div class="chart-metric is-expense">
+                <span class="chart-metric-label">支出</span>
+                <strong class="chart-metric-value" id="chart-total-expense">¥0.00</strong>
+              </div>
+              <div class="chart-metric is-income">
+                <span class="chart-metric-label">收入</span>
+                <strong class="chart-metric-value" id="chart-total-income">¥0.00</strong>
+              </div>
+              <div class="chart-metric is-net">
+                <span class="chart-metric-label">结余</span>
+                <strong class="chart-metric-value" id="chart-total-net">¥0.00</strong>
+              </div>
+            </div>
+
+            <div class="chart-card panel" id="chart-trend-card">
+              <div class="chart-card-head">
+                <h3>极值趋势</h3>
+                <div class="chart-series-switch" role="group" aria-label="切换指标">
+                  <button class="chart-series-btn active" type="button" data-chart-series="expense">支出</button>
+                  <button class="chart-series-btn" type="button" data-chart-series="income">收入</button>
+                  <button class="chart-series-btn" type="button" data-chart-series="net">结余</button>
+                </div>
+              </div>
+              <div class="chart-canvas" id="chart-trend-main"></div>
+            </div>
+
+            <div class="chart-card panel" id="chart-summary-card">
+              <div class="chart-card-head">
+                <h3>汇总表</h3>
+                <span class="chart-summary-sub" id="chart-summary-sub"></span>
+              </div>
+              <div class="table-responsive">
+                <table class="table chart-summary-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">日期</th>
+                      <th scope="col" class="text-end">收入</th>
+                      <th scope="col" class="text-end">支出</th>
+                      <th scope="col" class="text-end">结余</th>
+                    </tr>
+                  </thead>
+                  <tbody id="chart-summary-body">
+                    <tr><td colspan="4" class="empty-cell">正在加载…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- ============ 我的 ============ -->
       <section class="page" id="page-profile">
         <div class="profile-grid">
@@ -847,7 +932,7 @@
 
 <!-- ================= 记账弹窗 ================= -->
 <div class="modal fade" id="record-modal" tabindex="-1" aria-labelledby="record-modal-title" aria-hidden="true" data-bs-keyboard="true">
-  <div class="modal-dialog modal-dialog-centered">
+  <div class="modal-dialog modal-dialog-centered record-dialog">
     <div class="modal-content">
       <div class="modal-header">
         <h5 class="modal-title" id="record-modal-title">记一笔</h5>
@@ -885,20 +970,28 @@
               <div class="formula-hint" id="amount-hint"></div>
             </div>
 
-            <!-- 一级分类：选项由 script.js 用分类表重建（value 是分类 id） -->
-            <div class="col-6" id="category-col">
-              <label class="form-label" for="category">一级分类<span class="req">*</span></label>
-              <select id="category" class="form-select">
+            <!-- v0.13：可视化分类网格（大图标 + 二级浮层），隐藏 select 只做状态存储 -->
+            <div class="col-12" id="category-col">
+              <label class="form-label">分类<span class="req">*</span></label>
+              <div class="cat-picker" id="cat-picker">
+                <div class="cat-grid" id="category-grid" role="listbox" aria-label="分类"></div>
+                <div class="cat-flyout d-none" id="category-flyout" role="dialog" aria-label="二级分类">
+                  <div class="cat-flyout-head" id="category-flyout-title">二级分类</div>
+                  <div class="cat-flyout-list" id="category-flyout-list"></div>
+                  <button class="cat-flyout-skip" type="button" id="category-flyout-skip">
+                    不细分（直接使用一级分类）
+                  </button>
+                </div>
+              </div>
+              <p class="cat-picked-hint" id="category-hint">请选择分类</p>
+              <select id="category" class="visually-hidden" tabindex="-1" aria-hidden="true">
                 {% for c in categories %}
                 <option value="{{ c }}">{{ c }}</option>
                 {% endfor %}
               </select>
-            </div>
-
-            <!-- 二级分类：只有当选中一级分类真的有子分类时才显示 -->
-            <div class="col-6 d-none" id="sub-category-wrap">
-              <label class="form-label" for="sub-category">二级分类</label>
-              <select id="sub-category" class="form-select"></select>
+              <div class="d-none" id="sub-category-wrap">
+                <select id="sub-category" class="visually-hidden" tabindex="-1" aria-hidden="true"></select>
+              </div>
             </div>
 
             <div class="col-6">
@@ -1702,6 +1795,27 @@
   </div>
 </div>
 
+<!-- ================= v0.13：危险操作自定义确认弹窗（替代 window.confirm） ================= -->
+<div class="modal fade action-confirm-modal" id="action-confirm-modal" tabindex="-1"
+     aria-labelledby="action-confirm-title" aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="action-confirm-title">确认操作</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="action-confirm-text" id="action-confirm-text"></p>
+        <p class="action-confirm-extra" id="action-confirm-extra" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-danger" type="button" id="action-confirm-ok">确认删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
 <!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
 <script src="/static/vendor/math.min.js"></script>
@@ -1709,10 +1823,11 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.7"></script>
-<script src="/static/access-guard.js?v=0.12.7"></script>
+<script src="/static/auth-v012.js?v=0.13.0"></script>
+<script src="/static/access-guard.js?v=0.13.0"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.7"></script>
+<script src="/static/script.js?v=0.13.0"></script>
+<script src="/static/charts-v013.js?v=0.13.0"></script>
 
 </body>
 </html>
