@@ -7764,3 +7764,258 @@ body.auth-locked {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* v0.12.3：登录滑块人机校验 */
+.auth-forgot {
+  margin: -4px 0 10px;
+  text-align: right;
+}
+
+.auth-forgot button {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-size: 13px;
+  color: #2f7cf6;
+}
+
+.auth-forgot button:hover {
+  text-decoration: underline;
+}
+
+.auth-slider {
+  position: relative;
+  height: 44px;
+  margin: 14px 0 4px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+  user-select: none;
+  touch-action: none;
+}
+
+.auth-slider-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: linear-gradient(90deg, rgba(47, 124, 246, 0.28), rgba(47, 124, 246, 0.45));
+  transition: width 0.12s linear;
+}
+
+.auth-slider-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: #64748b;
+  pointer-events: none;
+}
+
+.auth-slider-text.is-done {
+  color: #16794a;
+}
+
+.auth-slider-knob {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #2f7cf6;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  cursor: grab;
+  box-shadow: 0 2px 8px rgba(47, 124, 246, 0.35);
+  transition: transform 0.16s ease;
+  touch-action: none;
+}
+
+.auth-slider.is-dragging .auth-slider-knob {
+  transition: none;
+  cursor: grabbing;
+}
+
+.auth-slider.is-unlocked .auth-slider-knob {
+  background: #16a34a;
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.35);
+}
+
+/* v0.12.3：忘记密码 Modal（盖在登录遮罩之上） */
+.auth-forgot-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1000002;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  padding: 18px;
+}
+
+.auth-forgot-mask.is-open {
+  display: flex;
+}
+
+.auth-forgot-card {
+  width: min(420px, 100%);
+  background: #fff;
+  border-radius: 16px;
+  padding: 22px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.35);
+  color: #0f172a;
+}
+
+.auth-forgot-card h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+}
+
+.auth-forgot-sub {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.auth-forgot-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.auth-error.is-ok {
+  color: #16794a;
+}
+
+/* v0.12.3：借贷行可点击 + 明细弹窗 */
+.debt-row {
+  border-bottom: 1px solid var(--line-faint, var(--line));
+  cursor: pointer;
+}
+
+.debt-row:last-child {
+  border-bottom: 0;
+}
+
+.debt-row:hover {
+  background: var(--surface-2);
+}
+
+.debt-detail-list {
+  margin: 0;
+}
+
+.debt-detail-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line-faint, var(--line));
+}
+
+.debt-detail-list dt {
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.debt-detail-list dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.debt-voucher {
+  margin-top: 14px;
+}
+
+.debt-voucher-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.debt-voucher img {
+  max-width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line-faint, var(--line));
+}
+
+/* v0.12.3：账单列表每行极浅灰色分隔线 */
+.records-list .record-item,
+.bills-table tbody tr {
+  border-bottom: 1px solid var(--line-faint, rgba(148, 163, 184, 0.18));
+}
+
+/* v0.12.3：图标素材库 / 个性化 */
+.icon-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+  max-height: 62vh;
+  overflow-y: auto;
+}
+
+.icon-card {
+  border: 1px solid var(--line, #e6e8ee);
+  border-radius: 12px;
+  padding: 10px;
+  text-align: center;
+  background: var(--card-bg, #fff);
+}
+
+.icon-card img {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+}
+
+.icon-card-name {
+  margin: 6px 0 4px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-card-badge {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(47, 124, 246, 0.12);
+  color: #2f7cf6;
+}
+
+.settings-icon-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  min-height: 34px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.settings-icon-preview img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid var(--line-faint, var(--line));
+}
+
+.entity-icon {
+  margin-right: 6px;
+  border-radius: 6px;
+  object-fit: contain;
+  vertical-align: -4px;
+}

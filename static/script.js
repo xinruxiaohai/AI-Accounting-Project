@@ -692,6 +692,9 @@ function applyTypeUi() {
   $("fee-wrap").classList.toggle("d-none", !transfer);
   $("contact-col").classList.toggle("d-none", !debt);
   $("debt-direction-wrap").classList.toggle("d-none", !debt);
+  $("debt-due-wrap").classList.toggle("d-none", !debt);
+  $("debt-interest-wrap").classList.toggle("d-none", !debt);
+  $("debt-voucher-wrap").classList.toggle("d-none", !debt);
   // debts 表没有备注字段，借贷模式不显示备注，免得填了却没处存
   $("note-col").classList.toggle("d-none", debt);
 
@@ -1202,7 +1205,8 @@ function renderAccountGroups() {
             '<span class="account-dot" style="background:' +
             accountTone(account.name) +
             '">' +
-            escapeHtml(String(account.name || "?").slice(0, 1)) +
+            (iconImgHtml("account", account.name) ||
+              escapeHtml(String(account.name || "?").slice(0, 1))) +
             "</span>" +
             '<span class="account-row-main">' +
             '<span class="account-row-name">' +
@@ -3806,6 +3810,15 @@ function collectRecordValues() {
     const contactId = Number($("contact-select").value);
     values.contact_id = Number.isFinite(contactId) && contactId > 0 ? contactId : null;
     values.debt_type = document.querySelector('input[name="debt-direction"]:checked').value;
+    values.due_date = String($("debt-due").value || "").trim();
+    const interestText = String($("debt-interest").value || "").trim();
+    const interest = Number(interestText === "" ? 0 : interestText);
+    if (!Number.isFinite(interest) || interest < 0) {
+      issues.push({ field: $("debt-interest"), message: "利息必须是不小于 0 的数字" });
+    }
+    values.interest = Number.isFinite(interest) ? cents(interest) : 0;
+    const voucherInput = $("debt-voucher");
+    values.voucher_file = voucherInput && voucherInput.files.length ? voucherInput.files[0] : null;
     if (!values.contact_id) {
       issues.push({
         field: $("contact-select"),
@@ -3962,12 +3975,20 @@ async function loadContacts() {
 function debtRowHtml(debt) {
   const lend = debt.type === "lend";
   const paid = debt.status === "paid";
+  const extras = [];
+  if (debt.due_date) {
+    extras.push("还款日 " + escapeHtml(debt.due_date));
+  }
+  if (Number(debt.interest) > 0) {
+    extras.push("利息 " + money(debt.interest));
+  }
   return (
-    '<div class="debt-row' + (paid ? " is-paid" : "") + '">' +
+    '<div class="debt-row' + (paid ? " is-paid" : "") + '" data-debt-open="' + debt.id + '">' +
     '<div class="debt-main">' +
     '<span class="debt-dir ' + (lend ? "is-lend" : "is-borrow") + '">' + (lend ? "借出" : "借入") + "</span>" +
     '<span class="debt-amount">' + (lend ? "-" : "+") + money(debt.amount) + "</span>" +
-    '<span class="debt-meta">' + escapeHtml(debt.date || "") + " · " + escapeHtml(debt.account || "") + "</span>" +
+    '<span class="debt-meta">' + escapeHtml(debt.date || "") + " · " + escapeHtml(debt.account || "") +
+    (extras.length ? " · " + extras.join(" · ") : "") + "</span>" +
     '<span class="debt-status">' + (paid ? "已结清" : "未结清") + "</span>" +
     "</div>" +
     '<div class="debt-actions">' +
@@ -4013,6 +4034,7 @@ async function renderContactDetail() {
   try {
     const data = await api("/api/debts?contact_id=" + encodeURIComponent(contact.id));
     debts = data.debts || [];
+    state.debtCache = debts;
   } catch (error) {
     toast(error.message, "error");
   }
@@ -4124,6 +4146,107 @@ async function deleteContact(contactId) {
   }
 }
 
+/* ---------- v0.12.3：借贷明细弹窗 ---------- */
+
+let debtModalInstance = null;
+let debtModalId = null;
+
+function debtById(debtId) {
+  const id = Number(debtId);
+  const list = state.debtCache || [];
+  for (let i = 0; i < list.length; i += 1) {
+    if (Number(list[i].id) === id) {
+      return list[i];
+    }
+  }
+  return null;
+}
+
+function openDebtModal(debtId) {
+  const debt = debtById(debtId);
+  const modalElement = $("debt-modal");
+  if (!debt || !modalElement) {
+    return;
+  }
+  debtModalId = Number(debt.id);
+  const lend = debt.type === "lend";
+  const paid = debt.status === "paid";
+  $("debt-modal-title").textContent = (lend ? "借出" : "借入") + "明细 · " + (debt.contact_name || "联系人");
+  const rows = [
+    ["金额", (lend ? "-" : "+") + money(debt.amount)],
+    ["联系人", debt.contact_name || "—"],
+    ["资金账户", debt.account || "—"],
+    ["借出日期", debt.date || "—"],
+    ["预计还款", debt.due_date || "未填写"],
+    ["利息", Number(debt.interest) > 0 ? money(debt.interest) : "无"],
+    ["状态", paid ? "已结清" : "未结清"],
+  ];
+  let html = '<dl class="debt-detail-list">';
+  rows.forEach(function (pair) {
+    html += "<div><dt>" + escapeHtml(pair[0]) + "</dt><dd>" + escapeHtml(String(pair[1])) + "</dd></div>";
+  });
+  html += "</dl>";
+  if (debt.image_url) {
+    html +=
+      '<div class="debt-voucher"><span class="debt-voucher-label">凭证图片</span>' +
+      '<a href="' + escapeHtml(debt.image_url) + '" target="_blank" rel="noopener">' +
+      '<img src="' + escapeHtml(debt.image_url) + '" alt="借贷凭证"></a></div>';
+  } else {
+    html += '<p class="formula-hint">这笔借贷没有上传凭证。</p>';
+  }
+  $("debt-modal-body").innerHTML = html;
+  $("debt-settle-btn").classList.toggle("d-none", paid);
+  $("debt-settle-btn").textContent = Number(debt.interest) > 0 ? "提前结清（生成利息账单）" : "提前结清";
+  if (window.bootstrap && bootstrap.Modal) {
+    if (!debtModalInstance) {
+      debtModalInstance = new bootstrap.Modal(modalElement);
+    }
+    debtModalInstance.show();
+  }
+}
+
+async function settleDebt() {
+  if (!debtModalId) {
+    return;
+  }
+  const button = $("debt-settle-btn");
+  setButtonBusy(button, true, "结清中…");
+  try {
+    const data = await api("/api/debts/" + debtModalId + "/settle", jsonOptions("POST", {}));
+    const message = data.message || "已结清";
+    toast(message, "success");
+    if (debtModalInstance) {
+      debtModalInstance.hide();
+    }
+    await loadContacts();
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function deleteDebtFromModal() {
+  if (!debtModalId) {
+    return;
+  }
+  if (!askConfirm("debt-modal-" + debtModalId, "删除这条借贷记录？余额会一起退回")) {
+    return;
+  }
+  const id = debtModalId;
+  try {
+    await api("/api/debts/" + id, { method: "DELETE" });
+    toast("借贷记录已删除，余额已回滚", "success");
+    if (debtModalInstance) {
+      debtModalInstance.hide();
+    }
+    await refresh();
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
 async function toggleDebtStatus(debtId, status) {
   try {
     await api("/api/debts/" + debtId, jsonOptions("PUT", { status: status }));
@@ -4164,7 +4287,18 @@ async function saveDebt(values) {
   if (values.date) {
     payload.date = values.date;
   }
+  if (values.due_date) {
+    payload.due_date = values.due_date;
+  }
+  if (values.interest) {
+    payload.interest = values.interest;
+  }
   try {
+    if (values.voucher_file) {
+      const compressed = await compressImageFile(values.voucher_file);
+      payload.image = compressed.dataUrl;
+      payload.mime = compressed.mime;
+    }
     await api("/api/debts", jsonOptions("POST", payload));
     toast(values.debt_type === "lend" ? "已借出，资金账户余额已扣减" : "已借入，资金账户余额已增加", "success");
     closeRecordModal();
@@ -5799,6 +5933,188 @@ async function refresh() {
 
 /* ==================== 事件绑定 ==================== */
 
+function bindDebtModalButtons() {
+  const settle = $("debt-settle-btn");
+  const remove = $("debt-delete-btn");
+  if (settle) {
+    settle.addEventListener("click", settleDebt);
+  }
+  if (remove) {
+    remove.addEventListener("click", deleteDebtFromModal);
+  }
+}
+
+/* ---------- v0.12.3：用户图标个性化 ---------- */
+
+let iconLib = [];
+let userIcons = { category: {}, account: {} };
+
+function iconFor(kind, name) {
+  const bucket = userIcons[kind] || {};
+  return bucket[name] || null;
+}
+
+function iconImgHtml(kind, name, size) {
+  const icon = iconFor(kind, name);
+  if (!icon) {
+    return "";
+  }
+  const px = Math.max(14, Number(size) || 18);
+  return '<img class="entity-icon" src="' + escapeHtml(icon.path) + '" alt="" style="width:' + px +
+    "px;height:" + px + 'px">';
+}
+
+async function loadIconLibrary() {
+  try {
+    const data = await api("/api/icons");
+    iconLib = data.items || [];
+  } catch (error) {
+    iconLib = [];
+  }
+  try {
+    const icons = await api("/api/user-icons");
+    userIcons = icons.icons || { category: {}, account: {} };
+  } catch (error) {
+    userIcons = { category: {}, account: {} };
+  }
+  renderIconSettings();
+}
+
+function iconTargetNames() {
+  const kind = $("icon-kind").value;
+  if (kind === "account") {
+    return (state.accounts || []).map(function (item) {
+      return item.name;
+    });
+  }
+  return (state.categories || []).map(function (item) {
+    return item.name;
+  });
+}
+
+function renderIconSettings() {
+  const target = $("icon-target");
+  const choice = $("icon-choice");
+  if (!target || !choice) {
+    return;
+  }
+  const names = iconTargetNames();
+  const keepTarget = target.value;
+  target.innerHTML = names.map(function (name) {
+    return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + "</option>";
+  }).join("");
+  if (keepTarget && names.indexOf(keepTarget) >= 0) {
+    target.value = keepTarget;
+  }
+  choice.innerHTML = '<option value="">默认图标</option>' + iconLib.map(function (icon) {
+    return '<option value="' + icon.id + '">' + escapeHtml(icon.name) + (icon.is_system ? "（系统）" : "") + "</option>";
+  }).join("");
+  renderIconPreview();
+}
+
+function renderIconPreview() {
+  const box = $("icon-preview");
+  if (!box) {
+    return;
+  }
+  const kind = $("icon-kind").value;
+  const name = $("icon-target").value;
+  const icon = iconFor(kind, name);
+  box.innerHTML = icon
+    ? '<img src="' + escapeHtml(icon.path) + '" alt=""><span>' + escapeHtml(name) + " 正在使用自定义图标</span>"
+    : '<span class="settings-hint">' + escapeHtml(name || "未选择") + " 正在使用系统默认图标</span>";
+}
+
+function iconError(message) {
+  const box = $("icon-error");
+  if (box) {
+    box.textContent = message || "";
+    box.hidden = !message;
+  }
+}
+
+async function saveUserIcon() {
+  const kind = $("icon-kind").value;
+  const name = $("icon-target").value;
+  const iconId = $("icon-choice").value;
+  if (!name || !iconId) {
+    iconError("先选要改的名称和图标");
+    return;
+  }
+  try {
+    await api("/api/user-icons", jsonOptions("PUT", { kind: kind, name: name, icon_id: Number(iconId) }));
+    await loadIconLibrary();
+    await refresh();
+    toast("图标已更新", "success");
+  } catch (error) {
+    iconError(error.message);
+  }
+}
+
+async function resetUserIcon() {
+  const kind = $("icon-kind").value;
+  const name = $("icon-target").value;
+  if (!name) {
+    return;
+  }
+  try {
+    await api("/api/user-icons?kind=" + encodeURIComponent(kind) + "&name=" + encodeURIComponent(name), {
+      method: "DELETE",
+    });
+    await loadIconLibrary();
+    await refresh();
+    toast("已恢复默认图标", "success");
+  } catch (error) {
+    iconError(error.message);
+  }
+}
+
+function uploadUserIcon(file) {
+  if (!file) {
+    return;
+  }
+  if (file.size > 1024 * 1024) {
+    iconError("图标超过 1MB，请换一张小图");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function () {
+    api("/api/icons", {
+      method: "POST",
+      body: JSON.stringify({
+        name: file.name.replace(/\.[^.]+$/, "").slice(0, 24) || "自定义图标",
+        image: String(reader.result || ""),
+        mime: file.type || "image/png",
+      }),
+    })
+      .then(function () {
+        return loadIconLibrary();
+      })
+      .then(function () {
+        toast("图标已上传，可以在下拉框里选择", "success");
+      })
+      .catch(function (error) {
+        iconError(error.message);
+      });
+  };
+  reader.readAsDataURL(file);
+}
+
+function bindIconSettings() {
+  if (!$("icon-kind")) {
+    return;
+  }
+  $("icon-kind").addEventListener("change", renderIconSettings);
+  $("icon-target").addEventListener("change", renderIconPreview);
+  $("icon-choice").addEventListener("change", renderIconPreview);
+  $("icon-save").addEventListener("click", saveUserIcon);
+  $("icon-reset").addEventListener("click", resetUserIcon);
+  $("icon-upload").addEventListener("change", function (event) {
+    uploadUserIcon(event.target.files && event.target.files[0]);
+  });
+  loadIconLibrary();
+}
+
 function bindEvents() {
   bindV010Events();
   // 顶部按钮
@@ -6391,6 +6707,11 @@ function bindEvents() {
   if (contactDetailBox) {
     contactDetailBox.addEventListener("click", function (event) {
       const action = event.target.closest("[data-contact-action]");
+      const debtOpen = event.target.closest("[data-debt-open]");
+      if (debtOpen && !event.target.closest("[data-debt-action]")) {
+        openDebtModal(debtOpen.getAttribute("data-debt-open"));
+        return;
+      }
       const debtButton = event.target.closest("[data-debt-action]");
       if (action) {
         const kind = action.getAttribute("data-contact-action");
@@ -7430,6 +7751,8 @@ async function init() {
   applySidebar();
 
   bindEvents();
+  bindDebtModalButtons();
+  bindIconSettings();
   initV0116Ui();
   initTooltips();
   initDateFields();
@@ -7786,9 +8109,11 @@ function renderBillsTable() {
       billsTypeLabel(record.type) +
       "</span></td>" +
       "<td>" +
+      iconImgHtml("category", record.category) +
       escapeHtml(categoryLabel(record.category)) +
       "</td>" +
       "<td>" +
+      iconImgHtml("account", record.account) +
       escapeHtml(record.account || "") +
       "</td>" +
       '<td class="bills-amount">' +

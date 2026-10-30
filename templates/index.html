@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.3">
 </head>
 <body>
 
@@ -95,7 +95,7 @@
         </button>
       </div>
       <div class="sidebar-user" id="sidebar-user-name" hidden></div>
-      <div class="sidebar-version" id="sidebar-version">v0.12.2-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.3-DEV</div>
     </div>
   </aside>
 
@@ -947,6 +947,25 @@
               <div class="formula-hint" id="debt-hint">借出：钱从这个账户出去；借入：钱进这个账户。</div>
             </div>
 
+            <!-- 借贷专用（v0.12.3）：预计还款时间 / 利息金额 / 凭证图片 -->
+            <div class="col-6 d-none" id="debt-due-wrap">
+              <label class="form-label" for="debt-due">预计还款时间</label>
+              <input id="debt-due" class="form-control" type="date">
+            </div>
+            <div class="col-6 d-none" id="debt-interest-wrap">
+              <label class="form-label" for="debt-interest">利息金额（可选）</label>
+              <div class="input-group">
+                <span class="input-group-text">¥</span>
+                <input id="debt-interest" class="form-control" type="number" step="0.01" min="0" value="0">
+              </div>
+              <div class="formula-hint">结清时会自动记一笔「利息收入 / 利息支出」。</div>
+            </div>
+            <div class="col-12 d-none" id="debt-voucher-wrap">
+              <label class="form-label" for="debt-voucher">凭证图片（可选）</label>
+              <input id="debt-voucher" class="form-control" type="file" accept="image/*">
+              <div class="formula-hint">借条、转账截图都可以，保存前自动压缩到 1000px 以内。</div>
+            </div>
+
             <!-- 转账专用：手续费（平时隐藏，默认 0） -->
             <div class="col-6 d-none" id="fee-wrap">
               <label class="form-label" for="fee">手续费</label>
@@ -1148,7 +1167,27 @@
             <span class="settings-label">首页卡片显示</span>
             <div class="card-visibility" id="card-visibility"></div>
           </div>
-          <p class="settings-hint">只影响当前设备，不会写入账本数据。</p>
+          <div class="settings-group">
+            <span class="settings-label">分类 / 账户图标</span>
+            <div class="settings-inline">
+              <select class="form-select" id="icon-kind">
+                <option value="category">分类</option>
+                <option value="account">账户</option>
+              </select>
+              <select class="form-select" id="icon-target"></select>
+              <select class="form-select" id="icon-choice"></select>
+            </div>
+            <div class="settings-inline">
+              <button class="btn btn-primary btn-sm" type="button" id="icon-save">应用图标</button>
+              <button class="btn btn-outline-secondary btn-sm" type="button" id="icon-reset">恢复默认</button>
+              <label class="btn btn-outline-secondary btn-sm mb-0">上传图标
+                <input id="icon-upload" type="file" accept="image/*" hidden>
+              </label>
+            </div>
+            <div class="settings-icon-preview" id="icon-preview"></div>
+            <p class="settings-error" id="icon-error" hidden></p>
+          </div>
+          <p class="settings-hint">图标只影响你自己的显示，不会改变分类/账户本身。只影响当前设备，不会写入账本数据。</p>
           <p class="settings-error" id="settings-error" hidden></p>
         </section>
 
@@ -1504,6 +1543,23 @@
   </div>
 </div>
 
+<!-- v0.12.3：借贷明细弹窗（提前结清 / 删除 / 凭证原图） -->
+<div class="modal fade" id="debt-modal" tabindex="-1" aria-labelledby="debt-modal-title" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="debt-modal-title">借贷明细</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body" id="debt-modal-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-danger" id="debt-delete-btn">删除</button>
+        <button type="button" class="btn btn-primary" id="debt-settle-btn">提前结清</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script src="/static/vendor/bootstrap.bundle.min.js"></script>
 <!-- math.js：只用来算金额里的公式，本地引用，不用 eval -->
 <script src="/static/vendor/math.min.js"></script>
@@ -1511,10 +1567,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.2"></script>
-<script src="/static/access-guard.js?v=0.12.2"></script>
+<script src="/static/auth-v012.js?v=0.12.3"></script>
+<script src="/static/access-guard.js?v=0.12.3"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.2"></script>
+<script src="/static/script.js?v=0.12.3"></script>
 
 </body>
 </html>

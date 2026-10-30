@@ -692,7 +692,42 @@ def _ensure_user_schema(conn):
             "CREATE INDEX IF NOT EXISTS idx_%s_user ON %s (user_id)" % (table, table)
         )
 
-    # 3) 1 号超级管理员：只建一次，之后改密码走接口
+    # 3) 借贷字段扩展（v0.12.3）：due_date / interest / image_path
+    if "debts" in existing_tables:
+        debt_columns = [row["name"] for row in conn.execute("PRAGMA table_info(debts)")]
+        if "due_date" not in debt_columns:
+            conn.execute("ALTER TABLE debts ADD COLUMN due_date TEXT NOT NULL DEFAULT ''")
+        if "interest" not in debt_columns:
+            conn.execute("ALTER TABLE debts ADD COLUMN interest REAL NOT NULL DEFAULT 0")
+        if "image_path" not in debt_columns:
+            conn.execute("ALTER TABLE debts ADD COLUMN image_path TEXT NOT NULL DEFAULT ''")
+
+    # 图标素材库（v0.12.3）：系统图标 user_id=0，用户上传挂自己的 id
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS icons (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT    NOT NULL DEFAULT '',
+            path       TEXT    NOT NULL,
+            is_system  INTEGER NOT NULL DEFAULT 0,
+            user_id    INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_icon_settings (
+            user_id INTEGER NOT NULL,
+            kind    TEXT    NOT NULL,
+            name    TEXT    NOT NULL,
+            icon_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, kind, name)
+        )
+        """
+    )
+
+    # 4) 1 号超级管理员：只建一次，之后改密码走接口
     admin = conn.execute("SELECT id FROM users WHERE id = ?", (ADMIN_USER_ID,)).fetchone()
     if admin is None:
         conn.execute(
@@ -950,12 +985,40 @@ def init_db():
                     amount     REAL    NOT NULL,
                     type       TEXT    NOT NULL DEFAULT 'lend',
                     date       TEXT    NOT NULL,
-                    status     TEXT    NOT NULL DEFAULT 'unpaid'
+                    status     TEXT    NOT NULL DEFAULT 'unpaid',
+                    due_date   TEXT    NOT NULL DEFAULT '',
+                    interest   REAL    NOT NULL DEFAULT 0,
+                    image_path TEXT    NOT NULL DEFAULT ''
                 )
                 """
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_debts_contact ON debts (contact_id)"
+            )
+            # 图标素材库（v0.12.3）：is_system=1 是内置图标（user_id=0），user_id>0 是用户上传
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS icons (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name       TEXT    NOT NULL DEFAULT '',
+                    path       TEXT    NOT NULL,
+                    is_system  INTEGER NOT NULL DEFAULT 0,
+                    user_id    INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            # 用户个性化：某个分类/账户用哪张图标
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_icon_settings (
+                    user_id INTEGER NOT NULL,
+                    kind    TEXT    NOT NULL,
+                    name    TEXT    NOT NULL,
+                    icon_id INTEGER NOT NULL,
+                    PRIMARY KEY (user_id, kind, name)
+                )
+                """
             )
             # 软删除过滤是每条账单查询的必经条件，单独建索引
             conn.execute(
@@ -2089,8 +2152,11 @@ def list_contacts():
             "SELECT c.id, c.name, c.identity, c.phone, c.wechat, "
             "       COUNT(d.id) AS debt_count "
             "  FROM contacts c LEFT JOIN debts d ON d.contact_id = c.id "
+            "       AND d.user_id = c.user_id "
+            " WHERE c.user_id = ? "
             " GROUP BY c.id "
-            " ORDER BY c.id"
+            " ORDER BY c.id",
+            (_uid(),),
         ).fetchall()
         contacts = []
         for row in rows:
@@ -2106,8 +2172,8 @@ def get_contact(contact_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, identity, phone, wechat FROM contacts WHERE id = ?",
-            (contact_id,),
+            "SELECT id, name, identity, phone, wechat FROM contacts WHERE id = ? AND user_id = ?",
+            (contact_id, _uid()),
         ).fetchone()
         return _row_to_contact(row) if row is not None else None
     finally:
@@ -2125,8 +2191,9 @@ def create_contact(name, identity="", phone="", wechat=""):
     try:
         with conn:
             cur = conn.execute(
-                "INSERT INTO contacts (name, identity, phone, wechat) VALUES (?, ?, ?, ?)",
+                "INSERT INTO contacts (user_id, name, identity, phone, wechat) VALUES (?, ?, ?, ?, ?)",
                 (
+                    _uid(),
                     name,
                     (identity or "").strip(),
                     (phone or "").strip(),
@@ -2209,6 +2276,7 @@ def delete_contact(contact_id):
 
 
 def _row_to_debt(row):
+    keys = row.keys()
     return {
         "id": row["id"],
         "contact_id": row["contact_id"],
@@ -2218,12 +2286,16 @@ def _row_to_debt(row):
         "type": row["type"],
         "date": normalize_date(row["date"]),
         "status": row["status"],
+        "due_date": normalize_date(row["due_date"]) if row["due_date"] else "",
+        "interest": round(row["interest"] or 0, 2),
+        "image_path": row["image_path"] if "image_path" in keys else "",
+        "image_url": row["image_path"] if "image_path" in keys else "",
     }
 
 
 DEBT_SELECT = (
     "SELECT d.id, d.contact_id, c.name AS contact_name, d.account, d.amount, "
-    "       d.type, d.date, d.status "
+    "       d.type, d.date, d.status, d.due_date, d.interest, d.image_path "
     "  FROM debts d JOIN contacts c ON c.id = d.contact_id"
 )
 
@@ -2241,6 +2313,8 @@ def list_debts(contact_id=None, status=None):
         if status:
             conditions.append("d.status = ?")
             params.append(status)
+        conditions.append("d.user_id = ?")
+        params.append(_uid())
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY d.date DESC, d.id DESC"
@@ -2252,7 +2326,9 @@ def list_debts(contact_id=None, status=None):
 def get_debt(debt_id):
     conn = get_conn()
     try:
-        row = conn.execute(DEBT_SELECT + " WHERE d.id = ?", (debt_id,)).fetchone()
+        row = conn.execute(
+        DEBT_SELECT + " WHERE d.id = ? AND d.user_id = ?", (debt_id, _uid())
+    ).fetchone()
         return _row_to_debt(row) if row is not None else None
     finally:
         conn.close()
@@ -2274,6 +2350,9 @@ def create_debt(
     account=DEFAULT_ACCOUNT,
     date=None,
     status="unpaid",
+    due_date="",
+    interest=0,
+    image_path="",
 ):
     """新增一条借贷，返回 (借贷字典, 错误信息)。"""
     if isinstance(contact_id, bool) or not isinstance(contact_id, int):
@@ -2306,9 +2385,21 @@ def create_debt(
                 return None, problem
             debt_id = 0
             cur = conn.execute(
-                "INSERT INTO debts (contact_id, account, amount, type, date, status) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (contact_id, account, round(float(amount), 2), debt_type, normalize_date(date), status),
+                "INSERT INTO debts (user_id, contact_id, account, amount, type, date, "
+                "                   status, due_date, interest, image_path) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    _uid(),
+                    contact_id,
+                    account,
+                    round(float(amount), 2),
+                    debt_type,
+                    normalize_date(date),
+                    status,
+                    normalize_date(due_date) if due_date else "",
+                    round(float(interest or 0), 2),
+                    image_path or "",
+                ),
             )
             debt_id = cur.lastrowid
             # 借出=钱从账户出去，借入=钱进账户，和账单共用同一套余额规则
@@ -2326,6 +2417,9 @@ def update_debt(
     account=None,
     date=None,
     status=None,
+    due_date=None,
+    interest=None,
+    image_path=None,
 ):
     """改借贷，只改传进来的字段，返回 (借贷字典, 错误信息)。"""
     fields = {}
@@ -2353,13 +2447,27 @@ def update_debt(
         if status not in DEBT_STATUSES:
             return None, "status 只能是 unpaid / paid"
         fields["status"] = status
+    if due_date is not None:
+        fields["due_date"] = normalize_date(due_date) if str(due_date).strip() else ""
+    if interest is not None:
+        try:
+            value = round(float(interest), 2)
+        except (TypeError, ValueError):
+            return None, "interest 必须是数字"
+        if value < 0:
+            return None, "利息不能是负数"
+        fields["interest"] = value
+    if image_path is not None:
+        fields["image_path"] = str(image_path)
     if not fields:
         return None, "没有要修改的字段"
 
     conn = get_conn()
     try:
         with conn:
-            exists = conn.execute("SELECT 1 FROM debts WHERE id = ?", (debt_id,)).fetchone()
+            exists = conn.execute(
+                "SELECT 1 FROM debts WHERE id = ? AND user_id = ?", (debt_id, _uid())
+            ).fetchone()
             if exists is None:
                 return None, "借贷记录不存在"
             if "contact_id" in fields:
@@ -2369,7 +2477,8 @@ def update_debt(
                 if contact is None:
                     return None, "联系人不存在"
             old = conn.execute(
-                "SELECT account, amount, type FROM debts WHERE id = ?", (debt_id,)
+                "SELECT account, amount, type FROM debts WHERE id = ? AND user_id = ?",
+                (debt_id, _uid()),
             ).fetchone()
             new_account = fields.get("account", old["account"])
             if "account" in fields:
@@ -2390,8 +2499,8 @@ def update_debt(
             )
             assignments = ", ".join("%s = ?" % key for key in fields)
             conn.execute(
-                "UPDATE debts SET " + assignments + " WHERE id = ?",
-                list(fields.values()) + [debt_id],
+                "UPDATE debts SET " + assignments + " WHERE id = ? AND user_id = ?",
+                list(fields.values()) + [debt_id, _uid()],
             )
     finally:
         conn.close()
@@ -2404,11 +2513,12 @@ def delete_debt(debt_id):
     try:
         with conn:
             exists = conn.execute(
-                "SELECT account, amount, type FROM debts WHERE id = ?", (debt_id,)
+                "SELECT account, amount, type FROM debts WHERE id = ? AND user_id = ?",
+                (debt_id, _uid()),
             ).fetchone()
             if exists is None:
                 return False, "借贷记录不存在"
-            conn.execute("DELETE FROM debts WHERE id = ?", (debt_id,))
+            conn.execute("DELETE FROM debts WHERE id = ? AND user_id = ?", (debt_id, _uid()))
             # 删掉借贷就把当时动过的余额还回去
             _apply_effects(
                 conn,
@@ -2417,6 +2527,173 @@ def delete_debt(debt_id):
                 ),
             )
             return True, None
+    finally:
+        conn.close()
+
+
+
+def settle_debt(debt_id, settle_date=None):
+    """结清一条借贷：标记 paid；有利息时自动生成一笔利息收支账单。
+
+    借出（lend）收到利息 = 收入；借入（borrow）付出利息 = 支出。
+    返回 (借贷字典, 利息账单或 None, 错误信息)。
+    """
+    debt = get_debt(debt_id)
+    if debt is None:
+        return None, None, "借贷记录不存在"
+    if debt["status"] == "paid":
+        return debt, None, None
+    settled, settle_error = update_debt(debt_id, status="paid")
+    if settle_error is not None or settled is None:
+        return None, None, settle_error or "结清失败"
+    interest = round(float(debt.get("interest") or 0), 2)
+    record = None
+    if interest > 0:
+        category = "利息收入" if debt["type"] == "lend" else "利息支出"
+        note = "借贷利息：%s" % (debt.get("contact_name") or "")
+        record_id, error = add_record(
+            interest,
+            category,
+            note,
+            normalize_date(settle_date) if settle_date else datetime.datetime.now().strftime("%Y-%m-%d"),
+            debt.get("account") or DEFAULT_ACCOUNT,
+            "income" if debt["type"] == "lend" else "expense",
+        )
+        if error is None:
+            record = get_record(record_id)
+    return get_debt(debt_id), record, None
+
+
+# ---------------- 图标素材库（v0.12.3） ----------------
+
+
+def _row_to_icon(row):
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "path": row["path"],
+        "is_system": bool(row["is_system"]),
+        "user_id": row["user_id"],
+        "created_at": row["created_at"],
+    }
+
+
+def list_icons(include_others=False):
+    """图标列表：系统内置 + 当前用户上传；include_others 是管理端看所有人上传。"""
+    conn = get_conn()
+    try:
+        if include_others:
+            rows = conn.execute(
+                "SELECT id, name, path, is_system, user_id, created_at FROM icons "
+                "ORDER BY is_system DESC, id ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, path, is_system, user_id, created_at FROM icons "
+                "WHERE is_system = 1 OR user_id = ? ORDER BY is_system DESC, id ASC",
+                (_uid(),),
+            ).fetchall()
+        return [_row_to_icon(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def add_icon(name, path, is_system=False, owner_id=None):
+    """新增图标，返回图标字典；普通用户只能给自己加。"""
+    name = (name or "").strip()[:40]
+    path = (path or "").strip()
+    if not path:
+        raise RecordError("图标地址不能为空")
+    user_id = 0 if is_system else (owner_id if owner_id is not None else _uid())
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO icons (name, path, is_system, user_id) VALUES (?, ?, ?, ?)",
+                (name, path, 1 if is_system else 0, user_id),
+            )
+        row = conn.execute(
+            "SELECT id, name, path, is_system, user_id, created_at FROM icons WHERE id = ?",
+            (cur.lastrowid,),
+        ).fetchone()
+        return _row_to_icon(row)
+    finally:
+        conn.close()
+
+
+def delete_icon(icon_id):
+    """删除自己的图标；系统内置与别人的图标删不掉。返回 (是否删除, 错误信息)。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT is_system, user_id FROM icons WHERE id = ?", (icon_id,)
+            ).fetchone()
+            if row is None:
+                return False, "图标不存在"
+            if row["is_system"]:
+                return False, "系统内置图标不能删除"
+            if row["user_id"] != _uid():
+                return False, "只能删除自己上传的图标"
+            conn.execute("DELETE FROM icons WHERE id = ?", (icon_id,))
+            conn.execute("DELETE FROM user_icon_settings WHERE icon_id = ?", (icon_id,))
+            return True, None
+    finally:
+        conn.close()
+
+
+def set_user_icon(kind, name, icon_id):
+    """把某个分类/账户换成指定图标；返回 True/False。"""
+    if kind not in ("category", "account"):
+        raise RecordError("kind 只能是 category / account")
+    icon = None
+    conn = get_conn()
+    try:
+        with conn:
+            icon = conn.execute("SELECT id FROM icons WHERE id = ?", (icon_id,)).fetchone()
+            if icon is None:
+                return False
+            conn.execute(
+                "INSERT INTO user_icon_settings (user_id, kind, name, icon_id) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, kind, name) DO UPDATE SET icon_id = excluded.icon_id",
+                (_uid(), kind, name, icon_id),
+            )
+            return True
+    finally:
+        conn.close()
+
+
+def clear_user_icon(kind, name):
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM user_icon_settings WHERE user_id = ? AND kind = ? AND name = ?",
+                (_uid(), kind, name),
+            )
+            return True
+    finally:
+        conn.close()
+
+
+def list_user_icons():
+    """当前用户的图标覆盖设置：{category: {名字: 图标}, account: {...}}。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT s.kind, s.name, s.icon_id, i.path, i.name AS icon_name "
+            "  FROM user_icon_settings s JOIN icons i ON i.id = s.icon_id "
+            " WHERE s.user_id = ?",
+            (_uid(),),
+        ).fetchall()
+        result = {"category": {}, "account": {}}
+        for row in rows:
+            result.setdefault(row["kind"], {})[row["name"]] = {
+                "icon_id": row["icon_id"],
+                "path": row["path"],
+                "icon_name": row["icon_name"],
+            }
+        return result
     finally:
         conn.close()
 

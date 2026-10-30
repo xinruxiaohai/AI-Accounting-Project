@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · AI 记账管家</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.12.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.3">
   <style>
     .admin-page {
       max-width: 1180px;
@@ -615,6 +615,9 @@
       <!-- v0.11.5：左框 ai_memory、右框纠错审计日志（改前/改后对比） -->
       <button type="button" class="admin-tab" role="tab" data-tab="center"
               aria-selected="false">AI 纠错与反馈中心</button>
+      <!-- v0.12.3：图标素材库（系统内置 + 用户上传） -->
+      <button type="button" class="admin-tab" role="tab" data-tab="icons"
+              aria-selected="false">图标素材库</button>
     </div>
 
     <section id="pane-notices">
@@ -795,6 +798,43 @@
         </section>
       </div>
     </section>
+
+    <!-- 图标素材库（v0.12.3） -->
+    <section id="pane-icons" hidden>
+      <div class="admin-grid">
+        <section>
+          <div class="admin-card">
+            <h2 class="admin-card-title mb-3">上传图标</h2>
+            <div class="mb-3">
+              <label class="admin-label" for="icon-name">图标名称</label>
+              <input id="icon-name" class="form-control" type="text" maxlength="24" placeholder="例如：微信 / 餐饮">
+            </div>
+            <div class="mb-3">
+              <label class="admin-label" for="icon-file">图片文件（png / jpg / webp / gif / svg，≤1MB）</label>
+              <input id="icon-file" class="form-control" type="file" accept="image/*">
+            </div>
+            <label class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="icon-system">
+              <span class="form-check-label">设为系统内置图标（所有用户可选）</span>
+            </label>
+            <div class="d-flex align-items-center gap-2">
+              <button class="btn btn-primary" type="button" id="icon-upload-btn">上传图标</button>
+              <span class="admin-count" id="icon-upload-hint"></span>
+            </div>
+          </div>
+        </section>
+        <section>
+          <div class="admin-card">
+            <div class="d-flex align-items-center justify-content-between mb-2">
+              <h2 class="admin-card-title mb-0">素材库 <span class="badge text-bg-secondary" id="icon-total">0</span></h2>
+              <button class="btn btn-sm btn-outline-secondary" type="button" id="icon-refresh">刷新</button>
+            </div>
+            <p class="admin-hint">系统图标所有人可用；你自己上传的图标只有你能用，点删除会从素材库移除。</p>
+            <div class="icon-gallery" id="icon-gallery"></div>
+          </div>
+        </section>
+      </div>
+    </section>
   </main>
 
   <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
@@ -876,8 +916,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.12.2"></script>
-<script src="/static/access-guard.js?v=0.12.2"></script>
+  <script src="/static/auth-v012.js?v=0.12.3"></script>
+<script src="/static/access-guard.js?v=0.12.3"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1794,10 +1834,12 @@
         $("pane-feedback").hidden = name !== "feedback";
         $("pane-memory").hidden = name !== "memory";
         $("pane-center").hidden = name !== "center";
+        $("pane-icons").hidden = name !== "icons";
         // 第一次进反馈 / 记忆 Tab 才拉数据，避免每次进 /admin 都多打一个请求
         if (name === "feedback" && !state.loaded) { loadFeedback(); }
         if (name === "memory" && !memoryState.loaded) { loadMemory(); }
         if (name === "center" && !centerState.loaded) { loadCenter(); }
+        if (name === "icons" && !iconsState.loaded) { loadIcons(); }
       }
 
       tabs.forEach(function (tab) {
@@ -2130,6 +2172,89 @@
             button.disabled = false;
             toast(error.message, true);
           });
+      });
+
+      /* ---------- 图标素材库（v0.12.3） ---------- */
+
+      var iconsState = { items: [], loaded: false, loading: false };
+
+      function renderIcons() {
+        var box = $("icon-gallery");
+        $("icon-total").textContent = String(iconsState.items.length);
+        if (!iconsState.items.length) {
+          box.innerHTML = '<div class="admin-empty">素材库还是空的，先上传一个图标试试。</div>';
+          return;
+        }
+        box.innerHTML = iconsState.items.map(function (item) {
+          return (
+            '<div class="icon-card">' +
+              '<img src="' + escapeHtml(item.path) + '" alt="' + escapeHtml(item.name) + '">' +
+              '<div class="icon-card-name">' + escapeHtml(item.name) + "</div>" +
+              (item.is_system ? '<span class="icon-card-badge">系统</span>' : "") +
+              '<button type="button" class="btn btn-sm btn-outline-danger" data-icon-delete="' + item.id + '">删除</button>' +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function loadIcons() {
+        if (iconsState.loading) { return Promise.resolve(); }
+        iconsState.loading = true;
+        return request("/api/icons?all=1")
+          .then(function (data) {
+            iconsState.items = data.items || [];
+            iconsState.loaded = true;
+            renderIcons();
+          })
+          .catch(function (error) {
+            $("icon-gallery").innerHTML = '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () { iconsState.loading = false; });
+      }
+
+      $("icon-refresh").addEventListener("click", function () {
+        iconsState.loaded = false;
+        loadIcons().then(function () { toast("素材库已刷新"); });
+      });
+
+      $("icon-upload-btn").addEventListener("click", function () {
+        var fileInput = $("icon-file");
+        var name = $("icon-name").value.trim();
+        var file = fileInput.files && fileInput.files[0];
+        if (!name) { toast("先填图标名称", true); return; }
+        if (!file) { toast("先选一张图片", true); return; }
+        if (file.size > 1024 * 1024) { toast("图片超过 1MB，请换一张小图", true); return; }
+        var reader = new FileReader();
+        reader.onload = function () {
+          request("/api/icons", {
+            method: "POST",
+            body: JSON.stringify({
+              name: name,
+              image: String(reader.result || ""),
+              mime: file.type || "image/png",
+              is_system: $("icon-system").checked
+            })
+          })
+            .then(function () {
+              toast("图标已上传");
+              fileInput.value = "";
+              $("icon-name").value = "";
+              iconsState.loaded = false;
+              return loadIcons();
+            })
+            .catch(function (error) { toast(error.message, true); });
+        };
+        reader.readAsDataURL(file);
+      });
+
+      $("icon-gallery").addEventListener("click", function (event) {
+        var button = event.target.closest("[data-icon-delete]");
+        if (!button) { return; }
+        var id = button.getAttribute("data-icon-delete");
+        button.disabled = true;
+        request("/api/icons/" + id, { method: "DELETE" })
+          .then(function () { toast("图标已删除"); iconsState.loaded = false; return loadIcons(); })
+          .catch(function (error) { button.disabled = false; toast(error.message, true); });
       });
     })();
   </script>

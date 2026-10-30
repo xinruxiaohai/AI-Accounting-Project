@@ -2877,7 +2877,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.12.2-DEV"
+APP_VERSION_FALLBACK = "v0.12.3-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
@@ -3069,6 +3069,15 @@ def create_debt():
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
 
+    image_path = ""
+    if isinstance(data.get("image"), str) and data["image"].strip():
+        raw, mime, image_error = _decode_ai_image(data["image"], data.get("mime"))
+        if image_error is not None:
+            return jsonify(error=image_error), 400
+        image_path, image_error = _save_ai_image_to_disk(raw, mime)
+        if image_error is not None:
+            return jsonify(error=image_error), 400
+
     debt, error = database.create_debt(
         data.get("contact_id"),
         data.get("amount"),
@@ -3076,6 +3085,9 @@ def create_debt():
         account=data.get("account", database.DEFAULT_ACCOUNT),
         date=data.get("date"),
         status=data.get("status", "unpaid"),
+        due_date=data.get("due_date") or "",
+        interest=data.get("interest") or 0,
+        image_path=image_path,
     )
     if error is not None:
         status = 404 if error == "联系人不存在" else 400
@@ -3097,6 +3109,9 @@ def update_debt(debt_id):
         account=data.get("account"),
         date=data.get("date"),
         status=data.get("status"),
+        due_date=data.get("due_date"),
+        interest=data.get("interest"),
+        image_path=data.get("image_path"),
     )
     if error is not None:
         status = 404 if error == "借贷记录不存在" else 400
@@ -3109,6 +3124,102 @@ def delete_debt(debt_id):
     deleted, error = database.delete_debt(debt_id)
     if error is not None:
         return jsonify(error=error), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/debts/<int:debt_id>/settle", methods=["POST"])
+def settle_debt(debt_id):
+    """结清借贷：状态置 paid；有利息时自动补一笔利息收入/支出账单。"""
+    data = request.get_json(silent=True) or {}
+    debt, record, error = database.settle_debt(debt_id, data.get("date"))
+    if error is not None:
+        status = 404 if error == "借贷记录不存在" else 400
+        return jsonify(error=error), status
+    return jsonify(debt=debt, record=record, message="已结清" + ("，利息账单已入账" if record else ""))
+
+
+# ---------------- 图标素材库（v0.12.3） ----------------
+
+
+@app.route("/api/icons", methods=["GET"])
+def list_icons():
+    """图标列表：系统内置 + 自己上传；?all=1 仅管理员可看全站上传。"""
+    include_others = request.args.get("all") in ("1", "true", "yes")
+    if include_others and (g.current_user.get("id") != database.ADMIN_USER_ID):
+        return jsonify(error="只有管理员可以查看全部图标"), 403
+    items = database.list_icons(include_others=include_others)
+    return jsonify(items=items, total=len(items))
+
+
+@app.route("/api/icons", methods=["POST"])
+def create_icon():
+    """上传图标：body {name, image: dataURL}；管理员可传系统内置图标（is_system=1）。"""
+    data = request.get_json(silent=True) or {}
+    image = data.get("image")
+    if not isinstance(image, str) or not image.strip():
+        return jsonify(error="没有收到图标文件"), 400
+    if len(image) > 2 * 1024 * 1024:
+        return jsonify(error="图标太大，请压到 1MB 以内"), 413
+    raw, mime, error = _decode_ai_image(image, data.get("mime"))
+    if error is not None:
+        return jsonify(error=error), 400
+    if mime not in ("image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"):
+        return jsonify(error="图标只支持 png / jpg / webp / gif / svg"), 400
+    path, error = _save_ai_image_to_disk(raw, mime)
+    if error is not None:
+        return jsonify(error=error), 400
+    is_system = bool(data.get("is_system")) and g.current_user.get("id") == database.ADMIN_USER_ID
+    try:
+        icon = database.add_icon(data.get("name") or "", path, is_system=is_system)
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(icon), 201
+
+
+@app.route("/api/icons/<int:icon_id>", methods=["DELETE"])
+def delete_icon(icon_id):
+    """删自己上传的图标（系统图标删不掉）。"""
+    deleted, error = database.delete_icon(icon_id)
+    if error is not None:
+        return jsonify(error=error), 400
+    return jsonify(ok=True)
+
+
+@app.route("/api/user-icons", methods=["GET"])
+def list_user_icons():
+    """当前用户的图标覆盖：{category: {名称: {...}}, account: {...}}。"""
+    return jsonify(icons=database.list_user_icons())
+
+
+@app.route("/api/user-icons", methods=["PUT"])
+def set_user_icon():
+    """把分类/账户换成指定图标：{kind, name, icon_id}。"""
+    data = request.get_json(silent=True) or {}
+    kind = data.get("kind")
+    name = (data.get("name") or "").strip()
+    try:
+        icon_id = int(data.get("icon_id"))
+    except (TypeError, ValueError):
+        return jsonify(error="icon_id 必须是整数"), 400
+    if not name:
+        return jsonify(error="name 不能为空"), 400
+    try:
+        ok = database.set_user_icon(kind, name, icon_id)
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if not ok:
+        return jsonify(error="图标不存在"), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/user-icons", methods=["DELETE"])
+def clear_user_icon():
+    """恢复系统默认图标：?kind=category&name=餐饮。"""
+    kind = (request.args.get("kind") or "").strip()
+    name = (request.args.get("name") or "").strip()
+    if kind not in ("category", "account") or not name:
+        return jsonify(error="kind 与 name 都必填"), 400
+    database.clear_user_icon(kind, name)
     return jsonify(ok=True)
 
 

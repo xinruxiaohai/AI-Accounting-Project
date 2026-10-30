@@ -131,6 +131,7 @@
           '<label class="auth-label">密码' +
             '<input id="auth-password" class="form-control" type="password" autocomplete="current-password" placeholder="至少 6 位">' +
           "</label>" +
+          '<div class="auth-forgot"><button type="button" id="auth-forgot-btn">忘记密码？</button></div>' +
           '<label class="auth-label auth-phone" hidden>手机号（可选）' +
             '<input id="auth-phone" class="form-control" type="tel" autocomplete="tel" placeholder="用于以后找回密码">' +
           "</label>" +
@@ -144,14 +145,15 @@
                 '<button type="button" class="btn btn-outline-secondary auth-code-btn" id="auth-send-code">获取验证码</button>' +
               "</span>" +
             "</label>" +
-            '<label class="auth-label">人机校验：<span class="auth-captcha-q" id="auth-captcha-q">3 + 5 = ?</span>' +
-              '<input id="auth-captcha" class="form-control" type="text" inputmode="numeric" maxlength="4" placeholder="填算式结果">' +
-            "</label>" +
+            '<div class="auth-slider" id="auth-slider">' +
+              '<span class="auth-slider-fill" id="auth-slider-fill"></span>' +
+              '<span class="auth-slider-text" id="auth-slider-text">按住滑块，拖到最右侧解锁</span>' +
+              '<span class="auth-slider-knob" id="auth-slider-knob" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">→</span>' +
+            "</div>" +
           "</div>" +
           '<p class="auth-error" id="auth-error" hidden></p>' +
           '<button class="btn btn-primary w-100 auth-submit" type="submit" id="auth-submit">登录</button>' +
         "</form>" +
-        '<p class="auth-tip">默认管理员：1937097795@qq.com / 123456</p>' +
       "</div>";
     document.body.appendChild(gateElement);
 
@@ -167,6 +169,11 @@
     var sendCodeButton = gateElement.querySelector("#auth-send-code");
     if (sendCodeButton) {
       sendCodeButton.addEventListener("click", sendEmailCode);
+    }
+    setupSlider();
+    var forgotButton = gateElement.querySelector("#auth-forgot-btn");
+    if (forgotButton) {
+      forgotButton.addEventListener("click", openForgotModal);
     }
     return gateElement;
   }
@@ -184,8 +191,11 @@
     if (extra) {
       extra.hidden = gateMode !== "register";
     }
-    if (gateMode === "register") {
-      refreshCaptcha();
+    resetSlider();
+    var forgotBox = gateElement.querySelector(".auth-forgot");
+    if (forgotBox) {
+      forgotBox.hidden = gateMode !== "login";
+      forgotBox.style.display = gateMode === "login" ? "" : "none";
     }
     gateElement.querySelector("#auth-submit").textContent = gateMode === "register" ? "注册并进入" : "登录";
     gateElement.querySelector("#auth-password").setAttribute(
@@ -221,26 +231,27 @@
       gateError("邮箱和密码都要填");
       return;
     }
-    if (password.length < 6) {
-      gateError("密码至少 6 位");
-      return;
-    }
-    // v0.12.2：后端同样会校验，这里先拦一次，少走一轮请求
-    var kinds = 0;
-    if (/[0-9]/.test(password)) { kinds += 1; }
-    if (/[A-Za-z]/.test(password)) { kinds += 1; }
-    if (/[^0-9A-Za-z]/.test(password)) { kinds += 1; }
-    if (kinds < 2) {
-      gateError("密码需包含数字、字母、标点中的至少两种");
-      return;
+    // v0.12.3：强密码只在注册/改密时校验；登录必须放行管理员这类历史短密码，
+    // 否则管理员初始密码会被前端直接拦死（后端登录也不做强度校验）
+    if (gateMode === "register") {
+      if (password.length < 6) {
+        gateError("密码至少 6 位");
+        return;
+      }
+      var kinds = 0;
+      if (/[0-9]/.test(password)) { kinds += 1; }
+      if (/[A-Za-z]/.test(password)) { kinds += 1; }
+      if (/[^0-9A-Za-z]/.test(password)) { kinds += 1; }
+      if (kinds < 2) {
+        gateError("密码需包含数字、字母、标点中的至少两种");
+        return;
+      }
     }
 
     var code = "";
     if (gateMode === "register") {
-      var captchaInput = gateElement.querySelector("#auth-captcha");
-      var captchaValue = captchaInput ? captchaInput.value.trim() : "";
-      if (captchaValue !== String(captchaAnswer)) {
-        gateError("人机校验不正确，请重新算一下");
+      if (!sliderUnlocked) {
+        gateError("请先按住滑块拖到最右侧完成人机校验");
         return;
       }
       var codeInput = gateElement.querySelector("#auth-code");
@@ -307,25 +318,108 @@
     }, 4200);
   }
 
-  /* ---------------- v0.12.1：注册验证码与人机校验 ---------------- */
+  /* ---------------- v0.12.3：滑块人机校验（原生 JS，不引第三方） ---------------- */
 
-  var captchaAnswer = 0;
+  var sliderUnlocked = false;
+  var sliderState = null;
 
-  function refreshCaptcha() {
+  function setupSlider() {
     if (!gateElement) {
       return;
     }
-    var left = Math.floor(Math.random() * 8) + 2;
-    var right = Math.floor(Math.random() * 8) + 2;
-    captchaAnswer = left + right;
-    var label = gateElement.querySelector("#auth-captcha-q");
-    if (label) {
-      label.textContent = left + " + " + right + " = ?";
+    var track = gateElement.querySelector("#auth-slider");
+    var knob = gateElement.querySelector("#auth-slider-knob");
+    var fill = gateElement.querySelector("#auth-slider-fill");
+    var text = gateElement.querySelector("#auth-slider-text");
+    if (!track || !knob || sliderState) {
+      return;
     }
-    var input = gateElement.querySelector("#auth-captcha");
-    if (input) {
-      input.value = "";
+    sliderState = { dragging: false, max: 0 };
+
+    function maxTravel() {
+      return Math.max(0, track.clientWidth - knob.offsetWidth - 2);
     }
+
+    function paint(offset) {
+      sliderState.max = maxTravel();
+      var ratio = sliderState.max ? offset / sliderState.max : 0;
+      knob.style.transform = "translateX(" + offset + "px)";
+      if (fill) {
+        fill.style.width = ratio * 100 + "%";
+      }
+      knob.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
+    }
+
+    function finish(offset) {
+      var max = maxTravel();
+      if (max && offset >= max * 0.96) {
+        sliderUnlocked = true;
+        knob.style.transform = "translateX(" + max + "px)";
+        if (fill) { fill.style.width = "100%"; }
+        if (text) {
+          text.textContent = "已解锁，可以注册了";
+          text.classList.add("is-done");
+        }
+        track.classList.add("is-unlocked");
+      } else {
+        resetSlider();
+      }
+    }
+
+    knob.addEventListener("pointerdown", function (event) {
+      if (sliderUnlocked) {
+        return;
+      }
+      event.preventDefault();
+      sliderState.dragging = true;
+      knob.setPointerCapture(event.pointerId);
+      track.classList.add("is-dragging");
+    });
+
+    knob.addEventListener("pointermove", function (event) {
+      if (!sliderState.dragging) {
+        return;
+      }
+      var rect = track.getBoundingClientRect();
+      var max = maxTravel();
+      var offset = Math.min(max, Math.max(0, event.clientX - rect.left - knob.offsetWidth / 2));
+      paint(offset);
+    });
+
+    function release(event) {
+      if (!sliderState.dragging) {
+        return;
+      }
+      sliderState.dragging = false;
+      track.classList.remove("is-dragging");
+      var current = parseFloat(knob.style.transform.replace(/[^0-9.-]/g, "") || "0");
+      finish(current);
+    }
+
+    knob.addEventListener("pointerup", release);
+    knob.addEventListener("pointercancel", release);
+    // 键盘也能解锁：方向键推到最右
+    knob.addEventListener("keydown", function (event) {
+      if (event.key === "ArrowRight" || event.key === "End") {
+        event.preventDefault();
+        finish(maxTravel());
+      }
+    });
+  }
+
+  function resetSlider() {
+    sliderUnlocked = false;
+    if (!gateElement) {
+      return;
+    }
+    var track = gateElement.querySelector("#auth-slider");
+    var knob = gateElement.querySelector("#auth-slider-knob");
+    var fill = gateElement.querySelector("#auth-slider-fill");
+    var text = gateElement.querySelector("#auth-slider-text");
+    if (knob) { knob.style.transform = "translateX(0px)"; knob.setAttribute("aria-valuenow", "0"); }
+    if (fill) { fill.style.width = "0%"; }
+    if (text) { text.textContent = "按住滑块，拖到最右侧解锁"; text.classList.remove("is-done"); }
+    if (track) { track.classList.remove("is-unlocked", "is-dragging"); }
   }
 
   async function sendEmailCode() {
@@ -1008,6 +1102,185 @@
     var modal = document.getElementById("settings-modal");
     if (modal) {
       modal.addEventListener("shown.bs.modal", fillAccountPane);
+    }
+  }
+
+  /* ---------------- v0.12.3：登录页「忘记密码」---------------- */
+
+  var forgotElement = null;
+
+  function buildForgotModal() {
+    if (forgotElement) {
+      return forgotElement;
+    }
+    forgotElement = document.createElement("div");
+    forgotElement.className = "auth-forgot-mask";
+    forgotElement.id = "auth-forgot-mask";
+    forgotElement.innerHTML =
+      '<div class="auth-forgot-card" role="dialog" aria-modal="true" aria-labelledby="forgot-title">' +
+        '<h2 id="forgot-title">找回密码</h2>' +
+        '<p class="auth-forgot-sub">输入注册邮箱，验证码由后端生成（Mock 模式，会打印在后端控制台）。</p>' +
+        '<label class="auth-label">邮箱' +
+          '<input id="forgot-email" class="form-control" type="email" autocomplete="email" placeholder="注册时用的邮箱">' +
+        "</label>" +
+        '<label class="auth-label">邮箱验证码' +
+          '<span class="auth-code-row">' +
+            '<input id="forgot-code" class="form-control" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字">' +
+            '<button type="button" class="btn btn-outline-secondary auth-code-btn" id="forgot-send">获取验证码</button>' +
+          "</span>" +
+        "</label>" +
+        '<label class="auth-label">新密码' +
+          '<input id="forgot-password" class="form-control" type="password" autocomplete="new-password" placeholder="至少 6 位，含两种字符">' +
+        "</label>" +
+        '<label class="auth-label">确认新密码' +
+          '<input id="forgot-confirm" class="form-control" type="password" autocomplete="new-password" placeholder="再输一次">' +
+        "</label>" +
+        '<p class="auth-error" id="forgot-error" hidden></p>' +
+        '<div class="auth-forgot-actions">' +
+          '<button type="button" class="btn btn-light" id="forgot-cancel">取消</button>' +
+          '<button type="button" class="btn btn-primary" id="forgot-submit">重置密码</button>' +
+        "</div>" +
+      "</div>";
+    document.body.appendChild(forgotElement);
+
+    forgotElement.addEventListener("click", function (event) {
+      if (event.target === forgotElement) {
+        closeForgotModal();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && forgotElement && forgotElement.classList.contains("is-open")) {
+        closeForgotModal();
+      }
+    });
+    forgotElement.querySelector("#forgot-cancel").addEventListener("click", closeForgotModal);
+    forgotElement.querySelector("#forgot-send").addEventListener("click", forgotSendCode);
+    forgotElement.querySelector("#forgot-submit").addEventListener("click", forgotSubmit);
+    return forgotElement;
+  }
+
+  function forgotMessage(message, ok) {
+    if (!forgotElement) {
+      return;
+    }
+    var box = forgotElement.querySelector("#forgot-error");
+    box.textContent = message || "";
+    box.hidden = !message;
+    box.classList.toggle("is-ok", Boolean(ok));
+  }
+
+  function openForgotModal() {
+    buildForgotModal();
+    var emailInput = forgotElement.querySelector("#forgot-email");
+    if (gateElement && emailInput && !emailInput.value) {
+      emailInput.value = gateElement.querySelector("#auth-email").value.trim();
+    }
+    forgotMessage("");
+    forgotElement.classList.add("is-open");
+    window.setTimeout(function () {
+      if (emailInput) {
+        emailInput.focus();
+      }
+    }, 60);
+  }
+
+  function closeForgotModal() {
+    if (forgotElement) {
+      forgotElement.classList.remove("is-open");
+    }
+  }
+
+  async function forgotSendCode() {
+    var email = forgotElement.querySelector("#forgot-email").value.trim();
+    var button = forgotElement.querySelector("#forgot-send");
+    if (!email) {
+      forgotMessage("先填注册邮箱");
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "发送中…";
+    forgotMessage("");
+    try {
+      var response = await originalFetch("/api/auth/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email, purpose: "reset" }),
+      });
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        forgotMessage(data.error || "验证码发送失败");
+        button.disabled = false;
+        button.textContent = "获取验证码";
+        return;
+      }
+      var remain = 60;
+      button.textContent = remain + "s 后重发";
+      var timer = window.setInterval(function () {
+        remain -= 1;
+        if (remain <= 0) {
+          window.clearInterval(timer);
+          button.disabled = false;
+          button.textContent = "获取验证码";
+        } else {
+          button.textContent = remain + "s 后重发";
+        }
+      }, 1000);
+      forgotMessage("验证码已生成（Mock：请看后端控制台）", true);
+    } catch (error) {
+      forgotMessage((error && error.message) || "网络异常，请重试");
+      button.disabled = false;
+      button.textContent = "获取验证码";
+    }
+  }
+
+  async function forgotSubmit() {
+    var email = forgotElement.querySelector("#forgot-email").value.trim();
+    var code = forgotElement.querySelector("#forgot-code").value.trim();
+    var password = forgotElement.querySelector("#forgot-password").value;
+    var confirm = forgotElement.querySelector("#forgot-confirm").value;
+    var button = forgotElement.querySelector("#forgot-submit");
+    if (!email || !/^\d{6}$/.test(code)) {
+      forgotMessage("邮箱和 6 位验证码都要填");
+      return;
+    }
+    if (password !== confirm) {
+      forgotMessage("两次输入的新密码不一致");
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "重置中…";
+    forgotMessage("");
+    try {
+      var response = await originalFetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email,
+          code: code,
+          new_password: password,
+          confirm_password: confirm,
+        }),
+      });
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        forgotMessage(data.error || "重置失败，请检查验证码");
+        return;
+      }
+      forgotMessage("密码已重置，请用新密码登录", true);
+      if (gateElement) {
+        gateElement.querySelector("#auth-email").value = email;
+        gateElement.querySelector("#auth-password").value = "";
+      }
+      window.setTimeout(closeForgotModal, 1200);
+    } catch (error) {
+      forgotMessage((error && error.message) || "网络异常，请重试");
+    } finally {
+      button.disabled = false;
+      button.textContent = "重置密码";
     }
   }
 
