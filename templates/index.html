@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.12.0">
+  <link rel="stylesheet" href="/static/style.css?v=0.12.1">
 </head>
 <body>
 
@@ -94,7 +94,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.12-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.12.1-DEV</div>
     </div>
   </aside>
 
@@ -579,6 +579,22 @@
               下载 CSV 文件
             </button>
             <p class="export-hint">导出不影响账本数据，随时可以再导一次。</p>
+          </div>
+
+          <!-- v0.12.1：导入账单入口（与导出并列） -->
+          <div class="panel import-card">
+            <div class="export-head">
+              <span class="export-badge import-badge" aria-hidden="true">CSV / XLSX</span>
+              <h3>导入账单</h3>
+            </div>
+            <p class="export-text">
+              支持微信 / 支付宝导出的 CSV、Excel，自动识别 GBK / UTF-8 编码。
+              上传后先预览解析结果，重复项会高亮且默认不勾选，确认后才写进账本。
+            </p>
+            <button class="btn btn-outline-primary" type="button" id="profile-import-btn">
+              导入账单文件
+            </button>
+            <p class="export-hint">解析只读文件不写库；点【确认导入】才会联动账户余额。</p>
           </div>
 
         <!-- ============ 通讯录：收缩成与「我的账本」同尺寸的小卡片，内容进弹窗 ============ -->
@@ -1437,10 +1453,10 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.12.0"></script>
-<script src="/static/access-guard.js?v=0.12.0"></script>
+<script src="/static/auth-v012.js?v=0.12.1"></script>
+<script src="/static/access-guard.js?v=0.12.1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.12.0"></script>
+<script src="/static/script.js?v=0.12.1"></script>
 
 </body>
 </html>

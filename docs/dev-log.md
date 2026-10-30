@@ -383,3 +383,11 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 三阶段一起封版。后端基建：新建 users 表并把 sqlite_sequence 的起点钉在 9，预留 1-9 给系统账号，普通注册从 10 开始；迁移脚本创建 1 号超级管理员 1937097795@qq.com（初始密码 123456，werkzeug 哈希），把所有核心表加上 user_id 并把老数据回填 1；accounts 原来是 name 单主键，多用户同名账户会撞车，迁移时整表重建成 (user_id, name) 复合主键。鉴权用 PyJWT HS256（sub 必须是字符串，否则 PyJWT 2.15 抛 InvalidSubjectError），登录/注册返回 token 与不含密码的 user；@login_required 与全局 before_request 守卫让 /api/* 未登录统一 401，database 用 contextvars 记住当前用户，records / accounts 的查询、写入、删除、回收站、报销、统计全部带 user_id 条件。前端新增 auth-v012.js：重写 fetch 自动加 Bearer，401 auth_required 时弹全屏登录/注册遮罩，登录成功存 localStorage 再 reload；侧栏与「我的」页加退出登录。导入系统：/api/import/parse 用 pandas 读 CSV/Excel，编码按 utf-8-sig→utf-8→gb18030→gbk 依次尝试，表头行自动探测，列名按关键词优先识别（收/支 优先于 交易类型，交易对方优先于对方），无效流水直接跳过；判重查当前用户最近 10 天账单，时间+金额+商户重合标 is_duplicate；/api/import/confirm 只写未重复项，逐条 add_record 联动余额并写 import_history。前端账单页加【导入账单】弹窗：拖拽或选择文件、预览总条数与重复条数、表格勾选（重复行高亮默认不勾）、全选与确认入库。
 
 踩坑与验证：add_record 的 INSERT 参数顺序一度把 amount 和 user_id 写反，导致 user_id 变成 25.5，靠 E2E 断言注册用户看不到数据才暴露；PyJWT 的 sub 传 int 会直接报错，必须 str；GBK 报表里带 BOM 或不带 BOM 都要兜底，先试 utf-8-sig 再 gb18030；Excel 的金额单元格可能是 "¥1,234.00" 这种字符串，统一去符号再 float。自测 temp/test_v012_e2e.py 19/19（注册 id≥10 且不含密码字段、管理员登录看到 18 条老账目、新用户 0 条且默认 4 账户、未登录 401、GBK CSV 解析 3 条且分类正确、确认导入 3 条并扣微信 37.50 / 加支付宝 100、重复导入 duplicate_count=3、import_history 落库），temp/smoke_v012_frontend.py 19/19（首页/后台 200、auth-v012.js 与导入弹窗 DOM、版本引用、node --check 与 admin 内联脚本语法），py_compile 通过；迁移后 records 19 / accounts 16 / 总余额 -4655.8 与备份一致。
+
+## v0.12.1-DEV（2026-10-30）
+
+- 我的页【导出全部账单】旁新增【导入账单】卡片，复用导入弹窗，真实走 parse → 预览 → confirm 全链路。
+- 注册弹窗增加随机算术题人机校验与邮箱验证码；新增 POST /api/auth/send-code（Mock：控制台打印 6 位码，5 分钟过期），register 强制校验验证码。
+- 全局 fetch 兜底：断网提示“网线被小老鼠咬断”、500 提示“咖啡洒在服务器上”，新增 .funny-toast。
+- 通知中心折叠：默认展开最新 3 条，其余折叠为标题+时间，点标题平滑展开。
+- 自测：temp/test_v0121.py 20/20，temp/test_v012_e2e.py 21/21（加入验证码步骤），真实 HTTP 实测首页登录、send-code、导入解析通过。

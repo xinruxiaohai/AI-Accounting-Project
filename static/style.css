@@ -7621,3 +7621,86 @@ body.auth-locked {
   font-size: 12px;
   color: #8a8f99;
 }
+
+/* v0.12.1：通知折叠（第 4 条起默认收起，点标题平滑展开） */
+.notice-item-head {
+  cursor: pointer;
+  user-select: none;
+}
+
+.notice-item-head:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.notice-body {
+  overflow: hidden;
+  max-height: 2400px;
+  opacity: 1;
+  transition: max-height 0.32s ease, opacity 0.28s ease;
+}
+
+.notice-item.is-collapsed .notice-body {
+  max-height: 0;
+  opacity: 0;
+}
+
+.notice-item.is-collapsed .notice-item-head::after {
+  content: "展开";
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-muted, #8a8f99);
+}
+
+/* v0.12.1：登录/注册页验证码与人机校验 */
+.auth-code-row {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-code-row .form-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.auth-code-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.auth-captcha-q {
+  color: var(--accent, #2563eb);
+  font-weight: 600;
+}
+
+/* v0.12.1：全局异常幽默提示 */
+.funny-toast {
+  position: fixed;
+  left: 50%;
+  top: 24px;
+  transform: translate(-50%, -18px);
+  z-index: 200000;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: #22262f;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.6;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.funny-toast.is-show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* v0.12.1：我的页导入卡片 */
+.import-card .export-badge.import-badge {
+  background: #e8f3ff;
+  color: #1d4ed8;
+}

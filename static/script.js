@@ -5585,8 +5585,9 @@ function renderNotifications() {
   }
 
   const readIds = readReadIds();
+  // v0.12.1：默认只展开最新 3 条，第 4 条起折叠成「标题 + 小字时间」，点标题平滑展开
   box.innerHTML = list
-    .map(function (item) {
+    .map(function (item, index) {
       const isNew = readIds.indexOf(item.id) === -1;
       const dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
       const content = sanitizeNoticeHtml(item.content);
@@ -5595,12 +5596,15 @@ function renderNotifications() {
           escapeHtml(item.image_url) +
           '" alt="通知配图" loading="lazy">'
         : "";
+      const collapsed = index >= 3;
 
       return (
         '<article class="notice-item' +
         (isNew ? " is-new" : "") +
+        (collapsed ? " is-collapsed" : "") +
         '">' +
-        '<div class="notice-item-head">' +
+        '<div class="notice-item-head" data-notice-toggle role="button" tabindex="0" ' +
+        'aria-expanded="' + (collapsed ? "false" : "true") + '">' +
         '<span class="notice-title">' +
         escapeHtml(item.title) +
         "</span>" +
@@ -5608,12 +5612,42 @@ function renderNotifications() {
         escapeHtml(dateText) +
         "</span>" +
         "</div>" +
+        '<div class="notice-body">' +
         (content ? '<div class="notice-content">' + content + "</div>" : "") +
         cover +
+        "</div>" +
         "</article>"
       );
     })
     .join("");
+
+  if (!box.dataset.toggleBound) {
+    box.dataset.toggleBound = "1";
+    const toggle = function (head) {
+      const article = head.closest(".notice-item");
+      if (!article) {
+        return;
+      }
+      const collapsed = article.classList.toggle("is-collapsed");
+      head.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    };
+    box.addEventListener("click", function (event) {
+      const head = event.target.closest("[data-notice-toggle]");
+      if (head) {
+        toggle(head);
+      }
+    });
+    box.addEventListener("keydown", function (event) {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      const head = event.target.closest("[data-notice-toggle]");
+      if (head) {
+        event.preventDefault();
+        toggle(head);
+      }
+    });
+  }
 }
 
 async function loadNotifications() {

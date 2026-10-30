@@ -73,8 +73,12 @@
         headers.set("Authorization", "Bearer " + token);
       }
       init.headers = headers;
-      return originalFetch(input, init).then(function (response) {
-        if (response.status === 401 && url.indexOf("/api/") === 0 && !isPublicAuthPath(url)) {
+      return originalFetch(input, init)
+        .then(function (response) {
+          if (response.status >= 500) {
+            showFunnyToast("完蛋！后端工程师把咖啡洒在服务器上了，正在疯狂抢救中...");
+          }
+          if (response.status === 401 && url.indexOf("/api/") === 0 && !isPublicAuthPath(url)) {
           // 只对「没登录/登录过期」弹登录框；后台访问密码的 401 交给 access-guard 处理
           response
             .clone()
@@ -88,8 +92,12 @@
               showGate();
             });
         }
-        return response;
-      });
+          return response;
+        })
+        .catch(function (error) {
+          showFunnyToast("哎呀，网线好像被小老鼠咬断了...");
+          throw error;
+        });
     };
   }
 
@@ -126,6 +134,17 @@
           '<label class="auth-label auth-phone" hidden>手机号（可选）' +
             '<input id="auth-phone" class="form-control" type="tel" autocomplete="tel" placeholder="用于以后找回密码">' +
           "</label>" +
+          '<div class="auth-register-extra" hidden>' +
+            '<label class="auth-label">邮箱验证码' +
+              '<span class="auth-code-row">' +
+                '<input id="auth-code" class="form-control" type="text" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 位数字">' +
+                '<button type="button" class="btn btn-outline-secondary auth-code-btn" id="auth-send-code">获取验证码</button>' +
+              "</span>" +
+            "</label>" +
+            '<label class="auth-label">人机校验：<span class="auth-captcha-q" id="auth-captcha-q">3 + 5 = ?</span>' +
+              '<input id="auth-captcha" class="form-control" type="text" inputmode="numeric" maxlength="4" placeholder="填算式结果">' +
+            "</label>" +
+          "</div>" +
           '<p class="auth-error" id="auth-error" hidden></p>' +
           '<button class="btn btn-primary w-100 auth-submit" type="submit" id="auth-submit">登录</button>' +
         "</form>" +
@@ -142,6 +161,10 @@
     });
 
     gateElement.querySelector("#auth-form").addEventListener("submit", submitGate);
+    var sendCodeButton = gateElement.querySelector("#auth-send-code");
+    if (sendCodeButton) {
+      sendCodeButton.addEventListener("click", sendEmailCode);
+    }
     return gateElement;
   }
 
@@ -154,6 +177,13 @@
       tab.classList.toggle("is-active", tab.getAttribute("data-auth-tab") === gateMode);
     });
     gateElement.querySelector(".auth-phone").hidden = gateMode !== "register";
+    var extra = gateElement.querySelector(".auth-register-extra");
+    if (extra) {
+      extra.hidden = gateMode !== "register";
+    }
+    if (gateMode === "register") {
+      refreshCaptcha();
+    }
     gateElement.querySelector("#auth-submit").textContent = gateMode === "register" ? "注册并进入" : "登录";
     gateElement.querySelector("#auth-password").setAttribute(
       "autocomplete",
@@ -191,6 +221,22 @@
       return;
     }
 
+    var code = "";
+    if (gateMode === "register") {
+      var captchaInput = gateElement.querySelector("#auth-captcha");
+      var captchaValue = captchaInput ? captchaInput.value.trim() : "";
+      if (captchaValue !== String(captchaAnswer)) {
+        gateError("人机校验不正确，请重新算一下");
+        return;
+      }
+      var codeInput = gateElement.querySelector("#auth-code");
+      code = codeInput ? codeInput.value.trim() : "";
+      if (!/^\d{6}$/.test(code)) {
+        gateError("请先获取并填写 6 位邮箱验证码");
+        return;
+      }
+    }
+
     button.disabled = true;
     button.textContent = gateMode === "register" ? "注册中…" : "登录中…";
     gateError("");
@@ -202,7 +248,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             gateMode === "register"
-              ? { email: email, password: password, phone: phone }
+              ? { email: email, password: password, phone: phone, code: code }
               : { email: email, password: password }
           ),
         }
@@ -222,6 +268,99 @@
     } finally {
       button.disabled = false;
       button.textContent = gateMode === "register" ? "注册并进入" : "登录";
+    }
+  }
+
+  /* ---------------- v0.12.1：幽默异常兜底 ---------------- */
+
+  var funnyToastElement = null;
+  var funnyToastTimer = null;
+
+  function showFunnyToast(message) {
+    if (!funnyToastElement) {
+      funnyToastElement = document.createElement("div");
+      funnyToastElement.className = "funny-toast";
+      funnyToastElement.setAttribute("role", "status");
+      document.body.appendChild(funnyToastElement);
+    }
+    funnyToastElement.textContent = message;
+    funnyToastElement.classList.add("is-show");
+    if (funnyToastTimer) {
+      window.clearTimeout(funnyToastTimer);
+    }
+    funnyToastTimer = window.setTimeout(function () {
+      funnyToastElement.classList.remove("is-show");
+    }, 4200);
+  }
+
+  /* ---------------- v0.12.1：注册验证码与人机校验 ---------------- */
+
+  var captchaAnswer = 0;
+
+  function refreshCaptcha() {
+    if (!gateElement) {
+      return;
+    }
+    var left = Math.floor(Math.random() * 8) + 2;
+    var right = Math.floor(Math.random() * 8) + 2;
+    captchaAnswer = left + right;
+    var label = gateElement.querySelector("#auth-captcha-q");
+    if (label) {
+      label.textContent = left + " + " + right + " = ?";
+    }
+    var input = gateElement.querySelector("#auth-captcha");
+    if (input) {
+      input.value = "";
+    }
+  }
+
+  async function sendEmailCode() {
+    if (!gateElement) {
+      return;
+    }
+    var email = gateElement.querySelector("#auth-email").value.trim();
+    var button = gateElement.querySelector("#auth-send-code");
+    if (!email) {
+      gateError("先填邮箱再获取验证码");
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "发送中…";
+    gateError("");
+    try {
+      var response = await originalFetch("/api/auth/send-code", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email }),
+      });
+      var data = await response.json().catch(function () {
+        return {};
+      });
+      if (!response.ok) {
+        gateError(data.error || "验证码发送失败");
+        button.disabled = false;
+        button.textContent = "获取验证码";
+        return;
+      }
+      // Mock 模式：验证码打印在后端控制台，这里只给提示，倒计时 60 秒
+      var seconds = 60;
+      button.textContent = seconds + "s 后重发";
+      var timer = window.setInterval(function () {
+        seconds -= 1;
+        if (seconds <= 0) {
+          window.clearInterval(timer);
+          button.disabled = false;
+          button.textContent = "获取验证码";
+        } else {
+          button.textContent = seconds + "s 后重发";
+        }
+      }, 1000);
+      gateError("");
+      showFunnyToast("验证码已发送：当前是 Mock 模式，请在后端控制台查看 6 位数字");
+    } catch (error) {
+      gateError("网络异常，验证码没发出去");
+      button.disabled = false;
+      button.textContent = "获取验证码";
     }
   }
 
@@ -477,9 +616,12 @@
   }
 
   function initImportUi() {
-    var trigger = document.getElementById("import-bill-btn");
+    var triggers = [
+      document.getElementById("import-bill-btn"),
+      document.getElementById("profile-import-btn"),
+    ].filter(Boolean);
     var modalElement = document.getElementById("import-modal");
-    if (!trigger || !modalElement) {
+    if (!triggers.length || !modalElement) {
       return;
     }
     var modal = null;
@@ -493,9 +635,11 @@
       }
     }
 
-    trigger.addEventListener("click", function (event) {
-      event.preventDefault();
-      showModal();
+    triggers.forEach(function (trigger) {
+      trigger.addEventListener("click", function (event) {
+        event.preventDefault();
+        showModal();
+      });
     });
 
     var fileInput = document.getElementById("import-file");

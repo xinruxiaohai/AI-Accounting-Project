@@ -5,8 +5,10 @@ import functools
 import io
 import json
 import os
+import random
 import re
 import subprocess
+import time
 import uuid
 
 import jwt
@@ -133,6 +135,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/auth/login",
     "/api/auth/register",
     "/api/auth/sms-login",
+    "/api/auth/send-code",
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
@@ -236,6 +239,53 @@ def _normalize_email(value):
     return (value or "").strip().lower()
 
 
+# ---------------- v0.12.1：注册邮箱验证码（Mock 模式） ----------------
+
+# 验证码只存在进程内存里：5 分钟过期、用完即删；重启后全部失效（Mock 模式足够）
+EMAIL_CODE_TTL_SECONDS = 300
+_EMAIL_CODES = {}
+
+
+def _verify_email_code(email, code):
+    """校验邮箱验证码并一次性消费，返回 (是否通过, 错误信息)。"""
+    entry = _EMAIL_CODES.get(email)
+    now_ts = time.time()
+    if not entry:
+        return False, "请先获取邮箱验证码"
+    saved_code, expires_at = entry
+    if now_ts > expires_at:
+        _EMAIL_CODES.pop(email, None)
+        return False, "验证码已过期，请重新获取"
+    if not code or code != saved_code:
+        return False, "验证码不正确"
+    _EMAIL_CODES.pop(email, None)
+    return True, None
+
+
+@app.route("/api/auth/send-code", methods=["POST"])
+def auth_send_code():
+    """注册验证码（Mock）：6 位数字只打印到后端控制台，前端不返回明文。
+
+    真实发件逻辑留在这里扩展：接邮件服务商后把 print 换成发送即可。
+    """
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify(error="请输入正确的邮箱"), 400
+    if database.get_user_by_email(email) is not None:
+        return jsonify(error="该邮箱已注册，请直接登录"), 409
+
+    code = "%06d" % random.SystemRandom().randint(0, 999999)
+    _EMAIL_CODES[email] = (code, time.time() + EMAIL_CODE_TTL_SECONDS)
+    # Mock 发件：当前只打印控制台；接真实邮件服务后这里替换成发送逻辑
+    print(
+        "[v0.12.1][邮箱验证码] %s -> %s（%d 秒内有效）"
+        % (email, code, EMAIL_CODE_TTL_SECONDS),
+        flush=True,
+    )
+    return jsonify(ok=True, expires_in=EMAIL_CODE_TTL_SECONDS, mock=True)
+
+
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
     """注册：邮箱唯一、密码至少 6 位；id 由 users 表的自增序列决定（从 10 开始）。"""
@@ -250,6 +300,11 @@ def auth_register():
         return jsonify(error="密码至少 6 位"), 400
     if len(phone) > 30:
         return jsonify(error="手机号太长了"), 400
+
+    code = (data.get("code") or "").strip() if isinstance(data.get("code"), str) else ""
+    code_ok, code_error = _verify_email_code(email, code)
+    if not code_ok:
+        return jsonify(error=code_error), 400
 
     user, error_message = database.create_user(
         email, generate_password_hash(password), phone
@@ -2691,7 +2746,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.12-DEV"
+APP_VERSION_FALLBACK = "v0.12.1-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
