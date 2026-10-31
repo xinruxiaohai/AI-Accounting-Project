@@ -487,3 +487,21 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 同款 1×1 退化图若被指派给某分类，`entityIconHtml()` 渲染的侧栏/列表图标仍会显示色块；`guardIconImage()` 可直接复用，建议单独排一个任务
 - Bootstrap 徽标 `#dc3545` 与 `--color-expense #dc2626` 有极轻微差异，属 Bootstrap 修饰类统一，留待单独任务
 - T02~T05 原始 PRD 里的「6 套主题」「图标库扩到 40+」「月度结账单卡」「周期账单模板」未在本轮实现，设计见 `docs/design-v0131.md`
+
+## v0.13.2（前端体验优化，未封版未打 tag）
+
+- 资产页流水：默认全展开但**可手动点击折叠**。折叠态改存内存 Map（`sessionCollapseMaps`），
+  初始化不读历史缓存，用户手动点之后本次会话保持，不跨刷新记忆；账户分组折叠仍按原样持久化。
+  （第一版误用 `forceExpand` 把渲染钉死成永远展开，等于禁用点击，已撤销）
+- 页面切入动效：`@keyframes fadeSlideUp` + `.page.is-entering`，250ms ease-out + `will-change`，
+  用 `setTimeout` 而非 `animationend` 收尾（减弱动态效果时动画为 none，事件不触发会让类名永久残留）
+- 数字滚动：`animateNumber()`（rAF + easeOutCubic，零依赖）+ `setAmountAnimated()`
+  首次出现从 0 滚到目标值；新增 `rollAmountsOnFirstEnter()` —— 核心数字在页面隐藏时就渲染完了，
+  首次进入某页才补滚，否则用户切过去动画早已结束、表现为"没效果"。
+  作用范围：总资产大数字、7 个账户余额、本月收支三指标、借入/借出/待报销/已报销四卡；流水单笔金额不参与
+- 金额格式：`money()` 统一带千分位，消除同屏 `¥2,544.01` 与 `¥2544.01` 混用；
+  数字容器加 `tabular-nums` + `nowrap`，滚动全程宽度恒定
+- 静态资源版本串与两处 SW 缓存名统一 bump 到 `0.14.0`；同步更新 `test_v0130` / `test_v0126` 版本断言
+- 新增文档：`README.md`、`docs/prompts/37-v0131-*.md`、`docs/prompts/38-v0132-*.md`、`docs/video-script.md`
+- 自测：`temp/cdp_v0132_ui.py` 真实 Chrome CDP **40/40**；滚动采样到 13 个不同中间值；
+  回归 5/5、10/10、26/26、49/49、67/67 全过，console 0 error

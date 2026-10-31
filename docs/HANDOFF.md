@@ -16,7 +16,7 @@ AI 记账管家 项目交接文档
 - 系统 Windows；Python venv 在项目内：.\venv\Scripts\python.exe app.py。
 - Flask + sqlite3（records.db）+ 原生 JS/CSS + Bootstrap 5 + ECharts + PyJWT + pandas/openpyxl。
 - 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
-- 当前版本：v0.13.1-DEV（v0.13.0 全部能力 + 全局语义色令牌 `--color-expense/-income/-transfer` 与 `window.__chartColors()` 单一色源、设置弹窗精修、分类 `user_id` 完全隔离与停用/合并、T05 静默改分类修复、图表页缓存与 31 号翻页修复）。
+- 当前版本：v0.13.1-DEV（**已打 tag，唯一的稳定回退点**）；其上还有未发版的 v0.13.2 前端体验优化改动（流水默认展开且可手动折叠、页面切入动效、核心数字滚动、金额统一千分位），静态资源版本串已 bump 到 `?v=0.14.0`。v0.13.0 全部能力 + 全局语义色令牌 `--color-expense/-income/-transfer` 与 `window.__chartColors()` 单一色源、设置弹窗精修、分类 `user_id` 完全隔离与停用/合并、T05 静默改分类修复、图表页缓存与 31 号翻页修复）。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV。
 - 已知坑：.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
 
