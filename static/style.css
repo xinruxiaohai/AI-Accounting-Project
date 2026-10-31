@@ -5127,6 +5127,40 @@ body {
   scrollbar-gutter: stable;
 }
 
+/* ===================== v0.13.2：页面切入动效 ===================== */
+
+@keyframes fadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 由 script.js 的 playPageEnterAnimation() 加上、300ms 后移除。
+ * 用 both 填充，避免动画开始前有一帧闪回初始态。 */
+.page.is-entering {
+  animation: fadeSlideUp 250ms ease-out both;
+  will-change: transform, opacity;
+}
+
+/* 数字滚动期间宽度不能抖：等宽数字 + 不换行。
+ * 只作用于三类核心大数字，流水列表的单笔金额不受影响。 */
+#asset-net,
+#asset-total,
+#hero-expense,
+#hero-income,
+#hero-net,
+.account-row-balance,
+.account-group-total {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: nowrap;
+}
+
 /* 首页：整页不滚，中栏 / 右栏各自滚 */
 #page-home {
   padding: 24px;
@@ -9837,5 +9871,11 @@ body.auth-locked {
   .account-group-chevron,
   .account-group-head {
     transition: none;
+  }
+
+  /* v0.13.2：页面切入动效一并关闭（script.js 侧也会跳过数字补间） */
+  .page.is-entering {
+    animation: none;
+    will-change: auto;
   }
 }

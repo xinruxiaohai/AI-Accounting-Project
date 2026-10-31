@@ -72,7 +72,121 @@ function cents(value) {
 function money(value) {
   const number = cents(value);
   const sign = number < 0 ? "-" : "";
-  return sign + "¥" + Math.abs(number).toFixed(2);
+  // v0.13.2：金额统一带千分位。核心大数字要做滚动，若列表/汇总不带逗号，
+  // 同一屏会出现「¥2,544.01」与「¥2544.01」两种写法，比不加更显粗糙。
+  const parts = Math.abs(number).toFixed(2).split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return sign + "¥" + parts.join(".");
+}
+
+/* ==================== v0.13.2：核心金额数字滚动（Count-up，零依赖） ==================== */
+
+/**
+ * 千分位 + 两位小数。与 money() 完全一致（同一个格式口径），
+ * 滚动过程中每帧都调它，所以不能有额外分配以外的开销。
+ */
+function formatAmountText(value) {
+  return money(value);
+}
+
+const REDUCED_MOTION_QUERY =
+  window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)");
+
+/** 系统开了「减少动态效果」就跳过补间，直接落终值 */
+function prefersReducedMotion() {
+  return Boolean(REDUCED_MOTION_QUERY && REDUCED_MOTION_QUERY.matches);
+}
+
+const COUNT_UP_DURATION = 500;
+
+/** 每个元素最近一次动画的令牌：新动画接管后旧帧自行退出，避免多个 rAF 抢写同一个节点 */
+const countUpTokens = new WeakMap();
+
+/**
+ * 轻量数字滚动：从 from 滚到 to，全程保留千分位与两位小数。
+ * @param {HTMLElement} element 目标节点
+ * @param {number} from 起始值
+ * @param {number} to 结束值
+ * @param {number} [duration] 时长（毫秒），默认 500
+ */
+function animateNumber(element, from, to, duration) {
+  if (!element) {
+    return;
+  }
+  const start = Number(from);
+  const end = Number(to);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || prefersReducedMotion()) {
+    element.textContent = formatAmountText(end);
+    return;
+  }
+  const token = (countUpTokens.get(element) || 0) + 1;
+  countUpTokens.set(element, token);
+
+  const total = Number.isFinite(duration) && duration > 0 ? duration : COUNT_UP_DURATION;
+  const startedAt = window.performance ? performance.now() : Date.now();
+
+  function frame(now) {
+    if (countUpTokens.get(element) !== token) {
+      return; // 已被更新的动画接管，这一帧直接放弃
+    }
+    const progress = Math.min(1, (now - startedAt) / total);
+    const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic：起步轻快、收尾平稳
+    element.textContent = formatAmountText(start + (end - start) * eased);
+    if (progress < 1) {
+      window.requestAnimationFrame(frame);
+    } else {
+      element.textContent = formatAmountText(end);
+    }
+  }
+  window.requestAnimationFrame(frame);
+}
+
+/** 记录各核心数字上一次的值，只有新旧不同才触发滚动 */
+const lastAmountValues = new Map();
+
+/**
+ * 统一的「带滚动地写入金额」入口。
+ * 首次出现直接落值（不滚动），之后值有变化才从旧值滚到新值。
+ * @param {string} key 稳定的标识（同一块 UI 每次刷新必须一致）
+ * @param {HTMLElement} element 目标节点
+ * @param {number} value 金额
+ */
+function setAmountAnimated(key, element, value) {
+  if (!element) {
+    return;
+  }
+  if (state.amountHidden) {
+    element.textContent = "¥••••";
+    lastAmountValues.delete(key);
+    return;
+  }
+  const next = cents(value);
+  const previous = lastAmountValues.get(key);
+  lastAmountValues.set(key, next);
+  if (previous === undefined || !Number.isFinite(previous) || previous === next) {
+    element.textContent = formatAmountText(next);
+    return;
+  }
+  animateNumber(element, previous, next, COUNT_UP_DURATION);
+}
+
+/** 账户列表是整体重建的，重建后按账户名把余额补上滚动 */
+function animateAccountRowBalances() {
+  const box = $("account-groups");
+  if (!box) {
+    return;
+  }
+  box.querySelectorAll(".account-row[data-account]").forEach(function (row) {
+    const balanceEl = row.querySelector(".account-row-balance");
+    if (!balanceEl) {
+      return;
+    }
+    const raw = Number(balanceEl.getAttribute("data-amount"));
+    if (!Number.isFinite(raw)) {
+      return;
+    }
+    setAmountAnimated("account:" + (row.getAttribute("data-account") || ""), balanceEl, raw);
+  });
 }
 
 function escapeHtml(text) {
@@ -1686,6 +1800,8 @@ function renderAccountGroups() {
             "</span></span>" +
             '<span class="account-row-balance' +
             (balance < 0 ? " is-negative" : "") +
+            '" data-amount="' +
+            Number(balance || 0) +
             '">' +
             shown +
             "</span>" +
@@ -1750,6 +1866,9 @@ function renderAccountGroups() {
       );
     })
     .join("");
+
+  // v0.13.2：整块重建后按账户名补上余额滚动（只有值变了才会滚）
+  animateAccountRowBalances();
 }
 
 async function loadAccounts() {
@@ -2524,16 +2643,13 @@ function renderHero() {
     label.textContent = today.getFullYear() + " 年 " + (today.getMonth() + 1) + " 月";
   }
 
-  if ($("hero-expense")) {
-    $("hero-expense").textContent = money(summary.expense);
-  }
-  if ($("hero-income")) {
-    $("hero-income").textContent = money(summary.income);
-  }
+  // v0.13.2：本月收支三个核心数字走滚动（值没变则直接落值，不闪烁）
+  setAmountAnimated("hero-expense", $("hero-expense"), summary.expense);
+  setAmountAnimated("hero-income", $("hero-income"), summary.income);
   if ($("hero-net")) {
-    $("hero-net").textContent = money(summary.net);
     $("hero-net").classList.toggle("is-negative", summary.net < 0);
   }
+  setAmountAnimated("hero-net", $("hero-net"), summary.net);
 }
 
 /** 预算上限：localStorage 里没有（或被改坏了）就用默认 3000 */
@@ -3468,6 +3584,8 @@ function feedRowHtml(record, snapshots, options) {
  */
 function feedGroupsHtml(records, snapshots, options) {
   options = options || {};
+  // v0.13.2：资产页流水要求「每次渲染都全展开」，打开这个开关就完全不读折叠缓存
+  const forceExpand = Boolean(options.forceExpand);
   if (!records.length) {
     return feedEmptyHtml(options.emptyHint || "这里还没有账单");
   }
@@ -3512,7 +3630,7 @@ function feedGroupsHtml(records, snapshots, options) {
       currentYear = yearKey;
       currentMonth = "";
       currentDay = "";
-      yearCollapsed = isCollapsed(LS_FEED_COLLAPSE, "year:" + yearKey);
+      yearCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "year:" + yearKey);
       const totals = yearTotals.get(yearKey) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-year' + (yearCollapsed ? " is-collapsed" : "") +
@@ -3528,7 +3646,7 @@ function feedGroupsHtml(records, snapshots, options) {
     if (monthKey !== currentMonth) {
       currentMonth = monthKey;
       currentDay = "";
-      monthCollapsed = isCollapsed(LS_FEED_COLLAPSE, "month:" + monthKey);
+      monthCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "month:" + monthKey);
       const totals = monthTotals.get(monthKey) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-month' + (monthCollapsed ? " is-collapsed" : "") +
@@ -3543,7 +3661,7 @@ function feedGroupsHtml(records, snapshots, options) {
 
     if (key !== currentDay) {
       currentDay = key;
-      dayCollapsed = isCollapsed(LS_FEED_COLLAPSE, "day:" + key);
+      dayCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "day:" + key);
       const totals = dayTotals.get(key) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-day' + (dayCollapsed ? " is-collapsed" : "") +
@@ -3876,9 +3994,11 @@ function renderAccountRecords() {
   }
 
   // v0.09.2：月表头 → 日表头 → 流水行；右侧金额带当时余额快照
+  // v0.13.2：资产页右侧流水强制全展开，不再记忆折叠状态
   const snapshots = balanceSnapshots(state.detailRecords);
   box.innerHTML = feedGroupsHtml(state.detailRecords, snapshots, {
     empty: "这个账户还没有流水",
+    forceExpand: true,
   });
 }
 
@@ -5840,6 +5960,34 @@ async function removeAccount(name) {
 
 /* ==================== 切页 ==================== */
 
+/* v0.13.2：页面切入动效。
+ * 用 setTimeout 收尾而不是监听 animationend —— 系统开启「减少动态效果」时
+ * CSS 里动画被置为 none，animationend 永远不会触发，类名就会永久留在节点上，
+ * 反而让 will-change 长期生效、白白占一层合成层。 */
+const pageEnterTimers = new WeakMap();
+
+function playPageEnterAnimation(pageName) {
+  const pageEl = document.getElementById("page-" + pageName);
+  if (!pageEl) {
+    return;
+  }
+  const pending = pageEnterTimers.get(pageEl);
+  if (pending) {
+    window.clearTimeout(pending);
+  }
+  pageEl.classList.remove("is-entering");
+  // 读一次布局属性，逼浏览器先把「移除类」结算掉，连续切同一页才能重放动画
+  void pageEl.offsetWidth;
+  pageEl.classList.add("is-entering");
+  pageEnterTimers.set(
+    pageEl,
+    window.setTimeout(function () {
+      pageEl.classList.remove("is-entering");
+      pageEnterTimers.delete(pageEl);
+    }, 300)
+  );
+}
+
 function switchPage(page) {
   const target = PAGE_TITLES[page] ? page : "home";
   $("page-title").textContent = PAGE_TITLES[target];
@@ -5850,6 +5998,10 @@ function switchPage(page) {
   document.querySelectorAll(".page").forEach(function (section) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
+
+  // v0.13.2：目标页做一次 fadeSlideUp 切入（250ms、ease-out）。
+  // 连续点同一个导航项也要能重放：先移除类 → 强制重排 → 再加回。
+  playPageEnterAnimation(target);
 
   if (target === "bills") {
     renderBillsPage();
@@ -8481,9 +8633,10 @@ function renderAssetsHero() {
   assets += lend;
   liabilities += borrow;
 
-  if ($("asset-net")) {
-    $("asset-net").textContent = assetMoney(cents(assets - liabilities));
-  }
+  // v0.13.2：用户真正看得见的「总资产」是这张大数字（净资产），走数字滚动。
+  // 注意 #asset-total 自 v0.10 起已被 .visually-hidden 隐藏、只作数据承载，
+  // 给它做动画没人看得见，仍按原样直接写入。
+  setAmountAnimated("asset-net", $("asset-net"), cents(assets - liabilities));
   if ($("asset-total")) {
     $("asset-total").textContent = assetMoney(cents(assets));
   }
@@ -9164,6 +9317,18 @@ const LS_FEED_COLLAPSE = "ai-accounting-feed-collapse-v1";
 const LS_BILLS_TREE = "ai-accounting-bills-tree-v1";
 const LS_BILLS_MONTH = "ai-accounting-bills-month-v1";
 const BUBBLE_FADE_MS = 3000;
+
+/* v0.13.2：资产页流水改为强制全展开，旧的折叠状态缓存一律作废。
+ * 这里只清一次（用独立标记位），避免每次启动都把账单页的折叠偏好也抹掉。 */
+const LS_FEED_COLLAPSE_RESET = "ai-accounting-feed-collapse-reset-v2";
+try {
+  if (!localStorage.getItem(LS_FEED_COLLAPSE_RESET)) {
+    localStorage.removeItem(LS_FEED_COLLAPSE);
+    localStorage.setItem(LS_FEED_COLLAPSE_RESET, "1");
+  }
+} catch (error) {
+  /* 隐私模式或被禁用存储：忽略即可，读不到缓存本来就是全展开 */
+}
 
 let billsFilter = {
   year: "",
