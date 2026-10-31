@@ -163,11 +163,70 @@ function setAmountAnimated(key, element, value) {
   const next = cents(value);
   const previous = lastAmountValues.get(key);
   lastAmountValues.set(key, next);
-  if (previous === undefined || !Number.isFinite(previous) || previous === next) {
+  if (next === 0) {
+    element.textContent = formatAmountText(0);
+    return;
+  }
+  // 首次出现（刷新 / 新渲染）= 从 0 滚到目标值，打开页面就能看到滚动
+  if (previous === undefined || !Number.isFinite(previous)) {
+    animateNumber(element, 0, next, COUNT_UP_DURATION);
+    return;
+  }
+  if (previous === next) {
     element.textContent = formatAmountText(next);
     return;
   }
   animateNumber(element, previous, next, COUNT_UP_DURATION);
+}
+
+/**
+ * 哪些数字属于哪个页面。
+ *
+ * 关键：资产页的核心数字在**页面还隐藏时**就已经渲染完了，
+ * 0 → 目标值的滚动会跑在看不见的页面上，等用户切过去动画早已结束，看着像"没生效"。
+ * 所以这里在「首次进入某个页面」时再补一次滚动，保证用户真的看得到。
+ */
+const AMOUNT_PAGE_KEYS = {
+  home: ["hero-expense", "hero-income", "hero-net"],
+  assets: ["asset-net", "asset-borrow", "asset-lend", "reimb-pending", "reimb-done"],
+};
+
+const enteredPages = new Set();
+
+// 脚本解析时页面上已经有一页是 active（通常是首页），它算作「已进入」，
+// 避免刚加载完第一次切页时把首页的数字又滚一遍。
+(function () {
+  const active = document.querySelector(".page.active");
+  if (active) {
+    enteredPages.add(String(active.id || "").replace(/^page-/, ""));
+  }
+})();
+
+function rollAmountsOnFirstEnter(page) {
+  if (enteredPages.has(page)) {
+    return;
+  }
+  enteredPages.add(page);
+  if (prefersReducedMotion()) {
+    return;
+  }
+  (AMOUNT_PAGE_KEYS[page] || []).forEach(function (key) {
+    const value = lastAmountValues.get(key);
+    const element = document.getElementById(key);
+    if (element && Number.isFinite(value)) {
+      animateNumber(element, 0, value, COUNT_UP_DURATION);
+    }
+  });
+  if (page === "assets") {
+    document
+      .querySelectorAll(".account-row-balance[data-amount]")
+      .forEach(function (element) {
+        const value = Number(element.getAttribute("data-amount"));
+        if (Number.isFinite(value)) {
+          animateNumber(element, 0, value, COUNT_UP_DURATION);
+        }
+      });
+  }
 }
 
 /** 账户列表是整体重建的，重建后按账户名把余额补上滚动 */
@@ -3584,8 +3643,6 @@ function feedRowHtml(record, snapshots, options) {
  */
 function feedGroupsHtml(records, snapshots, options) {
   options = options || {};
-  // v0.13.2：资产页流水要求「每次渲染都全展开」，打开这个开关就完全不读折叠缓存
-  const forceExpand = Boolean(options.forceExpand);
   if (!records.length) {
     return feedEmptyHtml(options.emptyHint || "这里还没有账单");
   }
@@ -3630,7 +3687,7 @@ function feedGroupsHtml(records, snapshots, options) {
       currentYear = yearKey;
       currentMonth = "";
       currentDay = "";
-      yearCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "year:" + yearKey);
+      yearCollapsed = isCollapsed(LS_FEED_COLLAPSE, "year:" + yearKey);
       const totals = yearTotals.get(yearKey) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-year' + (yearCollapsed ? " is-collapsed" : "") +
@@ -3646,7 +3703,7 @@ function feedGroupsHtml(records, snapshots, options) {
     if (monthKey !== currentMonth) {
       currentMonth = monthKey;
       currentDay = "";
-      monthCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "month:" + monthKey);
+      monthCollapsed = isCollapsed(LS_FEED_COLLAPSE, "month:" + monthKey);
       const totals = monthTotals.get(monthKey) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-month' + (monthCollapsed ? " is-collapsed" : "") +
@@ -3661,7 +3718,7 @@ function feedGroupsHtml(records, snapshots, options) {
 
     if (key !== currentDay) {
       currentDay = key;
-      dayCollapsed = forceExpand ? false : isCollapsed(LS_FEED_COLLAPSE, "day:" + key);
+      dayCollapsed = isCollapsed(LS_FEED_COLLAPSE, "day:" + key);
       const totals = dayTotals.get(key) || { income: 0, expense: 0, count: 0 };
       html +=
         '<div class="feed-day' + (dayCollapsed ? " is-collapsed" : "") +
@@ -3994,11 +4051,10 @@ function renderAccountRecords() {
   }
 
   // v0.09.2：月表头 → 日表头 → 流水行；右侧金额带当时余额快照
-  // v0.13.2：资产页右侧流水强制全展开，不再记忆折叠状态
+  // v0.13.2：默认全展开（不读历史缓存），但点表头仍可收起 / 再展开，会话内保持
   const snapshots = balanceSnapshots(state.detailRecords);
   box.innerHTML = feedGroupsHtml(state.detailRecords, snapshots, {
     empty: "这个账户还没有流水",
-    forceExpand: true,
   });
 }
 
@@ -6002,6 +6058,9 @@ function switchPage(page) {
   // v0.13.2：目标页做一次 fadeSlideUp 切入（250ms、ease-out）。
   // 连续点同一个导航项也要能重放：先移除类 → 强制重排 → 再加回。
   playPageEnterAnimation(target);
+
+  // 核心数字在页面隐藏时就渲染完了，首次进入才补一次滚动，让用户真的看得到
+  rollAmountsOnFirstEnter(target);
 
   if (target === "bills") {
     renderBillsPage();
@@ -8486,12 +8545,9 @@ function renderReimbCards() {
       }
     });
   }
-  if ($("reimb-pending")) {
-    $("reimb-pending").textContent = assetMoney(pending);
-  }
-  if ($("reimb-done")) {
-    $("reimb-done").textContent = assetMoney(done);
-  }
+  // v0.13.2：待报销 / 已报销两张卡也走数字滚动
+  setAmountAnimated("reimb-pending", $("reimb-pending"), pending);
+  setAmountAnimated("reimb-done", $("reimb-done"), done);
 }
 
 async function loadReimbSummary() {
@@ -8643,12 +8699,9 @@ function renderAssetsHero() {
   if ($("asset-liability")) {
     $("asset-liability").textContent = assetMoney(cents(liabilities));
   }
-  if ($("asset-borrow")) {
-    $("asset-borrow").textContent = assetMoney(cents(borrow));
-  }
-  if ($("asset-lend")) {
-    $("asset-lend").textContent = assetMoney(cents(lend));
-  }
+  // v0.13.2：借入 / 借出两张卡也走数字滚动
+  setAmountAnimated("asset-borrow", $("asset-borrow"), cents(borrow));
+  setAmountAnimated("asset-lend", $("asset-lend"), cents(lend));
   updateEyeButton();
   applyHeroBg();
 }
@@ -9318,8 +9371,8 @@ const LS_BILLS_TREE = "ai-accounting-bills-tree-v1";
 const LS_BILLS_MONTH = "ai-accounting-bills-month-v1";
 const BUBBLE_FADE_MS = 3000;
 
-/* v0.13.2：资产页流水改为强制全展开，旧的折叠状态缓存一律作废。
- * 这里只清一次（用独立标记位），避免每次启动都把账单页的折叠偏好也抹掉。 */
+/* v0.13.2：流水折叠态改到内存里（默认全展开、可手动收起、不跨刷新记忆），
+ * localStorage 里这份从此不再读写，这里一次性清掉残留的老数据。 */
 const LS_FEED_COLLAPSE_RESET = "ai-accounting-feed-collapse-reset-v2";
 try {
   if (!localStorage.getItem(LS_FEED_COLLAPSE_RESET)) {
@@ -9360,11 +9413,43 @@ function writeCollapseMap(key, map) {
   }
 }
 
+/**
+ * v0.13.2：流水分组（年 / 月 / 日）的折叠态改成「会话内有效」。
+ *
+ * 需求是「进来默认全展开，但能手动点收起 / 再展开」——
+ * 所以：初始化不读任何历史缓存（每次进来都是全展开），
+ * 用户手动点了之后本次会话保持他的操作结果，但不跨刷新记忆。
+ * 账户分组（LS_ACCOUNT_COLLAPSE）仍按原样持久化，两者互不影响。
+ */
+const sessionCollapseMaps = new Map();
+
+function sessionCollapseMap(key) {
+  let map = sessionCollapseMaps.get(key);
+  if (!map) {
+    map = {};
+    sessionCollapseMaps.set(key, map);
+  }
+  return map;
+}
+
 function isCollapsed(key, itemKey) {
+  if (key === LS_FEED_COLLAPSE) {
+    return Boolean(sessionCollapseMap(key)[itemKey]);
+  }
   return Boolean(readCollapseMap(key)[itemKey]);
 }
 
 function toggleCollapseState(key, itemKey) {
+  // 流水只在内存里记，落盘就变成「跨刷新记住上次折叠」，与需求相反
+  if (key === LS_FEED_COLLAPSE) {
+    const session = sessionCollapseMap(key);
+    if (session[itemKey]) {
+      delete session[itemKey];
+    } else {
+      session[itemKey] = 1;
+    }
+    return;
+  }
   const map = readCollapseMap(key);
   if (map[itemKey]) {
     delete map[itemKey];
