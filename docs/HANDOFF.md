@@ -16,7 +16,7 @@ AI 记账管家 项目交接文档
 - 系统 Windows；Python venv 在项目内：.\venv\Scripts\python.exe app.py。
 - Flask + sqlite3（records.db）+ 原生 JS/CSS + Bootstrap 5 + ECharts + PyJWT + pandas/openpyxl。
 - 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
-- 当前版本：v0.13.0-DEV（v0.12.7 全部能力 + 图表看板页【图表】、记账弹窗可视化分类网格与二级浮层、自定义确认弹窗 confirmAction 取代原生 alert/confirm、微动效）。
+- 当前版本：v0.13.0-DEV（已打 tag，可直接回退的稳定点）；**v0.13.1-DEV 进行中未封版未打 tag**，已提交 Step1~Step4 + T01 分类隔离，剩余 T02 主题 / T03 素材 / T04 设置弹窗+C1 结账单卡 / T05 停用合并+周期模板，详见 docs/dev-log.md 末尾与 docs/design-v0131.md。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV。
 - 已知坑：.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
 

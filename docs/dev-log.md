@@ -450,3 +450,17 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 图表看板：侧栏新增【图表】（active 时左侧 3px 橙色渐变竖线），新页面 #page-charts 含左侧二级菜单、顶部年/季/月/周 + 前后翻页、三列收支结余大数字、ECharts 渐变填充折线（smooth 0.32 + areaStyle）与最高/最低/均值三条虚线 markLine、底部支出/收入/结余切换、汇总表（日期/收入/支出/结余 + 合计行）；逻辑独立在 static/charts-v013.js（年 12 月桶 / 季 3 月桶 / 月按天 / 周周一起 7 天），浅色轴 #475569、深色 #cbd5e1。
 - 真实 Chrome CDP 验证：temp/dom_v013.mjs + temp/dom_v013b.mjs 覆盖分类网格与浮层、成功气泡（记录已清理）、确认弹窗双路径、四周期标签与行数、翻页、深浅色、图标旋转中间态，全程无 JS 报错。
 - 自测：temp/test_v0130.py 5/5；回归 v0127 5/5、v0126 10/10、v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile / node --check 通过。
+
+## v0.13.1-DEV（进行中，2026-10-31）
+
+> 状态：Step1~Step4 与 T01（分类隔离）已交付并提交；T02~T05 未开工，**未打 tag**。
+
+- Step1 用户信息重置修复：头像改存 `static/uploads/avatars/`，uuid 文件名唯一，DB 存相对路径；上传成功后再清理旧文件（避免删了新文件却没落库）；启动即 `refreshProfileFromServer()`，服务重启后头像昵称不丢。
+- Step2 收支分类隔离：`categories` 增 `type` 列并幂等回填 `'expense'`；新增 `_seed_income_categories`（工资/兼职外快/投资理财/红包/利息/退款/其他收入）；`ensure_category`/`create_category` 全链路带 type；`renderCategoryGrid` 按收支严格过滤；分类管理新增收支下拉。
+- Step3 图表与图标：折线面积透明度跟随主题（深 0.14/0.01、浅 0.22/0.02）；分类管理列表渲染 22px 图标 + 收支彩色标签。
+- Step4 账户折叠与「我的」对齐：资产分组可折叠，`grid-template-rows 1fr→0fr` 0.26s 动画 + chevron 旋转 + `aria-expanded` + 点击/键盘双路径；折叠状态按用户存 `ai-accounting-account-collapse::u<uid>`，换账号不串味；`#page-profile` 6 卡片 Grid 等高 + 按钮组 `margin-top:auto` 贴底（用 CSS `order` 把提示语提到按钮上方，未动 HTML 结构）。
+- T01 分类 `user_id` 完全隔离：新增 `_migrate_category_isolation()` 9 步幂等迁移（迁移前备份 → 补 6 列 → 回填 user_id=1 → 建 `uq_categories_user` → 再 DROP 旧 `uq_categories`），挂在 `_ensure_user_schema()` 之后、第二段 DML 之前；9 个分类查询函数全部加 `WHERE user_id = ?`；二级分类父级跨用户校验 400；新增幂等 `ensure_category_templates(user_id)`（补缺不覆盖）+ 注册补齐 + `POST /api/categories/ensure-templates`。
+- 安全修复 F2：`set_current_user()` 原写 `int(user_id or ADMIN_USER_ID)`，`0 or 1` 求值为 1，公开路径 `set_current_user(0)` 实际以管理员身份查库。改为只判断 `is None`，`0` 保持 `0`。同时修 F3（种子显式收 uid，禁依赖 ContextVar 默认 1）、F5（并发同名 IntegrityError→409）、F6（CREATE TABLE 直接补 user_id/type 双保险）、F12（`_RECORD_SELECT` 补 `category_parent_id`）。
+- 停用语义（schema 先行，UI 留 T05）：`is_disabled` 为唯一判定列，`disabled_at` 仅审计；**明令禁止给 categories 加 `deleted_at`**（已实库确认该列不存在，避免两套同名异义软删除）；`include_disabled` 仅限分类管理「已停用」管理区，编辑态走前端零请求合成。
+- 自测：temp/test_v0131_iso.py **49 项全通过 / 0 失败**（迁移 3 次幂等、双用户同名并存互不可见、跨用户引用 400、老用户 32 行零丢失、`set_current_user(0)`→0、停用语义全覆盖）；实库迁移后 categories 32 行全归 user_id=1（25 支出/7 收入），账目 18 条、账户 10 个零丢失；py_compile / node --check 通过。
+- 遗留：Step4 与 T01 的**真实 Chrome 浏览器回归未完成**（QA 侧上游网关异常中断）；T02 主题 / T03 素材 / T04 设置弹窗+C1 结账单卡 / T05 停用合并+周期模板未开工。设计见 `docs/design-v0131.md`，需求见 `docs/prd-v0131.md`。
