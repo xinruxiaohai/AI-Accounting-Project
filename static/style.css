@@ -19,12 +19,46 @@
   --brand-blue-ink: #1d4ed8;
   --brand-soft: rgba(37, 99, 235, 0.1);
 
-  /* 收 / 支 语义色 */
-  --pos: #059669;
-  --pos-soft: #ecfdf5;
-  --neg: #dc2626;
-  --neg-soft: #fef2f2;
+  /* ===== v0.13.1 全局语义色（唯一真相源）=====
+   * 支出 = 红 / 收入 = 绿 / 转账·结余 = 灰。
+   * CSS 与图表（window.__chartColors()）只认这 9 个变量，禁止再写死语义 hex。
+   * 对比度已按白底校验：expense 4.83:1、income 5.55:1、transfer 4.76:1（均 ≥ 4.5:1）。 */
+  --color-expense: #dc2626;
+  --color-expense-soft: #fef2f2;
+  --color-expense-strong: #b91c1c;
+  --color-income: #047857;
+  --color-income-soft: #ecfdf5;
+  --color-income-strong: #065f46;
+  --color-transfer: #64748b;
+  --color-transfer-soft: #f1f5f9;
+  --color-transfer-strong: #475569;
+
+  /* 旧变量名保留为别名，历史规则自动跟随上面 9 个语义色 */
+  --pos: var(--color-income);
+  --pos-soft: var(--color-income-soft);
+  --neg: var(--color-expense);
+  --neg-soft: var(--color-expense-soft);
   --warn: #d97706;
+
+  /* ===== 兼容别名（v0.13.1）=====
+   * 下列变量历史上被 var() 引用但从未定义，声明无效、样式静默失效；
+   * 深色模式下还会吃到浅色兜底值。这里统一指向既有令牌，一次性补齐。 */
+  --accent: var(--brand-blue);
+  --brand: var(--brand-blue);
+  --danger: var(--color-expense);
+  --income: var(--color-income);
+  --border: var(--line);
+  --border-soft: var(--line);
+  --line-faint: var(--line);
+  --card-bg: var(--surface);
+  --bg-soft: var(--surface-2);
+  --surface-1: var(--surface-2);
+  --surface-soft: rgba(15, 23, 42, 0.06);
+  --muted: var(--text-muted);
+  --text-sub: var(--text-muted);
+  --text-soft: var(--text-muted);
+  /* 头像角标尺寸（原为纯 fallback，这里补明定义，取值与原兜底一致） */
+  --badge-size: 38px;
 
   /* 表面与文字 */
   --page-bg: #f4f6fb;
@@ -75,11 +109,25 @@
   --brand-blue-ink: #60a5fa;
   --brand-soft: rgba(59, 130, 246, 0.16);
 
-  --pos: #34d399;
-  --pos-soft: rgba(16, 185, 129, 0.14);
-  --neg: #f87171;
-  --neg-soft: rgba(239, 68, 68, 0.14);
+  /* v0.13.1 语义色（深色档：整体提亮，与 #131c2b 卡片对比度 6.2~8.9:1） */
+  --color-expense: #f87171;
+  --color-expense-soft: rgba(248, 113, 113, 0.14);
+  --color-expense-strong: #fca5a5;
+  --color-income: #34d399;
+  --color-income-soft: rgba(52, 211, 153, 0.14);
+  --color-income-strong: #6ee7b7;
+  --color-transfer: #94a3b8;
+  --color-transfer-soft: rgba(148, 163, 184, 0.16);
+  --color-transfer-strong: #cbd5e1;
+
+  --pos: var(--color-income);
+  --pos-soft: var(--color-income-soft);
+  --neg: var(--color-expense);
+  --neg-soft: var(--color-expense-soft);
   --warn: #fbbf24;
+
+  /* 兼容别名在深色下的取值 */
+  --surface-soft: rgba(255, 255, 255, 0.08);
 
   --sidebar-bg: #0d1626;
   --sidebar-bg-2: #0a111d;
@@ -520,11 +568,11 @@ body {
 }
 
 .legend-dot.is-plus {
-  background: #059669;
+  background: var(--color-income);
 }
 
 .legend-dot.is-minus {
-  background: #dc2626;
+  background: var(--color-expense);
 }
 
 .calendar-wrap {
@@ -639,25 +687,26 @@ body {
   color: #94a3b8;
 }
 
-/* 收 → 绿，支 → 红；浅色热力底上也要能看清，所以取深一档的色值 */
+/* 收 → 绿，支 → 红；浅色热力底上也要能看清，所以取语义色的 strong 档 */
 .cal-fig.is-plus {
-  color: #047857;
+  color: var(--color-income);
 }
 
 .cal-fig.is-minus {
-  color: #b91c1c;
+  color: var(--color-expense-strong);
 }
 
 .cal-fig.is-net {
   font-weight: 600;
+  color: var(--color-transfer-strong);
 }
 
 .cal-fig.is-net.is-plus {
-  color: #065f46;
+  color: var(--color-transfer-strong);
 }
 
 .cal-fig.is-net.is-minus {
-  color: #991b1b;
+  color: var(--color-expense-strong);
 }
 
 .cal-tag {
@@ -668,7 +717,7 @@ body {
 /* 旧版格子里的支出合计（v0.06 之前使用，保留以免旧脚本渲染异常） */
 .cal-sum {
   font-size: 12px;
-  color: #dc2626;
+  color: var(--color-expense);
   font-variant-numeric: tabular-nums;
 }
 
@@ -730,11 +779,11 @@ body {
 }
 
 .year-line .is-plus {
-  color: #16a34a;
+  color: var(--color-income);
 }
 
 .year-line .is-minus {
-  color: #dc2626;
+  color: var(--color-expense);
 }
 
 /* ===================== 窄屏适配 ===================== */
@@ -864,8 +913,8 @@ body {
 }
 
 .account-card-del:hover {
-  color: #dc2626;
-  background: #fef2f2;
+  color: var(--danger);
+  background: var(--color-expense-soft);
 }
 
 .empty-hint {
@@ -947,8 +996,177 @@ body {
 }
 
 .cat-del:hover {
-  color: #dc2626;
-  background: #fef2f2;
+  color: var(--danger);
+  background: var(--color-expense-soft);
+}
+
+/* ==================== v0.13.1：分类停用 / 合并 ==================== */
+
+/* 行内右侧操作区：名称吃掉多余空间并可省略，徽标与按钮紧贴右侧 */
+.category-row .category-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  flex: 0 0 auto;
+}
+
+.cat-op {
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.cat-op:hover {
+  color: var(--brand-blue);
+  background: var(--brand-soft);
+}
+
+/* 停用行整体淡化，但操作按钮保持可点、可读 */
+.category-row.is-disabled .category-name {
+  color: var(--text-muted);
+}
+
+.cat-disabled-tag {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--color-transfer-soft);
+  color: var(--color-transfer-strong);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* 「已停用」管理区（折叠块） */
+.disabled-zone {
+  margin-top: 18px;
+  border-top: 1px dashed var(--line);
+  padding-top: 12px;
+}
+
+.disabled-zone-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.disabled-zone-toggle:hover {
+  border-color: var(--line-strong);
+}
+
+.disabled-zone-arrow {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+
+.disabled-zone-toggle.is-open .disabled-zone-arrow {
+  transform: rotate(90deg);
+}
+
+.disabled-zone-count {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 99px;
+  background: var(--color-transfer-soft);
+  color: var(--color-transfer-strong);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.disabled-zone-body {
+  margin-top: 8px;
+}
+
+.disabled-tree > li {
+  border-bottom: 1px solid var(--line);
+}
+
+/* 记账网格里的「已停用」分类：虚线灰边 + 角标，仍可选中以保持原值 */
+.cat-item.is-disabled {
+  border-style: dashed;
+  border-color: var(--color-transfer);
+  opacity: 0.86;
+}
+
+.cat-item.is-disabled.is-active {
+  border-style: solid;
+  border-color: var(--color-income);
+  opacity: 1;
+}
+
+.cat-item-disabled {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--color-transfer-soft);
+  color: var(--color-transfer-strong);
+  font-size: 9px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.cat-flyout-item.is-disabled {
+  color: var(--text-muted);
+}
+
+.cat-flyout-item .cat-item-disabled {
+  position: static;
+  margin-left: 6px;
+  display: inline-block;
+}
+
+/* 合并弹窗 */
+.merge-source {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.merge-warn {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-transfer-soft);
+  color: var(--color-transfer-strong);
+  border-left: 3px solid var(--color-transfer);
+}
+
+.merge-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
 }
 
 /* ==================== v0.06：Toast 轻提示 ==================== */
@@ -1007,7 +1225,7 @@ body {
 }
 
 .formula-hint.is-error {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* ==================== v0.06：转账相关 ==================== */
@@ -1020,9 +1238,11 @@ body {
   margin-left: 6px;
   padding: 0 5px;
   border-radius: 3px;
-  background: #f1f5f9;
-  color: #94a3b8;
+  /* v0.13.1：原先写死 #f1f5f9 / #94a3b8，深色模式下变成一块白底浅字，几乎看不清 */
+  background: var(--color-transfer-soft);
+  color: var(--color-transfer);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .category-tree .category-sub {
@@ -1032,14 +1252,14 @@ body {
 }
 
 .account-card-balance.is-negative {
-  color: #dc2626;
+  color: var(--color-expense);
 }
 
 /* ==================== v0.06.1：必填标记与字段错误 ==================== */
 /* 必填项 Label 后面的红 * */
 .req {
   margin-left: 2px;
-  color: #dc2626;
+  color: var(--danger);
   font-weight: 700;
 }
 
@@ -1048,7 +1268,7 @@ body {
   margin-top: 4px;
   font-size: 12px;
   line-height: 1.4;
-  color: #dc2626;
+  color: var(--danger);
 }
 
 /* 分类管理：给输入框补一行 label，红 * 才能和别的表单一致 */
@@ -1328,12 +1548,20 @@ body {
   color: var(--text-muted);
 }
 
-.cal-fig.is-plus,
-.cal-fig.is-net.is-plus {
+.cal-fig.is-plus {
   color: var(--pos);
 }
 
-.cal-fig.is-minus,
+.cal-fig.is-minus {
+  color: var(--neg);
+}
+
+/* v0.13.1：结余基色为灰（与收支总览指标卡、趋势图结余线一致），为负时红字警示。
+ * 正负号仍可从热力底色（绿 / 红）与「+ / -」号读出。 */
+.cal-fig.is-net {
+  color: var(--color-transfer-strong);
+}
+
 .cal-fig.is-net.is-minus {
   color: var(--neg);
 }
@@ -1884,7 +2112,7 @@ body {
 }
 
 .budget-card.is-over .budget-bar-fill {
-  background: linear-gradient(90deg, #f97316, #dc2626);
+  background: linear-gradient(90deg, var(--color-expense), var(--color-expense-strong));
 }
 
 .budget-card.is-over .budget-ring-text strong {
@@ -2667,7 +2895,7 @@ body {
 }
 
 .fab.is-over .fab-bar-fill {
-  background: linear-gradient(90deg, #f97316, #ef4444);
+  background: linear-gradient(90deg, var(--color-expense), var(--color-expense-strong));
 }
 
 .fab-line-sub {
@@ -3943,11 +4171,11 @@ body {
 }
 
 .asset-mini-value.is-plus {
-  color: #047857;
+  color: var(--color-income);
 }
 
 .asset-mini-value.is-minus {
-  color: #b91c1c;
+  color: var(--color-expense-strong);
 }
 
 .asset-mini-hint {
@@ -3987,11 +4215,11 @@ body {
 }
 
 .day-head-sub .plus {
-  color: #047857;
+  color: var(--color-income);
 }
 
 .day-head-sub .minus {
-  color: #b91c1c;
+  color: var(--color-expense-strong);
 }
 
 /* ---- 4. 回收站弹窗 ---- */
@@ -4136,7 +4364,7 @@ body {
 }
 
 .amt-neutral {
-  color: var(--text-main);
+  color: var(--color-transfer-strong);
 }
 
 /* ---- 侧栏极限缩窄到 140px，文字完整不截断 ---- */
@@ -5447,11 +5675,11 @@ body {
 }
 
 .bubble.is-done {
-  border-left-color: #10b981;
+  border-left-color: var(--color-income);
 }
 
 .bubble.is-error {
-  border-left-color: #ef4444;
+  border-left-color: var(--danger);
 }
 
 .bubble.is-clickable {
@@ -5480,13 +5708,13 @@ body {
 }
 
 .bubble.is-done .bubble-icon {
-  background: rgba(16, 185, 129, 0.14);
-  color: #059669;
+  background: var(--color-income-soft);
+  color: var(--color-income);
 }
 
 .bubble.is-error .bubble-icon {
-  background: rgba(239, 68, 68, 0.14);
-  color: #dc2626;
+  background: var(--color-expense-soft);
+  color: var(--danger);
 }
 
 .bubble-main {
@@ -6348,7 +6576,7 @@ body {
 }
 
 .album-del:hover {
-  background: var(--danger, #dc2626);
+  background: var(--danger);
 }
 
 .album-meta {
@@ -6366,7 +6594,7 @@ body {
 }
 
 .album-money.is-income {
-  color: var(--income, #059669);
+  color: var(--color-income);
 }
 
 .album-cat,
@@ -6505,14 +6733,14 @@ html.access-locked body {
 }
 
 .access-input.is-invalid {
-  border-color: #dc2626;
+  border-color: var(--danger);
   box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.14);
 }
 
 .access-error {
   margin: 0;
   font-size: 12.5px;
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .access-error[hidden] {
@@ -6781,7 +7009,7 @@ html.access-locked body {
 .bubble-revise-error {
   flex: 1 1 100%;
   margin: 0;
-  color: #dc2626;
+  color: var(--danger);
   font-size: 12px;
   line-height: 1.5;
 }
@@ -6858,7 +7086,7 @@ html.access-locked body {
 
 .duplicate-error {
   margin: 10px 0 0;
-  color: #dc2626;
+  color: var(--danger);
   font-size: 12.5px;
 }
 
@@ -6885,7 +7113,7 @@ html.access-locked body {
 
 .correct-error {
   margin: 8px 0 0;
-  color: #dc2626;
+  color: var(--danger);
   font-size: 12.5px;
 }
 
@@ -7185,23 +7413,82 @@ html.access-locked body {
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
 }
 
+/* v0.13.1：设置弹窗内的分组垂直节奏（只作用在弹窗里，「我的」页卡片布局不受影响） */
+#settings-modal .settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 0;
+}
+
+/* v0.13.1：底部说明统一排版（此前完全没写过规则，全靠浏览器默认 p 外边距） */
+.settings-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+}
+
+/* v0.13.1：设置弹窗高度自适应 —— 正文滚动、页头页脚常驻。
+ * 加满图标/卡片后正文会变高，这里保证「内容超出就滚动」，不会把底部按钮裁掉或叠在一起。 */
+#settings-modal .modal-dialog {
+  max-height: calc(100vh - 2rem);
+}
+
+#settings-modal .modal-content {
+  max-height: calc(100vh - 2rem);
+  overflow: hidden;
+}
+
+#settings-modal .modal-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#settings-modal .modal-header,
+#settings-modal .modal-footer {
+  flex: 0 0 auto;
+  background: var(--surface);
+}
+
+#settings-modal .modal-footer {
+  border-top: 1px solid var(--line);
+}
+
 .card-visibility {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 8px;
+  /* v0.13.1：固定 3 列等宽，minmax(0,1fr) 防止长文案把格子撑破 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+@media (max-width: 560px) {
+  .card-visibility {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .card-visibility-item {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   font-size: 12.8px;
   color: var(--text-main);
   cursor: pointer;
 }
 
+.card-visibility-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .card-visibility-item input {
-  accent-color: var(--brand-blue, #2563eb);
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--brand-blue);
 }
 
 .settings-actions {
@@ -7374,15 +7661,15 @@ html.access-locked body {
 }
 
 .search-pop-amount.is-expense {
-  color: #e5484d;
+  color: var(--color-expense);
 }
 
 .search-pop-amount.is-income {
-  color: #2f9e44;
+  color: var(--color-income);
 }
 
 .search-pop-amount.is-transfer {
-  color: var(--text-main);
+  color: var(--color-transfer);
 }
 
 .search-pop-type {
@@ -7508,7 +7795,7 @@ body.auth-locked {
 .auth-error {
   margin: 0 0 10px;
   font-size: 12px;
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .auth-submit {
@@ -7576,7 +7863,7 @@ body.auth-locked {
 }
 
 .import-status.is-error {
-  color: #dc2626;
+  color: var(--danger);
 }
 
 .import-summary {
@@ -8074,7 +8361,9 @@ body.auth-locked {
 
 .icon-picker-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* v0.13.1：两组严格等宽。minmax(0,1fr) 是关键——不加的话 grid 子项会被
+   * select 里最长的选项文字撑破，「类型」「对象」两个下拉宽度就不一致了。 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 10px;
 }
@@ -8083,24 +8372,28 @@ body.auth-locked {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12px;
-  color: var(--text-muted, #64748b);
   min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .icon-picker-field .form-select {
   width: 100%;
+  min-width: 0;
 }
 
 .icon-choice-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(78px, 1fr));
-  grid-auto-rows: 82px;
+  /* v0.13.1：图标库网格化——等宽等高格子，图标居中，名称单行省略 */
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  grid-auto-rows: 88px;
+  align-content: start;
   gap: 10px;
   margin-top: 4px;
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 4px;
+  /* v0.13.1 定案：不再限制内层高度 + 不再内层滚动。
+   * 内层滚动会让滚轮在图标区「卡住」、正文不动，矮屏下两层滚动条互相干扰；
+   * 现在整块跟着 modal-body 一起滚，全弹窗只有一个滚动条。 */
+  padding: 6px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.5);
 }
@@ -8111,31 +8404,65 @@ body.auth-locked {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  width: 100%;
   min-width: 0;
   height: 100%;
-  padding: 6px;
-  border: 1px solid var(--border-soft, #e6e8ee);
+  padding: 6px 4px;
+  overflow: hidden;
+  border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface, #fff);
+  background: var(--surface);
   cursor: pointer;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
 .icon-choice-tile:hover {
-  border-color: #2f7cf6;
+  border-color: var(--brand-blue);
   transform: translateY(-1px);
 }
 
+/* v0.13.1：选中态用语义绿 + 3px 光环。注意必须写在 [data-theme="dark"] .icon-choice-tile
+ * 之后或提高权重，否则深色下会被基础边框规则吃掉（旧版就是这么丢的选中高亮）。 */
 .icon-choice-tile.is-active {
-  border-color: #16a34a;
-  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.22);
+  border-color: var(--color-income);
+  box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.18);
 }
 
-.icon-choice-tile img {
+/* 缩略图容器：固定方框 + 裁切，任何图片都不会溢出格子 */
+.icon-choice-thumb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.icon-choice-thumb img {
   width: 30px;
   height: 30px;
   object-fit: contain;
   flex-shrink: 0;
+}
+
+/* 占位图形：图片是 1×1 占位图 / 已损坏时顶上，避免放大成一块纯色 */
+.icon-choice-fallback {
+  display: none;
+  width: 26px;
+  height: 26px;
+  color: var(--text-dim);
+}
+
+.icon-choice-thumb img.is-degenerate {
+  display: none;
+}
+
+.icon-choice-thumb img.is-degenerate + .icon-choice-fallback,
+.icon-choice-thumb.is-empty .icon-choice-fallback {
+  display: block;
 }
 
 .icon-choice-default {
@@ -8145,8 +8472,8 @@ body.auth-locked {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: rgba(47, 124, 246, 0.12);
-  color: #2f7cf6;
+  background: var(--brand-soft);
+  color: var(--brand-blue);
   font-size: 11px;
   flex-shrink: 0;
 }
@@ -8156,18 +8483,43 @@ body.auth-locked {
   width: 100%;
   font-size: 11px;
   line-height: 1.4;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted);
   text-align: center;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* v0.13.1：三个按钮像素级对齐。
+ * 「上传图标」是 <label> 包 hidden input，不是真 <button>，
+ * 这里复刻 .btn/.btn-sm 的盒模型（含 line-height），否则会差 1~2px。 */
 .icon-picker-actions {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 12px;
+}
+
+.icon-picker-actions > * {
+  flex: 0 0 auto;
+}
+
+/* v0.13.1：三个按钮显式统一成同一套盒模型。
+ * 「上传图标」是 <label> 包 hidden input，不是真 <button>，两边的 display / line-height
+ * 只要有一项不同就会出现 1~2px 的高度差和基线错位，所以这里三个一起写死。 */
+.icon-picker-actions .btn,
+.icon-picker-actions .icon-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 12px;
+  margin: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .icon-upload-btn {
@@ -8175,17 +8527,35 @@ body.auth-locked {
 }
 
 .settings-icon-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-top: 10px;
   font-size: 12px;
-  color: var(--text-muted, #64748b);
+  color: var(--text-muted);
+}
+
+.icon-preview-thumb {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 6px;
 }
 
 .settings-icon-preview img {
   width: 22px;
   height: 22px;
   object-fit: contain;
-  vertical-align: -6px;
-  margin-right: 6px;
+}
+
+.icon-preview-thumb .icon-choice-fallback {
+  width: 20px;
+  height: 20px;
 }
 
 [data-theme="dark"] .icon-picker {
@@ -8197,13 +8567,18 @@ body.auth-locked {
   background: rgba(15, 23, 42, 0.35);
 }
 
-[data-theme="dark"] .icon-choice-tile {
+/* v0.13.1 关键修复：:not(.is-active) 把选中态让出来。
+ * 原先是无条件的 [data-theme="dark"] .icon-choice-tile 排在 .is-active 之后，
+ * 同权重靠后覆盖 —— 深色模式下选中绿框被基础边框吃掉，用户完全看不出选了哪个。 */
+[data-theme="dark"] .icon-choice-tile:not(.is-active) {
   background: rgba(30, 41, 59, 0.9);
   border-color: rgba(148, 163, 184, 0.22);
 }
 
 [data-theme="dark"] .icon-choice-tile.is-active {
-  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.3);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: var(--color-income);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.28);
 }
 
 /* v0.12.5：侧栏昵称与 UID */
@@ -9008,6 +9383,8 @@ body.auth-locked {
   color: var(--text-main);
 }
 .chart-subnav-item.active {
+  /* 橙色是全站「选中 / 高亮」装饰色（与分类格子、账户卡选中态一致），
+   * 不承载收支语义，所以 v0.13.1 语义色重构不动它。 */
   background: rgba(249, 115, 22, 0.1);
   color: #ea580c;
   font-weight: 600;
@@ -9126,10 +9503,11 @@ body.auth-locked {
   color: var(--pos);
 }
 .chart-metric.is-net .chart-metric-value {
-  color: var(--text-strong);
+  color: var(--color-transfer-strong);
 }
+/* 结余为负 = 本月净流出，沿用支出红做负值警示（Owner：结余基色为灰） */
 .chart-metric.is-net .chart-metric-value.is-negative {
-  color: var(--neg);
+  color: var(--color-expense);
 }
 
 .chart-card {
@@ -9167,9 +9545,16 @@ body.auth-locked {
 }
 .chart-series-btn.active {
   background: var(--surface);
-  color: #ea580c;
+  /* v0.13.1：选中的系列直接用该系列的语义色，与折线颜色对上 */
+  color: var(--color-expense);
   font-weight: 600;
   box-shadow: var(--shadow-sm);
+}
+.chart-series-btn.active[data-chart-series="income"] {
+  color: var(--color-income);
+}
+.chart-series-btn.active[data-chart-series="net"] {
+  color: var(--color-transfer-strong);
 }
 .chart-canvas {
   width: 100%;
@@ -9205,6 +9590,13 @@ body.auth-locked {
   color: var(--pos);
 }
 .chart-summary-table .is-expense {
+  color: var(--neg);
+}
+/* 结余列基色为灰；为负时红字警示 */
+.chart-summary-table .is-net {
+  color: var(--color-transfer-strong);
+}
+.chart-summary-table .is-net.is-negative {
   color: var(--neg);
 }
 .chart-summary-table .is-negative {

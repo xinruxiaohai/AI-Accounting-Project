@@ -451,9 +451,9 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 真实 Chrome CDP 验证：temp/dom_v013.mjs + temp/dom_v013b.mjs 覆盖分类网格与浮层、成功气泡（记录已清理）、确认弹窗双路径、四周期标签与行数、翻页、深浅色、图标旋转中间态，全程无 JS 报错。
 - 自测：temp/test_v0130.py 5/5；回归 v0127 5/5、v0126 10/10、v0125 26/26、v0124 21/21、v0123 27/27、v0122 31/31、v0121 20/20、e2e 21/21；py_compile / node --check 通过。
 
-## v0.13.1-DEV（进行中，2026-10-31）
+## v0.13.1-DEV（2026-10-31，已封版）
 
-> 状态：Step1~Step4 与 T01（分类隔离）已交付并提交；T02~T05 未开工，**未打 tag**。
+> 状态：已打 tag `v0.13.1-DEV`。四阶段全部完成并通过真实浏览器验收（81/81），语义色 / 设置弹窗 / T05 数据完整性 / 图表缓存与翻页四个方向全部落地。
 
 - Step1 用户信息重置修复：头像改存 `static/uploads/avatars/`，uuid 文件名唯一，DB 存相对路径；上传成功后再清理旧文件（避免删了新文件却没落库）；启动即 `refreshProfileFromServer()`，服务重启后头像昵称不丢。
 - Step2 收支分类隔离：`categories` 增 `type` 列并幂等回填 `'expense'`；新增 `_seed_income_categories`（工资/兼职外快/投资理财/红包/利息/退款/其他收入）；`ensure_category`/`create_category` 全链路带 type；`renderCategoryGrid` 按收支严格过滤；分类管理新增收支下拉。
@@ -461,6 +461,29 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - Step4 账户折叠与「我的」对齐：资产分组可折叠，`grid-template-rows 1fr→0fr` 0.26s 动画 + chevron 旋转 + `aria-expanded` + 点击/键盘双路径；折叠状态按用户存 `ai-accounting-account-collapse::u<uid>`，换账号不串味；`#page-profile` 6 卡片 Grid 等高 + 按钮组 `margin-top:auto` 贴底（用 CSS `order` 把提示语提到按钮上方，未动 HTML 结构）。
 - T01 分类 `user_id` 完全隔离：新增 `_migrate_category_isolation()` 9 步幂等迁移（迁移前备份 → 补 6 列 → 回填 user_id=1 → 建 `uq_categories_user` → 再 DROP 旧 `uq_categories`），挂在 `_ensure_user_schema()` 之后、第二段 DML 之前；9 个分类查询函数全部加 `WHERE user_id = ?`；二级分类父级跨用户校验 400；新增幂等 `ensure_category_templates(user_id)`（补缺不覆盖）+ 注册补齐 + `POST /api/categories/ensure-templates`。
 - 安全修复 F2：`set_current_user()` 原写 `int(user_id or ADMIN_USER_ID)`，`0 or 1` 求值为 1，公开路径 `set_current_user(0)` 实际以管理员身份查库。改为只判断 `is None`，`0` 保持 `0`。同时修 F3（种子显式收 uid，禁依赖 ContextVar 默认 1）、F5（并发同名 IntegrityError→409）、F6（CREATE TABLE 直接补 user_id/type 双保险）、F12（`_RECORD_SELECT` 补 `category_parent_id`）。
-- 停用语义（schema 先行，UI 留 T05）：`is_disabled` 为唯一判定列，`disabled_at` 仅审计；**明令禁止给 categories 加 `deleted_at`**（已实库确认该列不存在，避免两套同名异义软删除）；`include_disabled` 仅限分类管理「已停用」管理区，编辑态走前端零请求合成。
-- 自测：temp/test_v0131_iso.py **49 项全通过 / 0 失败**（迁移 3 次幂等、双用户同名并存互不可见、跨用户引用 400、老用户 32 行零丢失、`set_current_user(0)`→0、停用语义全覆盖）；实库迁移后 categories 32 行全归 user_id=1（25 支出/7 收入），账目 18 条、账户 10 个零丢失；py_compile / node --check 通过。
-- 遗留：Step4 与 T01 的**真实 Chrome 浏览器回归未完成**（QA 侧上游网关异常中断）；T02 主题 / T03 素材 / T04 设置弹窗+C1 结账单卡 / T05 停用合并+周期模板未开工。设计见 `docs/design-v0131.md`，需求见 `docs/prd-v0131.md`。
+
+### 冲刺阶段四连（同一版本内完成）
+
+- **阶段一 全局语义色**：`style.css` `:root` 建 9 个语义令牌（`--color-expense/-soft/-strong`、`--color-income/…`、`--color-transfer/…`），`--pos/--neg` 改为别名指向它们，全站 41 处历史 `var(--pos)/var(--neg)` 零改动同步；补齐 15 个「引用了但从未定义」的失效变量。`script.js` 建唯一出口 `window.__chartColors()`（`getComputedStyle` 读真值 + `dark` 由 `data-theme`/`data-mode` 判定，禁止 hex 反推），`chartPalette()` 降为薄封装。`charts-v013.js` 的 `SERIES_META` 改为渲染时取色、`markLine` 三色语义化、修 `palette.line === "#24334a"` 反推深色的 Bug。浅色 `#dc2626/#047857/#64748b`、深色 `#f87171/#34d399/#94a3b8`，对比度全部 ≥4.5:1（`#059669` 白底仅 3.77:1 故改用 `#047857`）。
+- **阶段二 设置弹窗精修**：底部说明精简为「自定义图标仅影响当前设备显示，不改变账本底层数据。」并删重复句；图标网格 `minmax(92px,1fr)` + `grid-auto-rows:88px`，选中态绿色边框 + 3px 光环（用语义令牌，深色不被吃掉——原 `[data-theme="dark"] .icon-choice-tile` 同权重把选中态覆盖掉了）；两个下拉 `repeat(2,minmax(0,1fr))` 严格等宽；Checkbox 3 列；三按钮统一 `inline-flex/height:32px` 像素级对齐；去掉图标区内层滚动只留一层。**红块根因**：图标文件本身是 1×1 像素 PNG，被 `object-fit:contain` 放大成 30×30 实心块 → 新增 `guardIconImage()` 退化保护（`naturalWidth ≤2` 或裂图即隐藏 `<img>` 并显示占位 SVG）。
+- **阶段三 T05 静默改数据坑**：采用**双清单**架构——`state.recordOnlyCategories` 只装「当前账单自带但正式树已没有」的分类，唯一入口 `categorySource()`：编辑态返回「正式树 + 临时节点」，新增态原样返回 `state.categories`；`resetRecordForm()`/`closeRecordModal()` 清空。`fillCategoryParent()`/`fillCategoryChild()` 显式赋值并在回落时强制补 option，**绝不停在首项**。分类管理新增停用/恢复、合并弹窗（同 type、未停用、非自己）、「已停用」管理区（`?include_disabled=1`），合并/停用失败 Toast 透传后端文案（含「请先恢复上级分类」）。
+- **额外修复的两个既有 Bug**：① **图表页数据陈旧** —— `switchPage("charts")` 调的 `renderChartsPage()` 不带 force，命中 `loadRecords()` 缓存；改用 v0.13.0 就写好但从未被调用的 `reloadChartsPage()`（先 `pageState.records=null` 再重渲染）。② **月份翻页在 31 号失效** —— `shiftAnchor()` 用 `date.setMonth(getMonth()+step)`，`10-31` 减一月被 Date 溢出成 `9-31`→进位 `10-01`，月份原地不动；新增 `shiftMonthClamped()` 按目标月最后一天 `Math.min` 钳制，month/quarter 两支改走它。QA 枚举 2026 全年 365 天验证：旧算法月失效 7 天、季失效 5 天，新算法 0 天。
+- **版本一致性**：`APP_VERSION_FALLBACK`、`#sidebar-version` 兜底、`index.html`/`admin.html` 全部资源查询串统一 `?v=0.13.1`；两处 `service-worker.js` 缓存名 bump 为 `ai-accounting-v0.13.1`（不改则已装 PWA 的用户会拿到「新 HTML + SW 拦截返回的旧 JS/CSS」）。
+
+### 测试结论（真实 Chrome CDP，非静态自审）
+
+- 阶段一语义色 **24/24**、阶段二设置弹窗 **47/47**（含 620px 矮屏无重叠、深色对比度 7.15~13.86:1）、阶段三自测 **38/38**
+- T05 双向断言：**红基线 11/16**（`#category.value` 期望 41 实测 `"1"`）→ 修复后 **27/28**（5 条红全转绿、`135` 正确回填；唯一 FAIL 是上面那个图表缓存 Bug）→ 修完后 **35/35**（含 M1~M7 翻页与 X2 组）
+- 阶段四独立验收 **81/81**：F1 头像重启 **27/27**（真进程重启 + 浏览器硬刷新，`naturalWidth=128`、`complete=true`、旧头像替换后 404 且磁盘消失）；F2 图表配色 **29/29**（浅深各一遍，**全站无 `#f97316`/`#6366f1` 残留**，切主题不 reload 即变色）；F3 弹窗 **25/25**；F4 全量回归 +
+  五页巡检 console **0** error
+- 后端回归：`test_v0131_iso.py` **49/49**、`test_v0131_t05_api.py` **67/67**（含「改分类绝不动钱」：余额 -66.60 → -66.60、全库 `(32,18,10,-4665.8)` 前后一致）
+- 老测试：`test_v0130` 5/5、`test_v0126` 10/10、`test_v0125` 26/26（其中 v0125 图标格子断言改为「校验存在正的固定行高」而非写死 88px，避免每次调样式都假红；Grid 断言收窄到 `.icon-choice-grid` 自身块，原来会命中别处 `minmax(78px` 而假绿）
+- `py_compile` 3/3、`node --check` 4/4、全站零 `alert()`
+
+### 遗留（不影响本次封版）
+
+- 已知覆盖缺口：季度翻页真正会翻错的是 7-31 与 12-31，今天（10-31）不是触发日，无法在不清系统时钟的前提下留活体证据；已用 365 天枚举证明修复完整
+- `max == min` 时「最高」「最低」两个 markLine 标签会重叠，现实数据不会出现（总有空桶），未处理
+- 同款 1×1 退化图若被指派给某分类，`entityIconHtml()` 渲染的侧栏/列表图标仍会显示色块；`guardIconImage()` 可直接复用，建议单独排一个任务
+- Bootstrap 徽标 `#dc3545` 与 `--color-expense #dc2626` 有极轻微差异，属 Bootstrap 修饰类统一，留待单独任务
+- T02~T05 原始 PRD 里的「6 套主题」「图标库扩到 40+」「月度结账单卡」「周期账单模板」未在本轮实现，设计见 `docs/design-v0131.md`

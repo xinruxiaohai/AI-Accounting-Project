@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.13.0">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.1">
 </head>
 <body>
 
@@ -103,7 +103,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.13.0-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.13.1-DEV</div>
     </div>
   </aside>
 
@@ -1275,7 +1275,7 @@
             <div class="settings-icon-preview" id="icon-preview"></div>
             <p class="settings-error" id="icon-error" hidden></p>
           </div>
-          <p class="settings-hint">图标只影响你自己的显示，不会改变分类/账户本身。只影响当前设备，不会写入账本数据。</p>
+          <p class="settings-hint">自定义图标仅影响当前设备显示，不改变账本底层数据。</p>
           <p class="settings-error" id="settings-error" hidden></p>
         </section>
 
@@ -1605,6 +1605,51 @@
         <!-- 分类树由 script.js 渲染，每个节点带删除按钮 -->
         <p class="drag-hint">按住分类左侧的 ⋮⋮ 手柄可上下拖动排序；二级分类只在同一个父级内排序。</p>
         <ul class="category-tree" id="category-tree"></ul>
+
+        <!-- v0.13.1：已停用分类管理区（默认折叠，展开时才拉全量） -->
+        <div class="disabled-zone">
+          <button class="disabled-zone-toggle" type="button" id="disabled-zone-toggle"
+                  aria-expanded="false" aria-controls="disabled-zone-body">
+            <span class="disabled-zone-arrow" aria-hidden="true">▸</span>
+            <span>已停用的分类</span>
+            <span class="disabled-zone-count" id="disabled-zone-count">0</span>
+          </button>
+          <div class="disabled-zone-body" id="disabled-zone-body" hidden>
+            <p class="settings-hint">
+              停用的分类不会出现在新增记账、批量改分类和父级下拉里；历史账单仍保留它们，
+              编辑这类账单时会在网格里标成「已停用」。
+            </p>
+            <ul class="category-tree disabled-tree" id="disabled-category-tree"></ul>
+            <p class="empty-cell" id="disabled-empty" hidden>还没有停用的分类</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= v0.13.1：分类合并弹窗 ================= -->
+<div class="modal fade" id="category-merge-modal" tabindex="-1" aria-labelledby="category-merge-title"
+     aria-hidden="true" data-bs-keyboard="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="category-merge-title">合并分类</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+      </div>
+      <div class="modal-body">
+        <p class="merge-source" id="merge-source-text">把「—」合并到：</p>
+        <label class="form-label" for="merge-target">目标分类</label>
+        <select id="merge-target" class="form-select"></select>
+        <p class="settings-hint merge-warn">
+          源分类下的子分类会被一并停用，其账目不会自动迁移，需单独合并。
+        </p>
+        <p class="merge-hint" id="merge-hint">合并后源分类变成「已停用」，可以被恢复；账目金额与账户余额都不会变化。</p>
+        <p class="settings-error" id="merge-error" hidden></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" type="button" data-bs-dismiss="modal">取消</button>
+        <button class="btn btn-primary" type="button" id="merge-confirm-btn">确认合并</button>
       </div>
     </div>
   </div>
@@ -1827,11 +1872,11 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.13.0"></script>
-<script src="/static/access-guard.js?v=0.13.0"></script>
+<script src="/static/auth-v012.js?v=0.13.1"></script>
+<script src="/static/access-guard.js?v=0.13.1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.13.0"></script>
-<script src="/static/charts-v013.js?v=0.13.0"></script>
+<script src="/static/script.js?v=0.13.1"></script>
+<script src="/static/charts-v013.js?v=0.13.1"></script>
 
 </body>
 </html>

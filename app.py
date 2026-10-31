@@ -2407,6 +2407,70 @@ def ensure_category_templates():
     return jsonify(added=added, categories=database.list_categories_tree())
 
 
+@app.route("/api/categories/<int:category_id>/disabled", methods=["PATCH", "PUT"])
+@login_required
+def set_category_disabled(category_id):
+    """停用 / 恢复分类（v0.13.1 T05）。body: {"disabled": true|false}
+
+    PATCH 与 PUT 都接（设计文档 §5 写的是 PUT，前端契约写的是 PATCH，两种都能用）。
+    「停用」≠「消失」（D16）：行保留、被历史账单引用的值仍可回读（D19），只是不再出现在新增场景的选项里。
+    恢复二级分类时若上级仍是停用状态，返回 400「请先恢复上级分类」——
+    否则会出现「提示恢复成功、但分类在默认树里看不见」的假成功。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    disabled = data.get("disabled")
+    # 只认布尔（兼容 0/1 数字写法），避免 "false" 字符串被当成真值
+    if isinstance(disabled, int) and not isinstance(disabled, bool) and disabled in (0, 1):
+        disabled = bool(disabled)
+    if not isinstance(disabled, bool):
+        return jsonify(error="disabled 必须是 true 或 false"), 400
+
+    category, error = database.set_category_disabled(category_id, disabled)
+    if error is not None:
+        status = 404 if "不存在" in error else 400
+        return jsonify(error=error), status
+    return jsonify(category=category, disabled=disabled)
+
+
+@app.route("/api/categories/<int:category_id>/merge", methods=["POST", "PUT"])
+@login_required
+def merge_categories(category_id):
+    """把当前分类合并到另一个分类（v0.13.1 T05）。body: {"target_id": <int>}
+
+    合并语义（D12）：源分类下的账目全部改指向目标分类，源分类置为停用（不物理删除）。
+    红线：只改分类字段，不动任何金额字段、不动 accounts.balance。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    target_id = data.get("target_id")
+    if isinstance(target_id, bool) or not isinstance(target_id, int):
+        return jsonify(error="target_id 必须是整数"), 400
+
+    result, error = database.merge_categories(category_id, target_id)
+    if error is not None:
+        # 「分类不存在」→ 404（含跨用户：不泄露他人分类是否存在）；其余业务校验失败 → 400
+        status = 404 if "不存在" in error else 400
+        return jsonify(error=error), status
+
+    return jsonify(
+        ok=True,
+        moved=result["moved"],
+        migrated_records=result["migrated_records"],
+        source_id=result["source_id"],
+        target_id=result["target_id"],
+        disabled_source_ids=result["disabled_source_ids"],
+        source=result["source"],
+        target=result["target"],
+        # Q3：合并后前端直接用这份最新树整体覆盖 state.categories，避免四处增量拼接残留脏状态
+        categories=database.list_categories_tree(),
+    )
+
+
 # ---------------- 账户接口 ----------------
 
 @app.route("/api/accounts", methods=["GET"])
@@ -3009,7 +3073,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.0-DEV"
+APP_VERSION_FALLBACK = "v0.13.1-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

@@ -1619,6 +1619,146 @@ def delete_category(category_id):
         conn.close()
 
 
+def _category_row(conn, category_id, user_id):
+    """按 (id, user_id) 取一行完整分类，取不到返回 None（供停用 / 合并回读用）。"""
+    return conn.execute(
+        "SELECT id, user_id, name, parent_id, type, icon_key, color, is_disabled, disabled_at "
+        "  FROM categories WHERE id = ? AND user_id = ?",
+        (category_id, user_id),
+    ).fetchone()
+
+
+def _disable_category_scope(conn, user_id, category_id):
+    """把 category_id 及其一级子分类批量置为停用，返回被置停用的 id 列表。
+
+    项目最多两级（`create_category` 已禁止在二级分类下再建子分类），
+    所以按 parent_id 处理一层就足够覆盖全部后代，无需递归。
+    先按 id ASC 排好，保证返回的 id 列表稳定，便于前端与审计对齐。
+    """
+    rows = conn.execute(
+        "SELECT id FROM categories WHERE user_id = ? AND (id = ? OR parent_id = ?) "
+        "ORDER BY id",
+        (user_id, category_id, category_id),
+    ).fetchall()
+    ids = [row["id"] for row in rows]
+    if not ids:  # 调用方已校验存在，这里只是兜底防拼出空 IN ()
+        return []
+    placeholders = ",".join("?" for _ in ids)
+    conn.execute(
+        "UPDATE categories SET is_disabled = 1, disabled_at = datetime('now','localtime') "
+        " WHERE user_id = ? AND id IN (%s)" % placeholders,
+        [user_id] + ids,
+    )
+    return ids
+
+
+def set_category_disabled(category_id, disabled):
+    """停用 / 恢复一个分类，返回 (分类字典, 错误信息)。
+
+    v0.13.1（T05 / D12 / D16）：`is_disabled` 是**唯一**停用判定列，`disabled_at` 只做审计留痕；
+    「停用」≠「消失」——分类行永不被删除，历史账单里的引用仍然可回读（D19）。
+
+    三条语义取舍（写死在代码里，改动需同步 docs/design-v0131.md）：
+    1. **停用父分类时，其一级子分类一并停用**：父级不可选后，孤立的二级分类在默认列表里
+       也渲染不出来（`list_categories_tree` 会跳过父级缺失的孤儿行），连带停用才是自洽状态。
+    2. **恢复只恢复用户显式点击的那一个**：子分类需要用户自己逐个恢复，避免一次误点
+       把用户此前故意停用的子分类全部复活（宁可少恢复，也不静默改用户意图）。
+    3. **恢复子分类前必须先恢复父级**：父级仍停用时恢复子级会让「操作成功但默认树里看不见」，
+       这种「成功但结果不对」比直接报错更伤用户，故前置拦成「请先恢复上级分类」。
+    4. **幂等**：重复停用 / 重复恢复都返回成功，`disabled_at` 会刷新为「最近一次停用时间」，
+       不抛错、不产生重复行。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            uid = _uid()
+            row = _category_row(conn, category_id, uid)
+            if row is None:
+                return None, "分类不存在"
+
+            if disabled:
+                _disable_category_scope(conn, uid, category_id)
+            else:
+                # 取舍 3：父级仍停用时不允许恢复子级（否则子级在默认树里永远不显示）
+                if row["parent_id"] is not None:
+                    parent = _category_row(conn, row["parent_id"], uid)
+                    if parent is not None and int(parent["is_disabled"] or 0):
+                        return None, "请先恢复上级分类"
+                # 取舍 2：只恢复这一条，子分类留给用户自己恢复
+                conn.execute(
+                    "UPDATE categories SET is_disabled = 0, disabled_at = NULL "
+                    " WHERE id = ? AND user_id = ?",
+                    (category_id, uid),
+                )
+
+            updated = _category_row(conn, category_id, uid)
+            return _row_to_category(updated), None
+    finally:
+        conn.close()
+
+
+def merge_categories(source_id, target_id):
+    """把源分类合并进目标分类，返回 (结果字典, 错误信息)。
+
+    v0.13.1（T05 / D12）：合并 = **迁移账目 + 停用源分类**，源分类不物理删除（D19）。
+    两步必须同事务，任一步失败整体回滚。
+
+    红线（改分类不改钱）：这里**只动 records 的 category_id / category 两个分类字段**，
+    绝不触碰 amount / account / to_account / fee / type / 报销字段，也绝不碰 accounts.balance。
+    分类只是标签，迁移标签不得产生任何金额副作用。
+
+    校验顺序（错误文案要能被前端直接展示）：
+    1. 源、目标都必须属于当前用户 → 否则「分类不存在」（跨用户不泄露他人分类是否存在）
+    2. 源与目标相同 → 「不能合并到自己」
+    3. 目标分类必须未停用 → 否则「目标分类已停用」
+    4. 源与目标必须同一 type（支出不能并到收入）
+    5. 目标不能是源的子分类（合并会把源连同子分类一起停用，那样目标会被自己停用）
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            uid = _uid()
+            source = _category_row(conn, source_id, uid)
+            if source is None:
+                return None, "分类不存在"
+            target = _category_row(conn, target_id, uid)
+            if target is None:
+                return None, "分类不存在"
+            if source_id == target_id:
+                return None, "不能合并到自己"
+            if int(target["is_disabled"] or 0):
+                return None, "目标分类已停用，请先恢复后再合并"
+            source_type = source["type"] or "expense"
+            target_type = target["type"] or "expense"
+            if source_type != target_type:
+                return None, "支出分类和收入分类不能互相合并"
+            if target["parent_id"] is not None and target["parent_id"] == source_id:
+                return None, "不能把父分类合并到它自己的子分类"
+
+            # 第一步：迁移账目。category_id 指向目标，category 冗余名字同步（否则列表仍显示旧名）
+            cur = conn.execute(
+                "UPDATE records SET category_id = ?, category = ? "
+                " WHERE user_id = ? AND category_id = ?",
+                (target_id, target["name"], uid, source_id),
+            )
+            moved = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+            # 第二步：停用源分类（连同其一级子分类，理由见 _disable_category_scope）
+            disabled_ids = _disable_category_scope(conn, uid, source_id)
+
+            return {
+                "source_id": source_id,
+                "target_id": target_id,
+                "moved": moved,
+                "migrated_records": moved,
+                "disabled_source_ids": disabled_ids,
+                "source": _row_to_category(_category_row(conn, source_id, uid)),
+                "target": _row_to_category(_category_row(conn, target_id, uid)),
+            }, None
+    finally:
+        conn.close()
+
+
 def reorder_categories(ids, parent_id=None):
     """按拖拽后的顺序重排某一级下的分类，返回错误信息（成功为 None）。
 

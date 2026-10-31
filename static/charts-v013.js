@@ -18,10 +18,38 @@
   };
 
   var SERIES_META = {
-    expense: { key: "expense", label: "支出", color: "#f97316", net: false },
-    income: { key: "income", label: "收入", color: "#10b981", net: false },
-    net: { key: "net", label: "结余", color: "#6366f1", net: true },
+    expense: { key: "expense", label: "支出", net: false },
+    income: { key: "income", label: "收入", net: false },
+    net: { key: "net", label: "结余", net: true },
   };
+
+  // v0.13.1：语义色兜底值。真实值来自 CSS 变量，见 seriesColor()
+  var SERIES_COLOR_FALLBACK = {
+    expense: "#dc2626",
+    income: "#047857",
+    net: "#64748b",
+  };
+
+  /**
+   * 取当前主题下的语义色：支出红 / 收入绿 / 结余灰。
+   * 必须在每次渲染时调用（不能在本 IIFE 顶层读死），否则切主题后颜色不跟着变。
+   */
+  function seriesColor(key) {
+    var colors = null;
+    if (typeof window.__chartColors === "function") {
+      colors = window.__chartColors();
+    }
+    if (colors) {
+      if (key === "income") {
+        return colors.income || SERIES_COLOR_FALLBACK.income;
+      }
+      if (key === "net") {
+        return colors.transfer || SERIES_COLOR_FALLBACK.net;
+      }
+      return colors.expense || SERIES_COLOR_FALLBACK.expense;
+    }
+    return SERIES_COLOR_FALLBACK[key] || SERIES_COLOR_FALLBACK.expense;
+  }
 
   var pageState = {
     period: "month",
@@ -132,16 +160,28 @@
     return { start: start, end: end, label: label, buckets: buckets };
   }
 
+  /**
+   * 按月平移并「夹住」日期：Date.setMonth 会把 10-31 减 1 个月溢出成 10-01
+   * （9 月没有 31 号），导致点「上一期」标签原地不动。这里先算目标月的最后一天再取 min。
+   */
+  function shiftMonthClamped(date, delta) {
+    var year = date.getFullYear();
+    var month = date.getMonth() + delta;
+    var lastDay = new Date(year, month + 1, 0).getDate();
+    return new Date(year, month, Math.min(date.getDate(), lastDay));
+  }
+
   function shiftAnchor(period, anchor, step) {
     var next = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
     if (period === "year") {
       next.setFullYear(next.getFullYear() + step);
     } else if (period === "quarter") {
-      next.setMonth(next.getMonth() + step * 3);
+      // v0.13.1 X2-e：季度同样按「夹住日期」平移，10-31 减 3 个月不能溢出成 11-01
+      next = shiftMonthClamped(next, step * 3);
     } else if (period === "week") {
       next.setDate(next.getDate() + step * 7);
     } else {
-      next.setMonth(next.getMonth() + step);
+      next = shiftMonthClamped(next, step);
     }
     return next;
   }
@@ -239,7 +279,13 @@
   }
 
   function trendOption(buckets, seriesKey) {
-    var palette = typeof chartPalette === "function" ? chartPalette() : {};
+    // 优先走 __chartColors()（含 dark 布尔），退回 chartPalette() 以兼容旧加载顺序
+    var palette =
+      typeof window.__chartColors === "function"
+        ? window.__chartColors()
+        : typeof chartPalette === "function"
+          ? chartPalette()
+          : {};
     var meta = SERIES_META[seriesKey] || SERIES_META.expense;
     var labels = buckets.map(function (bucket) {
       return bucket.label;
@@ -258,12 +304,16 @@
     var strongColor = palette.strong || "#1e293b";
     var gridLine = palette.line || "#e6ebf2";
 
-    // 折线：渐变填充 + 圆点；净值为负时用另一套提示色
-    var seriesColor = meta.color;
-    // 面积填充透明度跟随主题：深色模式更透，避免大色块压住网格线与文字
-    var chartDark = palette.line === "#24334a";
-    var areaTop = hexToRgba(seriesColor, chartDark ? 0.14 : 0.22);
-    var areaBottom = hexToRgba(seriesColor, chartDark ? 0.01 : 0.02);
+    // 折线：渐变填充 + 圆点；颜色跟随当前选中系列的语义色
+    var seriesColorValue = seriesColor(seriesKey);
+    // 面积填充透明度跟随主题（palette.dark 由 __chartColors() 真实判定，不再靠 hex 反推）
+    var chartDark = palette.dark === true;
+    var areaTop = hexToRgba(seriesColorValue, chartDark ? 0.14 : 0.22);
+    var areaBottom = hexToRgba(seriesColorValue, chartDark ? 0.01 : 0.02);
+    // markLine 三条辅助线也走语义色，保持全站「红 / 绿 / 灰」三色体系
+    var maxColor = palette.expense || "#dc2626";
+    var minColor = palette.income || "#047857";
+    var avgColor = palette.transfer || "#64748b";
 
     return {
       animationDuration: 520,
@@ -322,8 +372,12 @@
           showSymbol: false,
           symbolSize: 7,
           data: values,
-          lineStyle: { width: 2.4, color: seriesColor },
-          itemStyle: { color: seriesColor, borderColor: palette.surface || "#fff", borderWidth: 2 },
+          lineStyle: { width: 2.4, color: seriesColorValue },
+          itemStyle: {
+            color: seriesColorValue,
+            borderColor: palette.surface || "#fff",
+            borderWidth: 2,
+          },
           emphasis: { focus: "series", scale: 1.4 },
           areaStyle: {
             color: {
@@ -353,20 +407,22 @@
               {
                 type: "max",
                 name: "最高",
-                lineStyle: { color: "#f43f5e" },
-                label: { color: "#f43f5e", position: "insideEndTop" },
+                lineStyle: { color: maxColor },
+                label: { color: maxColor, position: "insideEndTop" },
               },
               {
                 type: "min",
                 name: "最低",
-                lineStyle: { color: "#0ea5e9" },
-                label: { color: "#0ea5e9", position: "insideEndBottom" },
+                lineStyle: { color: minColor },
+                // v0.13.1：最低线通常就贴在 y=0 上，insideEndBottom 会把标签画到绘图区外，
+                // 和 x 轴最后几个日期刻度叠在一起。改成画在线之上（未改线的位置与颜色）。
+                label: { color: minColor, position: "insideEndTop" },
               },
               {
                 yAxis: Number(avg.toFixed(2)),
                 name: "均值",
-                lineStyle: { color: "#a855f7" },
-                label: { color: "#a855f7", position: "insideStartTop" },
+                lineStyle: { color: avgColor },
+                label: { color: avgColor, position: "insideStartTop" },
               },
             ],
           },
@@ -435,7 +491,7 @@
           "<td class=\"text-end is-expense\">" +
           (bucket.expense ? moneySafe(bucket.expense) : "—") +
           "</td>" +
-          "<td class=\"text-end " +
+          "<td class=\"text-end is-net " +
           (bucket.net < 0 ? "is-negative" : "") +
           '">' +
           moneySafe(bucket.net) +
@@ -454,7 +510,7 @@
       '<td class="text-end is-expense">' +
       moneySafe(totals.expense) +
       "</td>" +
-      '<td class="text-end ' +
+      '<td class="text-end is-net ' +
       (totals.net < 0 ? "is-negative" : "") +
       '">' +
       moneySafe(totals.net) +
@@ -631,7 +687,8 @@
       }
     });
 
-    // 深浅色切换后 ECharts 的配色得重算一遍
+    // 深浅色切换后 ECharts 的配色得重算一遍。
+    // v0.13.1：除 data-theme 外一并监听 data-mode（若有实现会用它），保证任意换肤入口都即时生效。
     if (window.MutationObserver) {
       var observer = new MutationObserver(function () {
         if (pageState.chart) {
@@ -640,7 +697,7 @@
       });
       observer.observe(document.documentElement, {
         attributes: true,
-        attributeFilter: ["data-theme"],
+        attributeFilter: ["data-theme", "data-mode"],
       });
     }
 

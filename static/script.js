@@ -40,17 +40,8 @@ const PAGE_SIZE_OPTIONS = [20, 50, 100, 0];
 const INFINITE_STEP = 20;
 const DEFAULT_BUDGET = 3000;
 
-// 饼图配色：蓝 / 橙 / 绿 / 红 / 紫 / 青 / 橘 / 灰，深浅色下都能看清
-const PIE_COLORS = [
-  "#2563eb",
-  "#f59e0b",
-  "#10b981",
-  "#ef4444",
-  "#8b5cf6",
-  "#06b6d4",
-  "#f97316",
-  "#64748b",
-];
+// v0.13.1：分类饼图调色板改由 pieColors() 生成（分类维度色相 + 首色让位语义支出红），
+// 不再写死在这里，详见下方「语义色唯一出口」区块。
 
 // 预算环半径 52，周长 2πr，画进度时用
 const BUDGET_RING_CIRCUMFERENCE = 326.73;
@@ -564,6 +555,19 @@ const state = {
   batchMode: "",
   batchRecordIds: [],
   batchAccountNames: [],
+  /*
+   * v0.13.1「双清单」——编辑态专用的临时分类清单。
+   *
+   * 为什么需要：分类被停用后就不在 state.categories 里了，但历史账单的 category_id
+   * 仍然指向它（D19）。编辑这种账单时如果找不到分类就静默跳过，浏览器会把
+   * <select> 回落到第一个选项（餐饮），用户不改任何字段点保存 → 分类被悄悄改掉。
+   *
+   * 所以编辑态额外维护这一个扁平清单，只装「账单自带的、但正式树里没有的分类」，
+   * 由账单字段（category / category_parent / category_parent_id）零请求合成。
+   * 它**只在 isEditingRecord() 为真时被 categorySource() 读取**，
+   * 新增记账、批量改分类、分类管理树、父级下拉一律不读它 —— 停用分类不会漏进新增场景。
+   */
+  recordOnlyCategories: [],
 };
 
 let recordModal = null;
@@ -731,10 +735,79 @@ function applyTypeUi() {
 
 /* ==================== 分类 ==================== */
 
+/** 是否处于「编辑已有账单」态：新增态一律 false，临时分类清单因此永不参与渲染 */
+function isEditingRecord() {
+  return state.editingId !== null && state.editingId !== undefined && state.editingId !== "";
+}
+
+/**
+ * 编辑态参与渲染的分类树 = 正式树 + 临时停用节点（按 parent_id 挂载）。
+ * 每次调用现拼，绝不改动 state.categories 本体，所以新增场景完全不受影响。
+ */
+function editCategoryTree() {
+  const base = state.categories.map(function (top) {
+    return {
+      id: top.id,
+      name: top.name,
+      type: top.type,
+      parent_id: null,
+      is_disabled: !!top.is_disabled,
+      children: top.children.slice(),
+    };
+  });
+  state.recordOnlyCategories.forEach(function (node) {
+    if (node.parent_id === null || node.parent_id === undefined) {
+      const exists = base.some(function (top) {
+        return Number(top.id) === Number(node.id);
+      });
+      if (!exists) {
+        base.push({
+          id: node.id,
+          name: node.name,
+          type: node.type,
+          parent_id: null,
+          is_disabled: true,
+          children: [],
+        });
+      }
+      return;
+    }
+    const parent = base.filter(function (top) {
+      return Number(top.id) === Number(node.parent_id);
+    })[0];
+    if (parent) {
+      parent.children.push(node);
+      return;
+    }
+    // 父级也停用了：连父级一起合成一个顶层节点，否则二级分类无处可挂
+    base.push({
+      id: node.parent_id,
+      name: node.parent_name || node.name,
+      type: node.type,
+      parent_id: null,
+      is_disabled: true,
+      children: [node],
+    });
+  });
+  return base;
+}
+
+/**
+ * 分类渲染/查询的唯一入口。
+ * 新增态 → 只给正式分类；编辑态 → 正式分类 + 临时停用节点。
+ */
+function categorySource() {
+  if (!isEditingRecord() || !state.recordOnlyCategories.length) {
+    return state.categories;
+  }
+  return editCategoryTree();
+}
+
 function findCategory(categoryId) {
   const id = Number(categoryId);
-  for (let i = 0; i < state.categories.length; i += 1) {
-    const top = state.categories[i];
+  const source = categorySource();
+  for (let i = 0; i < source.length; i += 1) {
+    const top = source[i];
     if (Number(top.id) === id) {
       return { node: top, parent: null };
     }
@@ -749,9 +822,10 @@ function findCategory(categoryId) {
 
 function childrenOf(parentId) {
   const id = Number(parentId);
-  for (let i = 0; i < state.categories.length; i += 1) {
-    if (Number(state.categories[i].id) === id) {
-      return state.categories[i].children;
+  const source = categorySource();
+  for (let i = 0; i < source.length; i += 1) {
+    if (Number(source[i].id) === id) {
+      return source[i].children;
     }
   }
   return [];
@@ -759,17 +833,36 @@ function childrenOf(parentId) {
 
 function fillCategoryParent(selectedId) {
   const select = $("category");
+  if (!select) {
+    return;
+  }
+  const source = categorySource();
   select.innerHTML = "";
 
-  state.categories.forEach(function (top) {
+  source.forEach(function (top) {
     const option = document.createElement("option");
     option.value = String(top.id);
-    option.textContent = top.name;
+    option.textContent = top.is_disabled ? top.name + "（已停用）" : top.name;
     select.appendChild(option);
   });
 
-  if (selectedId !== undefined && selectedId !== null) {
-    select.value = String(selectedId);
+  if (selectedId === undefined || selectedId === null || selectedId === "") {
+    return;
+  }
+  // v0.13.1：必须显式赋值。原来只重建 <option> 不赋值，浏览器默认选第一项，
+  // 于是「编辑一张挂在停用分类上的账单」会被悄悄改成餐饮。
+  const want = String(selectedId);
+  select.value = want;
+  if (select.value !== want) {
+    // 兜底：万一目标 option 不在列表里（数据异常），补一个并强制选中，绝不留在首项
+    const known = source.filter(function (top) {
+      return String(top.id) === want;
+    })[0];
+    const fallback = document.createElement("option");
+    fallback.value = want;
+    fallback.textContent = known ? known.name : "已停用的分类";
+    select.appendChild(fallback);
+    select.value = want;
   }
 }
 
@@ -794,12 +887,24 @@ function fillCategoryChild(parentId, selectedChildId) {
   children.forEach(function (child) {
     const option = document.createElement("option");
     option.value = String(child.id);
-    option.textContent = child.name;
+    option.textContent = child.is_disabled ? child.name + "（已停用）" : child.name;
     select.appendChild(option);
   });
 
   if (selectedChildId !== undefined && selectedChildId !== null && selectedChildId !== "") {
-    select.value = String(selectedChildId);
+    // v0.13.1：同样要显式赋值 + 校验，避免浏览器回落到「不细分」
+    const want = String(selectedChildId);
+    select.value = want;
+    if (select.value !== want) {
+      const known = children.filter(function (child) {
+        return String(child.id) === want;
+      })[0];
+      const fallback = document.createElement("option");
+      fallback.value = want;
+      fallback.textContent = known ? known.name : "已停用的分类";
+      select.appendChild(fallback);
+      select.value = want;
+    }
   }
 
   updateSubCategoryVisibility();
@@ -882,16 +987,18 @@ function renderCategoryGrid() {
   grid.dataset.type = income ? "income" : "expense";
   const topId = selectedTopCategoryId();
   const wantType = income ? "income" : "expense";
-  grid.innerHTML = state.categories
+  grid.innerHTML = categorySource()
     .filter(function (top) {
       // 收支分类彻底隔离：只渲染当前收支类型下的分类，互不串
       return (top.type || "expense") === wantType;
     })
     .map(function (top) {
       const active = Number(top.id) === Number(topId);
+      const disabled = !!top.is_disabled;
       return (
         '<button type="button" class="cat-item' +
         (active ? " is-active" : "") +
+        (disabled ? " is-disabled" : "") +
         '" data-cat-id="' +
         top.id +
         '" role="option" aria-selected="' +
@@ -903,6 +1010,7 @@ function renderCategoryGrid() {
         '<span class="cat-item-name">' +
         escapeHtml(top.name) +
         "</span>" +
+        (disabled ? '<span class="cat-item-disabled">已停用</span>' : "") +
         (top.children.length
           ? '<span class="cat-item-more">' + top.children.length + "</span>"
           : "") +
@@ -966,13 +1074,16 @@ function openCategoryFlyout(topId, itemElement) {
   const currentChild = $("sub-category") ? $("sub-category").value : "";
   list.innerHTML = children
     .map(function (child) {
+      const disabled = !!child.is_disabled;
       return (
         '<button type="button" class="cat-flyout-item' +
         (String(currentChild) === String(child.id) ? " is-active" : "") +
+        (disabled ? " is-disabled" : "") +
         '" data-cat-child="' +
         child.id +
         '">' +
         escapeHtml(child.name) +
+        (disabled ? '<span class="cat-item-disabled">已停用</span>' : "") +
         "</button>"
       );
     })
@@ -1100,9 +1211,12 @@ function countRecordsByCategory() {
   return counts;
 }
 
-async function loadCategories() {
-  const data = await api("/api/categories");
-  state.categories = data.categories || [];
+/**
+ * 把一份分类树落到 state 上并重画所有依赖视图。
+ * 合并接口会返回最新完整树，直接喂进来即可，不用前端自己拼装。
+ */
+function applyCategoryTree(tree) {
+  state.categories = Array.isArray(tree) ? tree : [];
 
   fillCategoryParent($("category").value ? Number($("category").value) : null);
   fillCategoryChild($("category").value, $("sub-category").value);
@@ -1121,6 +1235,11 @@ async function loadCategories() {
 
   renderCategoryTree();
   renderCategoryGrid();
+}
+
+async function loadCategories() {
+  const data = await api("/api/categories");
+  applyCategoryTree(data.categories || []);
 }
 
 function renderCategoryTree() {
@@ -1166,8 +1285,26 @@ function renderCategoryTree() {
 function categoryRowHtml(category, counts, isTop) {
   const used = counts[String(category.id)] || 0;
   const tag = used ? '<span class="tag-count">' + used + " 笔</span>" : "";
+  const disabled = !!category.is_disabled;
+  const id = String(category.id);
+  // v0.13.1：停用 / 恢复（切换）+ 合并 + 删除，统一收在右侧操作区，标题区可伸缩不被挤
+  const toggleLabel = disabled ? "恢复" : "停用";
+  const actions =
+    '<span class="category-actions">' +
+    '<button class="cat-op" type="button" data-toggle-disabled="' +
+    id +
+    '" data-disabled="' +
+    (disabled ? "1" : "0") +
+    '">' +
+    toggleLabel +
+    "</button>" +
+    (disabled
+      ? ""
+      : '<button class="cat-op" type="button" data-merge-category="' + id + '">合并</button>') +
+    '<button class="cat-del" type="button" data-del-category="' + id + '">删除</button>' +
+    "</span>";
   return (
-    '<div class="category-row">' +
+    '<div class="category-row' + (disabled ? " is-disabled" : "") + '">' +
     '<span class="drag-handle" title="按住拖动排序" aria-hidden="true">⋮⋮</span>' +
     '<span class="category-icon">' +
     entityIconHtml("category", category.name, 22) +
@@ -1176,13 +1313,12 @@ function categoryRowHtml(category, counts, isTop) {
     escapeHtml(category.name) +
     "</span>" +
     (category.type === "income"
-      ? '<span class="category-tip" style="background:#e7f7ee;color:#1a7f4b;">收入</span>'
-      : '<span class="category-tip" style="background:#fdecea;color:#c0392b;">支出</span>') +
+      ? '<span class="category-tip" style="background:var(--color-income-soft);color:var(--color-income-strong);">收入</span>'
+      : '<span class="category-tip" style="background:var(--color-expense-soft);color:var(--color-expense-strong);">支出</span>') +
     (isTop ? "" : '<span class="category-tip">二级</span>') +
+    (disabled ? '<span class="cat-disabled-tag">已停用</span>' : "") +
     tag +
-    '<button class="cat-del" type="button" data-del-category="' +
-    category.id +
-    '">删除</button>' +
+    actions +
     "</div>"
   );
 }
@@ -2462,13 +2598,65 @@ function renderBudget() {
 let pieChart = null;
 let trendChart = null;
 
+/** 当前是否深色主题（data-theme 为主，兼容 data-mode 写法），禁止用 hex 反推 */
 function isDarkMode() {
-  return document.documentElement.getAttribute("data-theme") === "dark";
+  const root = document.documentElement;
+  return (
+    root.getAttribute("data-theme") === "dark" || root.getAttribute("data-mode") === "dark"
+  );
 }
 
-/** 图表用的文字 / 线条颜色，跟随深色模式 */
-function chartPalette() {
-  const dark = isDarkMode();
+/*
+ * ===== v0.13.1 语义色唯一出口 =====
+ * 支出 = 红 / 收入 = 绿 / 转账·结余 = 灰。
+ * 真实值只在 static/style.css 的 :root / [data-theme="dark"] 里定义，
+ * 其它地方（图表、饼图、热力图）一律从这里读，保证「改一处、全站同步」。
+ */
+const CHART_COLOR_FALLBACK = {
+  expense: "#dc2626",
+  expenseSoft: "#fef2f2",
+  income: "#047857",
+  incomeSoft: "#ecfdf5",
+  transfer: "#64748b",
+  transferSoft: "#f1f5f9",
+};
+
+/** 读 CSS 变量真实值，空串 / 读取失败时用兜底，避免图表拿到 undefined 变全黑 */
+function cssColorVar(name, fallback) {
+  let raw = "";
+  try {
+    raw = getComputedStyle(document.documentElement).getPropertyValue(name) || "";
+  } catch (error) {
+    raw = "";
+  }
+  const value = raw.trim();
+  return value || fallback;
+}
+
+/** hex（#rgb / #rrggbb）→ [r, g, b]；解析失败返回 null */
+function hexToRgbTriplet(hex) {
+  let value = String(hex || "").trim().replace("#", "");
+  if (value.length === 3) {
+    value = value[0] + value[0] + value[1] + value[1] + value[2] + value[2];
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(value)) {
+    return null;
+  }
+  return [
+    parseInt(value.slice(0, 2), 16),
+    parseInt(value.slice(2, 4), 16),
+    parseInt(value.slice(4, 6), 16),
+  ];
+}
+
+/** hex → rgba(...)；解析失败时用 fallbackRgb 兜底，保证渐变永远有颜色 */
+function rgbaFromHex(hex, alpha, fallbackRgb) {
+  const rgb = hexToRgbTriplet(hex) || fallbackRgb || [37, 99, 235];
+  return "rgba(" + rgb.join(", ") + ", " + alpha + ")";
+}
+
+/** 中性色（文字 / 线条 / 卡片底）——只跟主题有关，不含语义色 */
+function neutralPalette(dark) {
   return {
     text: dark ? "#cbd5e1" : "#475569",
     strong: dark ? "#e2e8f0" : "#1e293b",
@@ -2476,6 +2664,65 @@ function chartPalette() {
     surface: dark ? "#131c2b" : "#ffffff",
     brand: dark ? "#3b82f6" : "#2563eb",
   };
+}
+
+/**
+ * 图表 / 热力图 / 图例的取色出口。
+ * 每次调用都重新读 CSS 变量，所以切换主题后直接重绘即可生效，不需要刷新页面。
+ */
+window.__chartColors = function () {
+  const dark = isDarkMode();
+  const neutral = neutralPalette(dark);
+  return {
+    expense: cssColorVar("--color-expense", CHART_COLOR_FALLBACK.expense),
+    income: cssColorVar("--color-income", CHART_COLOR_FALLBACK.income),
+    transfer: cssColorVar("--color-transfer", CHART_COLOR_FALLBACK.transfer),
+    expenseSoft: cssColorVar("--color-expense-soft", CHART_COLOR_FALLBACK.expenseSoft),
+    incomeSoft: cssColorVar("--color-income-soft", CHART_COLOR_FALLBACK.incomeSoft),
+    transferSoft: cssColorVar("--color-transfer-soft", CHART_COLOR_FALLBACK.transferSoft),
+    text: neutral.text,
+    strong: neutral.strong,
+    line: neutral.line,
+    surface: neutral.surface,
+    brand: neutral.brand,
+    dark: dark,
+  };
+};
+
+/** 图表中性色。v0.13.1 起保留为 __chartColors() 的薄封装，避免遗漏历史调用点 */
+function chartPalette() {
+  const colors = window.__chartColors();
+  return {
+    text: colors.text,
+    strong: colors.strong,
+    line: colors.line,
+    surface: colors.surface,
+    brand: colors.brand,
+    expense: colors.expense,
+    income: colors.income,
+    transfer: colors.transfer,
+    dark: colors.dark,
+  };
+}
+
+/**
+ * 分类维度调色板（不是收支语义色）。
+ * 本月支出饼图的切片全部是支出，若切片全红会失去区分度，
+ * 因此保留色相区分，但首色固定为语义支出红，让饼图与列表的「红=支出」语言一致。
+ * 刻意避开语义收入绿（#10b981 系），避免误读成「收入切片」。
+ */
+function pieColors() {
+  const colors = window.__chartColors();
+  return [
+    colors.expense,
+    "#f59e0b",
+    "#8b5cf6",
+    "#06b6d4",
+    "#ec4899",
+    "#14b8a6",
+    "#6366f1",
+    colors.transfer,
+  ];
 }
 
 /**
@@ -2583,6 +2830,7 @@ function chartToolbox() {
 
 function pieOption(list, count) {
   const palette = chartPalette();
+  const sliceColors = pieColors();
   const empty = !list.length;
 
   return {
@@ -2612,7 +2860,7 @@ function pieOption(list, count) {
           textStyle: { color: palette.text, fontSize: 12, fontWeight: "normal" },
         }
       : undefined,
-    color: PIE_COLORS,
+    color: sliceColors,
     legend: {
       type: "scroll",
       bottom: 0,
@@ -2651,7 +2899,7 @@ function pieOption(list, count) {
               return {
                 name: item.name,
                 value: item.value,
-                itemStyle: { color: PIE_COLORS[index % PIE_COLORS.length] },
+                itemStyle: { color: sliceColors[index % sliceColors.length] },
               };
             }),
       },
@@ -2688,13 +2936,17 @@ function pieOption(list, count) {
 
 function trendOption(series) {
   const palette = chartPalette();
-  const dark = isDarkMode();
+  // v0.13.1：三条线的颜色全部走语义色出口（支出红 / 收入绿 / 结余灰），不再写死 hex
+  const semantic = window.__chartColors();
+  const dark = semantic.dark;
   const empty = series.total <= 0;
   const colors = {
-    expense: dark ? "#f87171" : "#dc2626",
-    income: dark ? "#34d399" : "#059669",
-    net: dark ? "#94a3b8" : "#9ca3af",
+    expense: semantic.expense,
+    income: semantic.income,
+    net: semantic.transfer,
   };
+  const expenseAreaRgb = hexToRgbTriplet(semantic.expense) || [220, 38, 38];
+  const netAreaRgb = hexToRgbTriplet(semantic.transfer) || [148, 163, 184];
   // v0.11.4：图例独占一行（top:30），toolbox 退到右上角（top:4），
   // grid.top 再让出两条标题带，保证图例 / 工具栏 / 折线三者不重叠
   const toolbox = chartToolbox();
@@ -2781,8 +3033,11 @@ function trendOption(series) {
         itemStyle: { color: colors.expense, opacity: 0.8 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: dark ? "rgba(248,113,113,.22)" : "rgba(220,38,38,.18)" },
-            { offset: 1, color: "rgba(220,38,38,.02)" },
+            {
+              offset: 0,
+              color: rgbaFromHex(semantic.expense, dark ? 0.22 : 0.18, expenseAreaRgb),
+            },
+            { offset: 1, color: rgbaFromHex(semantic.expense, 0.02, expenseAreaRgb) },
           ]),
         },
         emphasis: { focus: "series" },
@@ -2811,8 +3066,11 @@ function trendOption(series) {
         itemStyle: { color: colors.net, opacity: 0.8 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: dark ? "rgba(148,163,184,.18)" : "rgba(156,163,175,.18)" },
-            { offset: 1, color: "rgba(148,163,184,.01)" },
+            {
+              offset: 0,
+              color: rgbaFromHex(semantic.transfer, dark ? 0.18 : 0.16, netAreaRgb),
+            },
+            { offset: 1, color: rgbaFromHex(semantic.transfer, 0.01, netAreaRgb) },
           ]),
         },
         emphasis: { focus: "series" },
@@ -3810,11 +4068,14 @@ function setDetailHead(title, sub) {
 
 /* ==================== 日历热力图 ==================== */
 
-// 纯色只留两个：正结余绿（#059669）、负结余红（#dc2626）
-const HEAT_RGB = {
-  plus: [5, 150, 105],
-  minus: [220, 38, 38],
-};
+// v0.13.1：热力图不再写死 RGB，正/负一律取语义色（正=收入绿、负=支出红）。
+// 深色档由 CSS 变量的深色取值自动提亮，这里只管透明度。
+/** 正结余 → 收入绿，负结余 → 支出红 */
+function heatRgb(net) {
+  const colors = window.__chartColors();
+  const hex = net > 0 ? colors.income : colors.expense;
+  return hexToRgbTriplet(hex) || (net > 0 ? [4, 120, 87] : [220, 38, 38]);
+}
 // v0.06.2：透明度上限压到 0.35。底色最深处也只是浅浅一层，
 // 深色文字在任何格子上都看得清，不再出现「底色一深就把字刷白」的混搭。
 const HEAT_MIN_ALPHA = 0.1;
@@ -3848,7 +4109,7 @@ function heatTone(net, peak) {
   const ratio = Math.min(1, Math.abs(amount) / peak);
   return {
     alpha: HEAT_MIN_ALPHA + (HEAT_MAX_ALPHA - HEAT_MIN_ALPHA) * ratio,
-    rgb: HEAT_RGB[amount > 0 ? "plus" : "minus"],
+    rgb: heatRgb(amount),
   };
 }
 
@@ -3859,15 +4120,11 @@ function paintHeat(cell, net, peak) {
     return;
   }
   cell.classList.add("has-heat");
-  // 深色主题：红绿换成更亮的一档，并略提透明度，避免在深底上发灰看不清
-  const dark = document.documentElement.getAttribute("data-theme") === "dark";
-  const rgb = dark
-    ? net > 0
-      ? [16, 185, 129]
-      : [248, 113, 113]
-    : tone.rgb;
-  const alpha = dark ? Math.min(0.62, tone.alpha * 1.45) : tone.alpha;
-  cell.style.backgroundColor = "rgba(" + rgb.join(", ") + ", " + alpha.toFixed(3) + ")";
+  // 深色主题：语义色本身已提亮一档（--color-income/expense 的深色取值），这里只提透明度
+  const dark = isDarkMode();
+  const alpha = dark ? Math.min(0.62, tone.alpha * 1.35) : tone.alpha;
+  cell.style.backgroundColor =
+    "rgba(" + tone.rgb.join(", ") + ", " + alpha.toFixed(3) + ")";
 }
 
 /** 日格里的 收 / 支 / 结 三行（中屏只留结余、极小屏只留底色，由 CSS 控制） */
@@ -4689,6 +4946,8 @@ async function saveDebt(values) {
 function resetRecordForm() {
   state.editingId = null;
   state.presetAccount = "";
+  // v0.13.1：新增态必须清空临时分类清单，这是「停用分类不漏进新增场景」的开关
+  state.recordOnlyCategories = [];
   // 上一次保存如果还卡在「保存中…」，先还原按钮，再复位文案
   setButtonBusy($("save-btn"), false);
   clearFormErrors($("record-modal"));
@@ -4715,6 +4974,32 @@ function resetRecordForm() {
   fillAccountSelects();
 }
 
+/**
+ * v0.13.1：编辑态把账单自带、但正式分类树里已经没有的分类合成一个临时节点。
+ * 只吃 record 上的字段（category / category_parent / category_parent_id），零请求。
+ */
+function adoptRecordCategory(record) {
+  const id = Number(record.category_id);
+  if (!id || findCategory(id)) {
+    return;
+  }
+  const parentId = Number(record.category_parent_id) || 0;
+  const node = {
+    id: id,
+    name: String(record.category || "").trim() || "已删除的分类",
+    type: record.type === "income" ? "income" : "expense",
+    parent_id: parentId > 0 ? parentId : null,
+    parent_name: String(record.category_parent || "").trim(),
+    is_disabled: true,
+  };
+  const exists = state.recordOnlyCategories.some(function (item) {
+    return Number(item.id) === id;
+  });
+  if (!exists) {
+    state.recordOnlyCategories.push(node);
+  }
+}
+
 function fillRecordForm(record) {
   // 金额：有公式就回显公式，让用户还能接着改算式
   $("amount").value = record.formula ? record.formula : String(cents(record.amount));
@@ -4734,6 +5019,9 @@ function fillRecordForm(record) {
   }
 
   // 分类：先定位到一级，再把二级选上
+  // v0.13.1：找不到（分类已被停用）时先把它合成进临时清单再回填，
+  // 绝不留在「浏览器默认首项」上——那正是静默改分类的根因。
+  adoptRecordCategory(record);
   const found = findCategory(record.category_id);
   if (found) {
     if (found.parent) {
@@ -4778,6 +5066,8 @@ function openRecordModal(options) {
 }
 
 function closeRecordModal() {
+  // v0.13.1：编辑结束后清掉临时分类清单，避免后续任何一次重绘把它带出来
+  state.recordOnlyCategories = [];
   if (recordModal) {
     recordModal.hide();
   }
@@ -5247,6 +5537,241 @@ async function removeCategory(categoryId) {
   }
 }
 
+/* ==================== v0.13.1：分类停用 / 恢复 / 合并 ==================== */
+
+/** 最近一次 include_disabled=1 拉到的全量分类树（「已停用」管理区专用） */
+let disabledCategoryTree = null;
+/** 合并弹窗当前操作的源分类 id */
+let mergeSourceId = null;
+
+function categoryCountsOrEmpty() {
+  return countRecordsByCategory();
+}
+
+/**
+ * 停用 / 恢复一个分类。
+ * 后端把「恢复子分类但父级仍停用」拦成 400「请先恢复上级分类」，
+ * 这里原样把后端文案 Toast 出来，不自己编提示。
+ */
+async function setCategoryDisabled(categoryId, disabled) {
+  const lockKey = "category-disabled-" + categoryId;
+  if (!lockAction(lockKey)) {
+    return;
+  }
+  try {
+    await api(
+      "/api/categories/" + categoryId + "/disabled",
+      jsonOptions("PATCH", { disabled: disabled })
+    );
+    toast(disabled ? "分类已停用，新增记账不再显示它" : "分类已恢复", "success");
+    await loadCategories();
+    await loadRecords();
+    await loadDisabledCategories();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    unlockAction(lockKey);
+  }
+}
+
+/** 「已停用」管理区折叠 / 展开；展开时顺手刷新一次（停用状态可能被别处改过） */
+function toggleDisabledZone() {
+  const body = $("disabled-zone-body");
+  const toggle = $("disabled-zone-toggle");
+  if (!body || !toggle) {
+    return;
+  }
+  const open = body.hidden;
+  body.hidden = !open;
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  toggle.classList.toggle("is-open", open);
+  if (open) {
+    loadDisabledCategories();
+  }
+}
+
+/** 拉全量分类（含停用），只渲染 is_disabled=1 的项 */
+async function loadDisabledCategories() {
+  const list = $("disabled-category-tree");
+  const empty = $("disabled-empty");
+  const countEl = $("disabled-zone-count");
+  if (!list) {
+    return;
+  }
+  try {
+    const data = await api("/api/categories?include_disabled=1");
+    disabledCategoryTree = data.categories || [];
+  } catch (error) {
+    disabledCategoryTree = [];
+    toast(error.message, "error");
+  }
+
+  // 展平成一行一条：一级停用的单独成行，二级停用的也单独成行（各自单独恢复）
+  const rows = [];
+  disabledCategoryTree.forEach(function (top) {
+    if (top.is_disabled) {
+      rows.push({ node: top, isTop: true });
+    }
+    (top.children || []).forEach(function (child) {
+      if (child.is_disabled) {
+        rows.push({ node: child, isTop: false });
+      }
+    });
+  });
+
+  const counts = categoryCountsOrEmpty();
+  list.innerHTML = rows
+    .map(function (item) {
+      return (
+        '<li data-category-id="' +
+        item.node.id +
+        '">' +
+        categoryRowHtml(item.node, counts, item.isTop) +
+        "</li>"
+      );
+    })
+    .join("");
+  if (empty) {
+    empty.hidden = rows.length > 0;
+  }
+  if (countEl) {
+    countEl.textContent = String(rows.length);
+  }
+}
+
+/** 打开合并弹窗：目标只列「同 type、未停用、不是自己」的分类 */
+function openMergeModal(categoryId) {
+  const found = findCategory(categoryId);
+  const modalElement = $("category-merge-modal");
+  const select = $("merge-target");
+  const sourceText = $("merge-source-text");
+  const errorBox = $("merge-error");
+  const confirmButton = $("merge-confirm-btn");
+  if (!found || !modalElement || !select || !sourceText) {
+    toast("分类不存在，请刷新后重试", "error");
+    return;
+  }
+
+  mergeSourceId = Number(categoryId);
+  const label = found.parent ? found.parent.name + " / " + found.node.name : found.node.name;
+  sourceText.textContent = "把「" + label + "」合并到：";
+  if (errorBox) {
+    errorBox.hidden = true;
+    errorBox.textContent = "";
+  }
+
+  const type = found.node.type || "expense";
+  const options = [];
+  state.categories.forEach(function (top) {
+    if ((top.type || "expense") !== type || top.is_disabled) {
+      return;
+    }
+    if (Number(top.id) !== Number(categoryId)) {
+      options.push({ id: top.id, label: top.name });
+    }
+    (top.children || []).forEach(function (child) {
+      if (child.is_disabled || Number(child.id) === Number(categoryId)) {
+        return;
+      }
+      options.push({ id: child.id, label: top.name + " / " + child.name });
+    });
+  });
+
+  if (!options.length) {
+    select.innerHTML = '<option value="">没有可合并的目标分类</option>';
+    select.disabled = true;
+    if (confirmButton) {
+      confirmButton.disabled = true;
+    }
+  } else {
+    select.disabled = false;
+    if (confirmButton) {
+      confirmButton.disabled = false;
+    }
+    select.innerHTML = options
+      .map(function (item) {
+        return '<option value="' + item.id + '">' + escapeHtml(item.label) + "</option>";
+      })
+      .join("");
+  }
+
+  if (window.bootstrap) {
+    window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
+  }
+}
+
+/** 确认合并：先走项目统一的 confirmAction，再调后端 */
+async function submitMergeCategory() {
+  const select = $("merge-target");
+  const errorBox = $("merge-error");
+  const targetId = select ? Number(select.value) : 0;
+  if (!mergeSourceId || !targetId) {
+    if (errorBox) {
+      errorBox.textContent = "请先选择要合并到的目标分类";
+      errorBox.hidden = false;
+    }
+    return;
+  }
+  const found = findCategory(mergeSourceId);
+  const sourceLabel = found
+    ? found.parent
+      ? found.parent.name + " / " + found.node.name
+      : found.node.name
+    : "该分类";
+  const targetLabel = select.selectedOptions.length
+    ? select.selectedOptions[0].textContent
+    : "目标分类";
+
+  const accepted = await confirmAction({
+    title: "合并分类",
+    text: "确定把「" + sourceLabel + "」合并到「" + targetLabel + "」吗？",
+    extra: "源分类下的子分类会被一并停用，其账目不会自动迁移，需单独合并。",
+    confirmText: "确认合并",
+    danger: false,
+  });
+  if (!accepted) {
+    return;
+  }
+
+  const lockKey = "category-merge-" + mergeSourceId;
+  if (!lockAction(lockKey)) {
+    return;
+  }
+  const confirmButton = $("merge-confirm-btn");
+  setButtonBusy(confirmButton, true);
+  try {
+    const data = await api(
+      "/api/categories/" + mergeSourceId + "/merge",
+      jsonOptions("POST", { target_id: targetId })
+    );
+    // 后端返回最新完整分类树，整体覆盖，前端不自己拼装
+    if (Array.isArray(data.categories)) {
+      applyCategoryTree(data.categories);
+    } else {
+      await loadCategories();
+    }
+    if (window.bootstrap && $("category-merge-modal")) {
+      window.bootstrap.Modal.getOrCreateInstance($("category-merge-modal")).hide();
+    }
+    toast(
+      "已合并 " + (data.migrated_records || 0) + " 笔账目到「" + targetLabel + "」",
+      "success"
+    );
+    await refresh();
+    await loadDisabledCategories();
+  } catch (error) {
+    if (errorBox) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    } else {
+      toast(error.message, "error");
+    }
+  } finally {
+    setButtonBusy(confirmButton, false);
+    unlockAction(lockKey);
+  }
+}
+
 /* ==================== 账户增删 ==================== */
 
 async function addAccount() {
@@ -5331,8 +5856,16 @@ function switchPage(page) {
   }
 
   // v0.13：图表看板独立脚本，切到该页才懒加载数据并重绘
-  if (target === "charts" && typeof window.renderChartsPage === "function") {
-    window.renderChartsPage();
+  // v0.13.1 X2-b：这里必须走 reloadChartsPage()（会先把 pageState.records 置 null 再强制重取）。
+  // 原来调 renderChartsPage() 不带 force，会命中 charts-v013.js 里的陈旧缓存 ——
+  // 首页新增一笔后进图表页，本月支出还是旧数字。只派发 records:changed 也没用：
+  // 那边的监听器只在图表页 active 时才重取，从首页切过来的这一刻永远错过。
+  if (target === "charts") {
+    if (typeof window.reloadChartsPage === "function") {
+      window.reloadChartsPage();
+    } else if (typeof window.renderChartsPage === "function") {
+      window.renderChartsPage(true);
+    }
   }
 
   // 首页从隐藏变回可见时 ECharts 需要重新量一次容器宽度
@@ -6631,6 +7164,11 @@ function renderIconSettings() {
     return;
   }
   const names = iconTargetNames();
+  // v0.13.1：分类/账户还没加载完时不要清空下拉，否则「对象」会变成一个空白框
+  if (!names.length) {
+    renderIconChoiceGrid();
+    return;
+  }
   const keepTarget = target.value;
   target.innerHTML = names.map(function (name) {
     return '<option value="' + escapeHtml(name) + '">' + escapeHtml(name) + "</option>";
@@ -6645,6 +7183,67 @@ function renderIconSettings() {
   renderIconPreview();
 }
 
+/**
+ * v0.13.1：图标缩略图退化保护。
+ *
+ * 根因说明：图标库里的 path 可能指向一张 1×1 占位图（历史测试上传的 70 字节 PNG），
+ * 也可能指向已被清理/损坏的文件。CSS 把 img 拉成 30×30 后，
+ * 1×1 像素会被放大成一整块实心色（看起来就是「红块」），
+ * 裂图则只剩一个破图标。所以这里统一判退化并切到占位图形。
+ */
+const ICON_FALLBACK_SVG =
+  '<svg class="icon-choice-fallback" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h4l1.6 2H17.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/>' +
+  '<path d="M9 13.5h6"/></svg>';
+
+/** 一张图是否"等于没有"：加载失败（naturalWidth 0）或只有 1~2 px 的占位图 */
+function isDegenerateIcon(img) {
+  const width = Number(img.naturalWidth) || 0;
+  const height = Number(img.naturalHeight) || 0;
+  if (!width || !height) {
+    return true;
+  }
+  return width <= 2 && height <= 2;
+}
+
+/** 给图标缩略图挂退化保护：坏了/占位图就显示占位图形，绝不放大成纯色块 */
+function guardIconImage(img) {
+  if (!img) {
+    return;
+  }
+  const degrade = function () {
+    img.classList.add("is-degenerate");
+    img.setAttribute("aria-hidden", "true");
+  };
+  const verify = function () {
+    if (isDegenerateIcon(img)) {
+      degrade();
+    }
+  };
+  if (img.complete) {
+    verify();
+    return;
+  }
+  img.addEventListener("load", verify, { once: true });
+  img.addEventListener("error", degrade, { once: true });
+}
+
+/** 网格里的一个图标格子：缩略图 + 占位图形（二选一显示）+ 名称 */
+function iconTileThumbHtml(path) {
+  const fallback = ICON_FALLBACK_SVG;
+  if (!path) {
+    return '<span class="icon-choice-thumb is-empty">' + fallback + "</span>";
+  }
+  return (
+    '<span class="icon-choice-thumb"><img src="' +
+    escapeHtml(path) +
+    '" alt="">' +
+    fallback +
+    "</span>"
+  );
+}
+
 /** v0.12.4：把下拉框换成可点选的图标网格，选中的绿框高亮 */
 function renderIconChoiceGrid() {
   const grid = $("icon-choice-grid");
@@ -6655,18 +7254,21 @@ function renderIconChoiceGrid() {
   const current = choice.value;
   const tiles = ['<button type="button" class="icon-choice-tile' + (current === "" ? " is-active" : "") +
     '" data-icon-id="" role="option" aria-selected="' + (current === "" ? "true" : "false") + '">' +
-    '<span class="icon-choice-default">默认</span><span class="icon-choice-label">系统默认</span></button>'];
+    '<span class="icon-choice-thumb is-default"><span class="icon-choice-default">默认</span></span>' +
+    '<span class="icon-choice-label">系统默认</span></button>'];
   iconLib.forEach(function (icon) {
     const active = String(current) === String(icon.id);
     tiles.push(
       '<button type="button" class="icon-choice-tile' + (active ? " is-active" : "") +
       '" data-icon-id="' + icon.id + '" role="option" aria-selected="' + (active ? "true" : "false") +
       '" title="' + escapeHtml(icon.name) + '">' +
-      '<img src="' + escapeHtml(icon.path) + '" alt="">' +
+      iconTileThumbHtml(icon.path) +
       '<span class="icon-choice-label">' + escapeHtml(icon.name) + "</span></button>"
     );
   });
   grid.innerHTML = tiles.join("");
+  // 图片是异步解码的，统一在插入 DOM 后挂退化保护（含缓存命中、已是裂图的场景）
+  Array.prototype.forEach.call(grid.querySelectorAll(".icon-choice-thumb img"), guardIconImage);
 }
 
 function renderIconPreview() {
@@ -6677,9 +7279,15 @@ function renderIconPreview() {
   const kind = $("icon-kind").value;
   const name = $("icon-target").value;
   const icon = iconFor(kind, name);
-  box.innerHTML = icon
-    ? '<img src="' + escapeHtml(icon.path) + '" alt=""><span>' + escapeHtml(name) + " 正在使用自定义图标</span>"
-    : '<span class="settings-hint">' + escapeHtml(name || "未选择") + " 正在使用系统默认图标</span>";
+  if (icon && icon.path) {
+    box.innerHTML =
+      '<span class="icon-preview-thumb"><img src="' + escapeHtml(icon.path) + '" alt="">' +
+      ICON_FALLBACK_SVG +
+      "</span><span>" + escapeHtml(name) + " 正在使用自定义图标</span>";
+    guardIconImage(box.querySelector("img"));
+    return;
+  }
+  box.innerHTML = '<span class="settings-hint">' + escapeHtml(name || "未选择") + " 正在使用系统默认图标</span>";
 }
 
 function iconError(message) {
@@ -7270,14 +7878,57 @@ function bindEvents() {
     if (categoryModal) {
       categoryModal.show();
     }
+    // v0.13.1：打开分类管理就同步一次「已停用」清单，折叠状态下也能显示准确计数
+    loadDisabledCategories();
   });
   $("add-category-btn").addEventListener("click", addCategory);
   $("category-tree").addEventListener("click", function (event) {
+    const disabledButton = event.target.closest("[data-toggle-disabled]");
+    if (disabledButton) {
+      setCategoryDisabled(
+        Number(disabledButton.getAttribute("data-toggle-disabled")),
+        disabledButton.getAttribute("data-disabled") !== "1"
+      );
+      return;
+    }
+    const mergeButton = event.target.closest("[data-merge-category]");
+    if (mergeButton) {
+      openMergeModal(Number(mergeButton.getAttribute("data-merge-category")));
+      return;
+    }
     const button = event.target.closest("[data-del-category]");
     if (button) {
       removeCategory(Number(button.getAttribute("data-del-category")));
     }
   });
+
+  // v0.13.1：已停用分类管理区（折叠块 + 懒加载）
+  if ($("disabled-zone-toggle")) {
+    $("disabled-zone-toggle").addEventListener("click", function () {
+      toggleDisabledZone();
+    });
+  }
+  if ($("disabled-category-tree")) {
+    $("disabled-category-tree").addEventListener("click", function (event) {
+      const restoreButton = event.target.closest("[data-toggle-disabled]");
+      if (restoreButton) {
+        setCategoryDisabled(
+          Number(restoreButton.getAttribute("data-toggle-disabled")),
+          restoreButton.getAttribute("data-disabled") !== "1"
+        );
+        return;
+      }
+      const deleteButton = event.target.closest("[data-del-category]");
+      if (deleteButton) {
+        removeCategory(Number(deleteButton.getAttribute("data-del-category")));
+      }
+    });
+  }
+  if ($("merge-confirm-btn")) {
+    $("merge-confirm-btn").addEventListener("click", function () {
+      submitMergeCategory();
+    });
+  }
 
   /* ---------- v0.06.2 顶栏 / 侧栏 / 搜索 / 通知 / 预算 ---------- */
 
@@ -7339,6 +7990,14 @@ function bindEvents() {
       if (modalElement && window.bootstrap) {
         window.bootstrap.Modal.getOrCreateInstance(modalElement).show();
       }
+    });
+  }
+
+  // v0.13.1：每次真正显示时重排一次图标选择器，
+  // 避免「分类/账户还在加载时就点开设置」导致「对象」下拉是空的。
+  if ($("settings-modal")) {
+    $("settings-modal").addEventListener("shown.bs.modal", function () {
+      renderIconSettings();
     });
   }
 
