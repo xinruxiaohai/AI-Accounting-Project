@@ -1620,6 +1620,8 @@
     verifySession();
     initImportUi();
     updateSidebarUser();
+    // 启动即向服务端拉一次最新资料（含头像 / 昵称），保证服务重启后显示不丢
+    refreshProfileFromServer();
     initAccountSettings();
   }
 

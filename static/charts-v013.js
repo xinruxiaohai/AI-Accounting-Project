@@ -260,8 +260,10 @@
 
     // 折线：渐变填充 + 圆点；净值为负时用另一套提示色
     var seriesColor = meta.color;
-    var areaTop = hexToRgba(seriesColor, 0.28);
-    var areaBottom = hexToRgba(seriesColor, 0.02);
+    // 面积填充透明度跟随主题：深色模式更透，避免大色块压住网格线与文字
+    var chartDark = palette.line === "#24334a";
+    var areaTop = hexToRgba(seriesColor, chartDark ? 0.14 : 0.22);
+    var areaBottom = hexToRgba(seriesColor, chartDark ? 0.01 : 0.02);
 
     return {
       animationDuration: 520,

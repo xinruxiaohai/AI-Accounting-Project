@@ -497,12 +497,14 @@ def _row_to_category(row):
         "id": row["id"],
         "name": row["name"],
         "parent_id": row["parent_id"],
+        "type": row["type"] if "type" in row.keys() else "expense",
         "children": [],
     }
 
 
-def _ensure_category(conn, name, parent_id=None):
-    """按 (名字, 父级) 找分类，没有就插一条，返回 id。幂等，可反复调用。"""
+def _ensure_category(conn, name, parent_id=None, category_type="expense"):
+    """按 (名字, 父级) 找分类，没有就插一条，返回 id。幂等，可反复调用。
+    category_type: 'expense' / 'income'，决定该分类在记账弹窗里归哪个收支分组。"""
     if parent_id is None:
         row = conn.execute(
             "SELECT id FROM categories WHERE name = ? AND parent_id IS NULL", (name,)
@@ -514,18 +516,30 @@ def _ensure_category(conn, name, parent_id=None):
     if row is not None:
         return row["id"]
 
+    cat_type = "income" if category_type == "income" else "expense"
     cur = conn.execute(
-        "INSERT INTO categories (name, parent_id) VALUES (?, ?)", (name, parent_id)
+        "INSERT INTO categories (name, parent_id, type) VALUES (?, ?, ?)",
+        (name, parent_id, cat_type),
     )
     return cur.lastrowid
 
 
+# 默认收入分类（一级，无二级）；已存在同名一级分类则跳过，幂等
+INCOME_CATEGORY_SEEDS = ("工资", "兼职外快", "投资理财", "红包", "利息", "退款", "其他收入")
+
+
 def _seed_categories(conn):
-    """按 CATEGORY_SEEDS 补齐默认分类，已有同名同级的直接跳过。"""
+    """按 CATEGORY_SEEDS 补齐默认支出分类，已有同名同级的直接跳过。"""
     for top_name, children in CATEGORY_SEEDS:
-        top_id = _ensure_category(conn, top_name, None)
+        top_id = _ensure_category(conn, top_name, None, "expense")
         for child_name in children:
-            _ensure_category(conn, child_name, top_id)
+            _ensure_category(conn, child_name, top_id, "expense")
+
+
+def _seed_income_categories(conn):
+    """补齐默认收入分类；已存在同名一级分类则跳过（幂等）。"""
+    for name in INCOME_CATEGORY_SEEDS:
+        _ensure_category(conn, name, None, "income")
 
 
 def _seed_accounts(conn):
@@ -916,6 +930,15 @@ def init_db():
                     "ALTER TABLE categories ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
                 )
                 categories_need_order = True
+            if "type" not in category_columns:
+                # v0.13.1：分类区分「支出 / 收入」，记账弹窗按收支严格过滤，互不串
+                conn.execute(
+                    "ALTER TABLE categories ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'"
+                )
+            # 老分类无 type 一律按支出回填（历史账目几乎都是支出），幂等可重复执行
+            conn.execute(
+                "UPDATE categories SET type = 'expense' WHERE type IS NULL OR type = ''"
+            )
             # 同一父级下不允许同名。parent_id 为 NULL 时 COALESCE 成 0，避免 NULL 不参与唯一约束
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_categories "
@@ -1109,6 +1132,7 @@ def init_db():
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
         with conn:
             _seed_categories(conn)
+            _seed_income_categories(conn)
             _seed_accounts(conn)
             _seed_notifications(conn)
             _backfill_category_ids(conn)
@@ -1136,21 +1160,22 @@ def get_category(category_id):
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, parent_id FROM categories WHERE id = ?", (category_id,)
+            "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (category_id,)
         ).fetchone()
         return _row_to_category(row) if row is not None else None
     finally:
         conn.close()
 
 
-def ensure_category(name):
-    """按名字找一级分类，没有就建一个（兼容老前端直接传分类文本的写法）。"""
+def ensure_category(name, category_type="expense"):
+    """按名字找一级分类，没有就建一个（兼容老前端直接传分类文本的写法）。
+    category_type 决定新增分类的收支归属。"""
     conn = get_conn()
     try:
         with conn:
-            new_id = _ensure_category(conn, name, None)
+            new_id = _ensure_category(conn, name, None, category_type)
         row = conn.execute(
-            "SELECT id, name, parent_id FROM categories WHERE id = ?", (new_id,)
+            "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (new_id,)
         ).fetchone()
         return _row_to_category(row)
     finally:
@@ -1162,7 +1187,7 @@ def list_categories_tree():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, name, parent_id FROM categories ORDER BY sort_order, id"
+            "SELECT id, name, parent_id, type FROM categories ORDER BY sort_order, id"
         ).fetchall()
     finally:
         conn.close()
@@ -1183,8 +1208,9 @@ def list_categories_tree():
     return tree
 
 
-def create_category(name, parent_id=None):
-    """新建分类，返回 (分类字典, 错误信息)。parent_id 为空表示一级分类。"""
+def create_category(name, parent_id=None, category_type="expense"):
+    """新建分类，返回 (分类字典, 错误信息)。parent_id 为空表示一级分类。
+    category_type: 'expense' / 'income'，决定这个分类在记账弹窗里归哪个收支分组。"""
     conn = get_conn()
     try:
         with conn:
@@ -1214,14 +1240,17 @@ def create_category(name, parent_id=None):
                 "SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories WHERE parent_id IS ?",
                 (parent_id,),
             ).fetchone()["m"]
+            cat_type = "income" if category_type == "income" else "expense"
             cur = conn.execute(
-                "INSERT INTO categories (name, parent_id, sort_order) VALUES (?, ?, ?)",
-                (name, parent_id, sibling_order + 1),
+                "INSERT INTO categories (name, parent_id, sort_order, type) "
+                "VALUES (?, ?, ?, ?)",
+                (name, parent_id, sibling_order + 1, cat_type),
             )
             return {
                 "id": cur.lastrowid,
                 "name": name,
                 "parent_id": parent_id,
+                "type": cat_type,
                 "children": [],
             }, None
     finally:
@@ -1234,7 +1263,7 @@ def rename_category(category_id, name):
     try:
         with conn:
             row = conn.execute(
-                "SELECT id, name, parent_id FROM categories WHERE id = ?", (category_id,)
+                "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (category_id,)
             ).fetchone()
             if row is None:
                 return None, "分类不存在"

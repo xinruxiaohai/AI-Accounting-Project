@@ -1,0 +1,103 @@
+%% v0.13.1 增量：分类隔离 + 周期模板 + 主题/图标引擎 核心数据结构
+classDiagram
+    class Category {
+        +int id
+        +int user_id
+        +str name
+        +int parent_id
+        +int sort_order
+        +str type
+        +str icon_key
+        +str color
+        +int is_disabled
+        +str disabled_at  %% 仅审计，不进 WHERE
+    }
+    class RecurringTemplate {
+        +int id
+        +int user_id
+        +str name
+        +str record_type
+        +float amount
+        +int category_id
+        +str account
+        +str note
+        +int day_of_month
+        +str last_posted_at
+        +int is_active
+    }
+    class Record {
+        +int id
+        +int user_id
+        +float amount
+        +str category
+        +int category_id
+        +str type
+        +str date
+    }
+    class UserContext {
+        <<contextvars>>
+        +set_current_user(user_id)
+        +current_user_id() int
+        +_uid() int
+    }
+    class CategoryRepo {
+        +_ensure_category(conn, name, parent_id, type, user_id) int
+        +ensure_category(name, type, user_id) dict
+        +ensure_category_templates(user_id) int
+        +get_category(category_id) dict
+        +list_categories_tree(include_disabled) list
+        +create_category(name, parent_id, type, icon_key, color) tuple
+        +rename_category(category_id, name) tuple
+        +set_category_disabled(category_id, disabled) tuple
+        +merge_category(source_id, target_id) tuple
+        +delete_category(category_id) tuple
+    }
+    class Migration {
+        +_ensure_user_schema(conn)
+        +_migrate_category_isolation(conn)
+        +_backup_db() str
+        +init_db()
+    }
+    class CategoryAPI {
+        +GET /api/categories
+        +POST /api/categories
+        +PUT /api/categories/id
+        +DELETE /api/categories/id
+        +POST /api/categories/ensure-templates
+        +PUT /api/categories/id/archive
+        +PUT /api/categories/id/merge
+    }
+    class RecordAPI {
+        +_resolve_category(data) tuple
+        +_apply_ai_intent(parsed, text)
+        +import_confirm()
+        +correct_record_category(record_id)
+    }
+    class ThemeEngine {
+        +THEMES map
+        +THEME_CHART_COLORS map
+        +applyTheme(setting)
+        +readTheme() str
+        +isDarkMode() bool
+        +themeChartPalette() map
+    }
+    class IconEngine {
+        +ICON_PATHS map
+        +CATEGORY_ICON_RULES list
+        +CATEGORY_TONES map
+        +iconKeyOf(kind, name, type, icon_key) str
+        +toneBgOf(key) str
+        +entityIconHtml(kind, name, size, variant) str
+    }
+
+    Category "1" --> "0..1" Category : parent_id 自关联
+    Category "0..*" --> "1" Record : category_id
+    RecurringTemplate "0..*" --> "1" Category : category_id
+    UserContext ..> CategoryRepo : _uid() 注入 user_id
+    CategoryRepo ..> Category : SQL
+    CategoryAPI ..> CategoryRepo : 调用
+    RecordAPI ..> CategoryRepo : ensure_category / get_category
+    Migration ..> CategoryRepo : 迁移后执行种子
+    Migration ..> Category : DDL 与索引改造
+    CategoryRepo ..> RecurringTemplate : 模板抄写字段
+    CategoryAPI ..> IconEngine : 下发 icon_key

@@ -1,0 +1,37 @@
+%% AI 记账自动创建分类（隔离方案下的完整调用链，user_id 在 before_request 层注入）
+sequenceDiagram
+    autonumber
+    participant FE as 前端 script.js
+    participant BR as Flask before_request _identity_guard
+    participant CX as database._CURRENT_USER_ID contextvars
+    participant RT as /api/records/ai create_record_by_ai
+    participant AI as ai_service 大模型解析
+    participant INT as _apply_ai_intent
+    participant DB as database.ensure_category
+    participant EN as _ensure_category
+    participant SQL as sqlite3 categories 表
+
+    FE->>BR: POST /api/records/ai Authorization: Bearer JWT
+    BR->>BR: _user_from_token() 解 JWT 得到 user.id
+    BR->>CX: set_current_user(user.id)  ★ user_id 唯一注入点
+    BR-->>RT: 放行
+    RT->>AI: parse 自然语言
+    AI-->>RT: action=record, type, category, amount
+    RT->>INT: _apply_ai_intent(parsed, text)
+    INT->>DB: ensure_category(name, type)  不传 user_id
+    DB->>CX: _uid() 读取当前请求用户
+    CX-->>DB: user_id
+    DB->>EN: _ensure_category(conn, name, None, type, user_id)
+    EN->>SQL: SELECT id FROM categories WHERE name=? AND parent_id IS NULL AND user_id=?
+    alt 命中已有分类
+        SQL-->>EN: 返回既有 id（不重复建）
+    else 未命中
+        EN->>SQL: INSERT INTO categories (user_id, name, parent_id, type, sort_order)
+        Note over SQL: UNIQUE uq_categories_user (user_id, COALESCE(parent_id,0), name)
+        SQL-->>EN: lastrowid
+    end
+    EN-->>DB: category_id
+    DB-->>INT: id, name, parent_id, type
+    INT->>SQL: add_record(category_id, user_id)  + 联动 accounts.balance
+    INT-->>RT: body + auto_corrected
+    RT-->>FE: 201 id, record, confidence

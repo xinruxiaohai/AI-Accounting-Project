@@ -32,6 +32,10 @@ const LS_BUDGET = "ai-accounting-budget";
 const LS_NOTIFY_READ = "ai-accounting-notify-read-at";
 // v0.06.3：账单列表每页条数（0 = 不分页，滚动到底自动追加）
 const LS_PAGE_SIZE = "ai-accounting-page-size";
+// v0.13.1：资产页账户分组折叠状态（实际写入时再拼 user_id，见 userScopedKey）
+const LS_ACCOUNT_COLLAPSE = "ai-accounting-account-collapse";
+// auth-v012.js 里存用户 JSON 的键（那边在 IIFE 里取不到，这里照抄一份）
+const LS_AUTH_USER = "ai_accounting_user";
 const PAGE_SIZE_OPTIONS = [20, 50, 100, 0];
 const INFINITE_STEP = 20;
 const DEFAULT_BUDGET = 3000;
@@ -877,7 +881,12 @@ function renderCategoryGrid() {
   const income = currentType() === "income";
   grid.dataset.type = income ? "income" : "expense";
   const topId = selectedTopCategoryId();
+  const wantType = income ? "income" : "expense";
   grid.innerHTML = state.categories
+    .filter(function (top) {
+      // 收支分类彻底隔离：只渲染当前收支类型下的分类，互不串
+      return (top.type || "expense") === wantType;
+    })
     .map(function (top) {
       const active = Number(top.id) === Number(topId);
       return (
@@ -1160,9 +1169,15 @@ function categoryRowHtml(category, counts, isTop) {
   return (
     '<div class="category-row">' +
     '<span class="drag-handle" title="按住拖动排序" aria-hidden="true">⋮⋮</span>' +
+    '<span class="category-icon">' +
+    entityIconHtml("category", category.name, 22) +
+    "</span>" +
     '<span class="category-name">' +
     escapeHtml(category.name) +
     "</span>" +
+    (category.type === "income"
+      ? '<span class="category-tip" style="background:#e7f7ee;color:#1a7f4b;">收入</span>'
+      : '<span class="category-tip" style="background:#fdecea;color:#c0392b;">支出</span>') +
     (isTop ? "" : '<span class="category-tip">二级</span>') +
     tag +
     '<button class="cat-del" type="button" data-del-category="' +
@@ -1392,6 +1407,80 @@ function accountTone(name) {
   return palette[hash % palette.length];
 }
 
+/* ---------- v0.13.1 Step4-2：账户分组折叠 ---------- */
+
+// 分组标题右侧的折叠箭头（内联 SVG，展开朝下、收起转 -90°）
+const ACCOUNT_GROUP_CHEVRON =
+  '<span class="account-group-chevron" aria-hidden="true">' +
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="m6 9 6 6 6-6"></path>' +
+  "</svg></span>";
+
+/**
+ * v0.13.1：分组折叠 key 一律由「分组名」派生，不能用数组下标，
+ * 否则排序/增删账户导致顺序变化时状态会串到别的分组上。
+ * @param {string} name 分组名
+ * @returns {string} 稳定的 localStorage key
+ */
+function accountGroupKey(name) {
+  const raw = String(name === null || name === undefined ? "" : name).trim();
+  return raw || "未分组";
+}
+
+/**
+ * v0.13.1：分组标题的悬浮提示文案
+ * @param {string} name 分组名
+ * @param {boolean} collapsed 是否处于收起状态
+ * @returns {string} 中文提示
+ */
+function accountGroupTitle(name, collapsed) {
+  return (collapsed ? "展开分组：" : "收起分组：") + String(name || "");
+}
+
+/**
+ * v0.13.1：把折叠状态写回 DOM（只切 class 与 aria，不整体重绘），
+ * 这样 class 变化才能吃到 CSS 过渡。
+ * @param {HTMLElement|null} groupEl .account-group 容器
+ * @param {boolean} collapsed 是否收起
+ */
+function applyAccountGroupCollapse(groupEl, collapsed) {
+  if (!groupEl) {
+    return;
+  }
+  const next = Boolean(collapsed);
+  groupEl.classList.toggle("is-collapsed", next);
+
+  const wrap = groupEl.querySelector(".account-collapse-wrap");
+  if (wrap) {
+    wrap.classList.toggle("is-collapsed", next);
+  }
+
+  const head = groupEl.querySelector(".account-group-head");
+  if (head) {
+    const name = groupEl.getAttribute("data-group-name") || "";
+    head.setAttribute("aria-expanded", next ? "false" : "true");
+    head.setAttribute("title", accountGroupTitle(name, next));
+  }
+}
+
+/**
+ * v0.13.1：点击 / 键盘触发某一分组的折叠切换，
+ * 状态通过 toggleAccountCollapse 落到「按用户隔离」的 localStorage。
+ * @param {HTMLElement|null} head .account-group-head 节点
+ */
+function toggleAccountGroup(head) {
+  if (!head) {
+    return;
+  }
+  const key = head.getAttribute("data-group-toggle");
+  if (!key) {
+    return;
+  }
+  const collapsed = toggleAccountCollapse(key);
+  applyAccountGroupCollapse(head.closest(".account-group"), collapsed);
+}
+
 function renderAccountGroups() {
   const box = $("account-groups");
   if (!state.accounts.length) {
@@ -1478,18 +1567,48 @@ function renderAccountGroups() {
         })
         .join("");
 
+      // v0.13.1：折叠 key 用分组名，初次渲染按 localStorage 里的历史状态还原
+      const groupKey = accountGroupKey(group.name);
+      const groupKeyAttr = escapeHtml(groupKey);
+      const groupNameAttr = escapeHtml(group.name);
+      const collapsed = isAccountCollapsed(groupKey);
+      const totalText = state.amountHidden ? "¥••••" : money(total);
+
       return (
-        '<div class="account-group">' +
-        '<div class="account-group-head">' +
+        '<div class="account-group' +
+        (collapsed ? " is-collapsed" : "") +
+        '" data-group="' +
+        groupKeyAttr +
+        '" data-group-name="' +
+        groupNameAttr +
+        '">' +
+        '<div class="account-group-head" data-group-toggle="' +
+        groupKeyAttr +
+        '" role="button" tabindex="0" aria-expanded="' +
+        (collapsed ? "false" : "true") +
+        '" title="' +
+        escapeHtml(accountGroupTitle(group.name, collapsed)) +
+        '">' +
         '<span class="account-group-name">' +
-        escapeHtml(group.name) +
+        groupNameAttr +
         "</span>" +
+        '<span class="account-group-meta">' +
+        '<span class="account-group-count">' +
+        group.accounts.length +
+        " 个账户</span>" +
         '<span class="account-group-total">合计 ' +
-        (state.amountHidden ? "¥••••" : money(total)) +
+        totalText +
         "</span>" +
+        "</span>" +
+        ACCOUNT_GROUP_CHEVRON +
         "</div>" +
+        // v0.13.1：外层 grid 容器负责 0fr/1fr 折叠动画，内层才是真正的账户列表
+        '<div class="account-collapse-wrap' +
+        (collapsed ? " is-collapsed" : "") +
+        '">' +
         '<div class="account-list">' +
         rows +
+        "</div>" +
         "</div>" +
         "</div>"
       );
@@ -4113,6 +4232,9 @@ function collectCategoryValues() {
   const issues = [];
   const name = $("new-category-name").value.trim();
   const parentValue = $("new-category-parent").value;
+  const typeValue = $("new-category-type")
+    ? $("new-category-type").value || "expense"
+    : "expense";
 
   if (!name) {
     issues.push({ field: $("new-category-name"), message: "请填写分类名称" });
@@ -4120,7 +4242,11 @@ function collectCategoryValues() {
 
   return {
     issues: issues,
-    values: { name: name, parentId: parentValue ? Number(parentValue) : null },
+    values: {
+      name: name,
+      parentId: parentValue ? Number(parentValue) : null,
+      type: typeValue,
+    },
   };
 }
 
@@ -5073,7 +5199,7 @@ async function addCategory() {
     return;
   }
 
-  const payload = { name: check.values.name };
+  const payload = { name: check.values.name, type: check.values.type || "expense" };
   if (check.values.parentId) {
     payload.parent_id = check.values.parentId;
   }
@@ -7020,7 +7146,17 @@ function bindEvents() {
   });
 
   // 资产页：点卡片看流水、点 × 删账户、点铅笔行内编辑、批量勾选
+  // v0.13.1：点分组标题整行折叠 / 展开；标题里若有按钮（重命名、删除等）则让位给按钮
   $("account-groups").addEventListener("click", function (event) {
+    const head = event.target.closest(".account-group-head");
+    if (head) {
+      if (event.target.closest("button, a, input, select, textarea, form, label")) {
+        return;
+      }
+      event.stopPropagation();
+      toggleAccountGroup(head);
+      return;
+    }
     const del = event.target.closest("[data-del-account]");
     if (del) {
       event.stopPropagation();
@@ -7078,6 +7214,19 @@ function bindEvents() {
     selectAccount(card.getAttribute("data-account")).catch(function (error) {
       toast(error.message, "error");
     });
+  });
+
+  // v0.13.1：分组标题支持键盘 Enter / 空格折叠（行内编辑有自己的 keydown，互不干扰）
+  $("account-groups").addEventListener("keydown", function (event) {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+      return;
+    }
+    const head = event.target.closest(".account-group-head");
+    if (!head || state.editingAccount) {
+      return;
+    }
+    event.preventDefault();
+    toggleAccountGroup(head);
   });
 
   // 行内编辑：Enter 保存、Esc 取消（表单内键盘事件）
@@ -8399,6 +8548,39 @@ function toggleCollapseState(key, itemKey) {
     map[itemKey] = 1;
   }
   writeCollapseMap(key, map);
+}
+
+/* ---------- v0.13.1：按用户隔离 localStorage ---------- */
+
+// 同一台电脑换账号登录时，折叠 / 显隐这类本机偏好不该串味，所以键名要带 user_id。
+// 取不到用户（未登录或 JSON 坏了）就落到 guest，保证键名始终是个合法字符串。
+function currentUserId() {
+  try {
+    const raw = localStorage.getItem(LS_AUTH_USER);
+    const user = raw ? JSON.parse(raw) : null;
+    const id = user && (user.id || user.user_id);
+    return id ? String(id) : "guest";
+  } catch (error) {
+    return "guest";
+  }
+}
+
+function userScopedKey(base) {
+  return base + "::u" + currentUserId();
+}
+
+function readAccountCollapseMap() {
+  return readCollapseMap(userScopedKey(LS_ACCOUNT_COLLAPSE));
+}
+
+function isAccountCollapsed(groupKey) {
+  return Boolean(readAccountCollapseMap()[groupKey]);
+}
+
+function toggleAccountCollapse(groupKey) {
+  const key = userScopedKey(LS_ACCOUNT_COLLAPSE);
+  toggleCollapseState(key, groupKey);
+  return isAccountCollapsed(groupKey);
 }
 
 /* ---------- 侧栏 Tooltip 残留清理（v0.10 修复） ---------- */

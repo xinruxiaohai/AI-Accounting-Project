@@ -35,9 +35,12 @@ app.json.ensure_ascii = False
 # 通知里的配图统一存这里，用 /static/uploads/<uuid>.<ext> 访问
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
+# 用户头像独立子目录：与账单截图 / 通知配图隔离，避免被截图清理逻辑误删
+AVATAR_DIR = os.path.join(UPLOAD_DIR, "avatars")
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(AVATAR_DIR, exist_ok=True)
 
 # 启动就建表 / 升级表结构。表已存在时 CREATE TABLE 会跳过，缺列时自动补列
 database.init_db()
@@ -484,12 +487,16 @@ def auth_update_avatar():
 @login_required
 def auth_upload_avatar():
     """个人中心直接上传头像；不走受后台访问密码保护的 /api/upload。"""
-    url, error = _save_upload_image(request.files.get("file"))
+    old_avatar = (g.current_user or {}).get("avatar") or ""
+    url, error = _save_avatar_image(request.files.get("file"))
     if error:
         return jsonify(error=error), 400
     user = database.update_user_avatar(g.current_user["id"], url)
     if user is None:
         return jsonify(error="用户不存在"), 404
+    # 上传成功后再清理旧头像文件，避免删了旧文件新文件却没落库
+    if old_avatar and old_avatar != url:
+        _delete_avatar_file(old_avatar)
     return jsonify(url=url, user=_public_user(user)), 201
 
 
@@ -558,7 +565,9 @@ def _resolve_category(data):
             jsonify(error="category 必须是非空字符串，或者改传 category_id"),
             400,
         )
-    category = database.ensure_category(category.strip())
+    category = database.ensure_category(
+        category.strip(), "income" if data.get("type") == "income" else "expense"
+    )
     return category["name"], category["id"], None
 
 
@@ -879,7 +888,9 @@ def _apply_ai_correction(previous_record, parsed, text, source="ai"):
     category_id = previous_record.get("category_id")
     if record_type in ("expense", "income"):
         try:
-            category_id = database.ensure_category(category)["id"]
+            category_id = database.ensure_category(
+                category, "income" if record_type == "income" else "expense"
+            )["id"]
         except database.RecordError:
             category_id = None
     else:
@@ -1017,7 +1028,9 @@ def _apply_ai_intent(parsed, text):
         category_id = None
         if record_type in ("expense", "income"):
             try:
-                category_id = database.ensure_category(category)["id"]
+                category_id = database.ensure_category(
+                category, "income" if record_type == "income" else "expense"
+            )["id"]
             except database.RecordError:
                 category_id = None
 
@@ -1582,7 +1595,9 @@ def correct_record_category(record_id):
     corrected = corrected.strip()
 
     try:
-        category = database.ensure_category(corrected)
+        category = database.ensure_category(
+            corrected, "income" if record.get("type") == "income" else "expense"
+        )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
 
@@ -2313,7 +2328,14 @@ def create_category():
     ):
         return jsonify(error="parent_id 必须是整数或 null"), 400
 
-    category, error = database.create_category(name.strip(), parent_id)
+    category_type = data.get("type")
+    if category_type is not None and category_type not in ("expense", "income"):
+        return jsonify(error="type 只能是 expense 或 income"), 400
+    category, error = database.create_category(
+        name.strip(),
+        parent_id,
+        category_type if category_type in ("expense", "income") else "expense",
+    )
     if error is not None:
         # 同名冲突是「资源冲突」409，父级不存在之类是「参数不对」400
         status = 409 if "已存在" in error else 400
@@ -2748,6 +2770,47 @@ def _save_upload_image(upload):
     with open(os.path.join(UPLOAD_DIR, filename), "wb") as handle:
         handle.write(data)
     return "/static/uploads/" + filename, None
+
+
+def _save_avatar_image(upload):
+    """头像专用落盘：存进 static/uploads/avatars/，文件名 uuid 防重名、防路径穿越。
+
+    返回 (访问路径 /static/uploads/avatars/<uuid>.<ext>, None)，失败返回 (None, 中文错误)。
+    DB 只存这个相对路径，重启后 Flask 仍能通过 /static 直接服务。
+    """
+    if upload is None or not upload.filename:
+        return None, "没有收到文件，字段名应为 file"
+    ext = os.path.splitext(upload.filename)[1].lower()
+    if ext not in ALLOWED_IMAGE_EXTENSIONS:
+        return None, "只支持 png / jpg / jpeg / gif / webp 图片"
+    data = upload.read()
+    if not data:
+        return None, "图片是空文件"
+    if len(data) > MAX_UPLOAD_BYTES:
+        return None, "图片不能超过 5MB"
+    # 目录可能被人手动删掉，写前兜底补建
+    os.makedirs(AVATAR_DIR, exist_ok=True)
+    filename = uuid.uuid4().hex + ext
+    with open(os.path.join(AVATAR_DIR, filename), "wb") as handle:
+        handle.write(data)
+    return "/static/uploads/avatars/" + filename, None
+
+
+def _delete_avatar_file(url):
+    """删除被替换掉的旧头像文件；只认 /static/uploads/avatars/ 前缀，绝不接受任意路径。"""
+    prefix = "/static/uploads/avatars/"
+    if not url or not url.startswith(prefix):
+        return
+    name = url[len(prefix):]
+    # 阻断任何路径穿越（如 ../）；只接受纯文件名
+    if name != os.path.basename(name) or not name:
+        return
+    path = os.path.join(AVATAR_DIR, name)
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 
 @app.route("/api/upload", methods=["POST"])
