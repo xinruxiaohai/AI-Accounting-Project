@@ -3,11 +3,18 @@ import datetime
 import difflib
 import json
 import re
+import shutil
 import sqlite3
 from pathlib import Path
 
 # 数据库文件固定在 database.py 同目录下，这样不管从哪个目录启动 app.py 都找得到
 DB_PATH = Path(__file__).resolve().parent / "records.db"
+
+# v0.13.1：迁移前的 DB 备份目录。**必须放在项目目录之外**（HANDOFF 红线：测试产物不进项目目录）
+MIGRATION_BACKUP_DIR = Path(r"D:\Project\temp\db-backup")
+
+# 本进程已做过的迁移备份文件路径（避免重复 init_db 时堆出一串同样的备份）
+_MIGRATION_BACKUP_FILE = ""
 
 # ---------------- 默认数据（缺了才补，不动已有数据） ----------------
 
@@ -84,22 +91,54 @@ USER_ID_RESERVED_MAX = 9
 
 
 def set_current_user(user_id):
-    """设置本请求的用户 id；None / 非法值一律按 1 号（超级管理员）兜底。"""
+    """设置本请求的用户 id。
+
+    F2 修复（v0.13.1）：**只有 None / 非法值才兜底成 1 号管理员，0 必须保持 0**。
+    原写法 `int(user_id or ADMIN_USER_ID)` 里 `0 or 1` 求值为 1，导致公开路径
+    （注册 / 登录 / 游客看通知）调 set_current_user(0) 后实际以管理员身份查库。
+    因此这里禁止使用真值判断，只判断 `is None`。
+    """
+    if user_id is None:
+        _CURRENT_USER_ID.set(ADMIN_USER_ID)
+        return
     try:
-        _CURRENT_USER_ID.set(int(user_id or ADMIN_USER_ID))
+        _CURRENT_USER_ID.set(int(user_id))
     except (TypeError, ValueError):
         _CURRENT_USER_ID.set(ADMIN_USER_ID)
 
 
 def current_user_id():
+    """取当前上下文的用户 id。
+
+    同样遵循 F2：0 是「未登录 / 不属于任何用户」的合法取值，
+    绝不因为 `0 or 1 == 1` 被兜底成管理员。只有 None / 非法值才回落 1 号。
+    """
+    value = _CURRENT_USER_ID.get()
+    if value is None:
+        return ADMIN_USER_ID
     try:
-        return int(_CURRENT_USER_ID.get() or ADMIN_USER_ID)
+        return int(value)
     except (TypeError, ValueError):
         return ADMIN_USER_ID
 
 
 def _uid():
     return current_user_id()
+
+
+def _resolve_user_id(user_id=None):
+    """把显式传入的 user_id 归一成整数；None 才回落到当前上下文 `_uid()`。
+
+    F3：种子 / 迁移 / 注册补齐这类「不在请求上下文里」的调用必须显式传 user_id，
+    因为 ContextVar 的 default=1，任何非请求上下文都会以 1 号管理员身份写入。
+    只有对外的高层便利函数才允许走这里的回落。0 是合法值，不做真值兜底。
+    """
+    if user_id is None:
+        return _uid()
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
+        return _uid()
 
 
 def _row_to_user(row):
@@ -492,34 +531,54 @@ def _apply_balance(conn, account, delta):
 
 
 def _row_to_category(row):
-    """把 categories 的一行转成前端友好的字典。"""
+    """把 categories 的一行转成前端友好的字典。
+
+    v0.13.1：新增字段一律可空兼容（icon_key/color 空串、is_disabled 0、disabled_at 空串），
+    老前端不读这几个字段也不会坏。`is_disabled` 是「停用」的唯一判定列，必须带下去。
+    """
+    keys = row.keys()
     return {
         "id": row["id"],
+        "user_id": row["user_id"] if "user_id" in keys else _uid(),
         "name": row["name"],
         "parent_id": row["parent_id"],
-        "type": row["type"] if "type" in row.keys() else "expense",
+        "type": row["type"] if "type" in keys else "expense",
+        "icon_key": (row["icon_key"] if "icon_key" in keys else "") or "",
+        "color": (row["color"] if "color" in keys else "") or "",
+        "is_disabled": int(row["is_disabled"] or 0) if "is_disabled" in keys else 0,
+        "disabled_at": (row["disabled_at"] if "disabled_at" in keys else "") or "",
         "children": [],
     }
 
 
-def _ensure_category(conn, name, parent_id=None, category_type="expense"):
-    """按 (名字, 父级) 找分类，没有就插一条，返回 id。幂等，可反复调用。
-    category_type: 'expense' / 'income'，决定该分类在记账弹窗里归哪个收支分组。"""
+def _ensure_category(conn, name, parent_id=None, category_type="expense", user_id=None):
+    """按 (user_id, 名字, 父级) 找分类，没有就插一条，返回 id。幂等，可反复调用。
+
+    category_type: 'expense' / 'income'，决定该分类在记账弹窗里归哪个收支分组。
+    user_id: F3 强制 —— 种子 / 注册补齐必须显式传，绝不能依赖 `_uid()`
+             （ContextVar default=1，非请求上下文会把新用户的分类种到管理员名下）。
+
+    D19：这里**绝不加 `is_disabled = 0`** —— 停用只影响「新增场景的选项可见性」，
+    不影响「历史账单的引用写入」，否则编辑旧账单的回填会被后端打回。
+    """
+    uid = _resolve_user_id(user_id)
     if parent_id is None:
         row = conn.execute(
-            "SELECT id FROM categories WHERE name = ? AND parent_id IS NULL", (name,)
+            "SELECT id FROM categories WHERE user_id = ? AND name = ? AND parent_id IS NULL",
+            (uid, name),
         ).fetchone()
     else:
         row = conn.execute(
-            "SELECT id FROM categories WHERE name = ? AND parent_id = ?", (name, parent_id)
+            "SELECT id FROM categories WHERE user_id = ? AND name = ? AND parent_id = ?",
+            (uid, name, parent_id),
         ).fetchone()
     if row is not None:
         return row["id"]
 
     cat_type = "income" if category_type == "income" else "expense"
     cur = conn.execute(
-        "INSERT INTO categories (name, parent_id, type) VALUES (?, ?, ?)",
-        (name, parent_id, cat_type),
+        "INSERT INTO categories (user_id, name, parent_id, type) VALUES (?, ?, ?, ?)",
+        (uid, name, parent_id, cat_type),
     )
     return cur.lastrowid
 
@@ -528,18 +587,48 @@ def _ensure_category(conn, name, parent_id=None, category_type="expense"):
 INCOME_CATEGORY_SEEDS = ("工资", "兼职外快", "投资理财", "红包", "利息", "退款", "其他收入")
 
 
-def _seed_categories(conn):
-    """按 CATEGORY_SEEDS 补齐默认支出分类，已有同名同级的直接跳过。"""
+def _seed_categories(conn, user_id=None):
+    """按 CATEGORY_SEEDS 给指定用户补齐默认支出分类，已有同名同级的直接跳过（补缺不覆盖）。"""
+    uid = _resolve_user_id(user_id)
     for top_name, children in CATEGORY_SEEDS:
-        top_id = _ensure_category(conn, top_name, None, "expense")
+        top_id = _ensure_category(conn, top_name, None, "expense", uid)
         for child_name in children:
-            _ensure_category(conn, child_name, top_id, "expense")
+            _ensure_category(conn, child_name, top_id, "expense", uid)
 
 
-def _seed_income_categories(conn):
-    """补齐默认收入分类；已存在同名一级分类则跳过（幂等）。"""
+def _seed_income_categories(conn, user_id=None):
+    """给指定用户补齐默认收入分类；已存在同名一级分类则跳过（幂等，补缺不覆盖）。"""
+    uid = _resolve_user_id(user_id)
     for name in INCOME_CATEGORY_SEEDS:
-        _ensure_category(conn, name, None, "income")
+        _ensure_category(conn, name, None, "income", uid)
+
+
+def ensure_category_templates(user_id=None):
+    """给指定用户补齐一整套默认分类模板，返回**本次新增的条数**（幂等，重复调用返回 0）。
+
+    A5/A6：注册成功与前端登录后兜底都调它。「补缺不覆盖」——已存在的同名同级分类
+    不会被覆盖也不会重复插入（第二次调用返回 0）。
+
+    口径澄清：**这是「显式补齐」动作**（注册 / 用户手动点「同步默认分类」才会跑），
+    `init_db()` 启动只给 1 号管理员补种，不会给既有用户补种，
+    所以「用户删过的分类不会因为重启 App 而复活」这条保证成立。
+    user_id 必须显式传（F3），注册链路不在请求上下文里。
+    """
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        with conn:
+            before = conn.execute(
+                "SELECT COUNT(*) AS n FROM categories WHERE user_id = ?", (uid,)
+            ).fetchone()["n"]
+            _seed_categories(conn, uid)
+            _seed_income_categories(conn, uid)
+            after = conn.execute(
+                "SELECT COUNT(*) AS n FROM categories WHERE user_id = ?", (uid,)
+            ).fetchone()["n"]
+        return after - before
+    finally:
+        conn.close()
 
 
 def _seed_accounts(conn):
@@ -571,44 +660,64 @@ def _seed_notifications(conn):
 
 
 def _backfill_category_ids(conn):
-    """给老账目补 category_id。
+    """给老账目补 category_id（**逐用户进行**，杜绝把 A 用户的分类建到 1 号名下）。
 
     老库的 records 只存 category 文本（甚至是用户随手写的「卫浴」「二分」），
-    这里分三步：
-    1. 账目里出现过、分类表里没有的名字 → 补成一枚一级分类（不丢数据、不丢展示）
+    对每个 user_id 分三步：
+    1. 该用户账目里出现过、他名下分类表里没有的名字 → 补成一枚一级分类（不丢数据、不丢展示）
     2. 按「一级分类同名」回填 category_id
     3. 还剩下没填上的（名字只存在于二级分类），按任意同名分类回填
     """
-    known = {row["name"] for row in conn.execute("SELECT name FROM categories")}
-    for row in conn.execute(
-        "SELECT DISTINCT category FROM records "
-        "WHERE category IS NOT NULL AND TRIM(category) <> ''"
-    ):
-        name = str(row["category"]).strip()
-        if name and name not in known:
-            _ensure_category(conn, name, None)
-            known.add(name)
+    user_rows = conn.execute(
+        "SELECT DISTINCT user_id FROM records WHERE user_id IS NOT NULL"
+    ).fetchall()
+    user_ids = [int(row["user_id"]) for row in user_rows]
+    if not user_ids:
+        user_ids = [ADMIN_USER_ID]
 
-    conn.execute(
-        """
-        UPDATE records
-           SET category_id = (
-                   SELECT c.id FROM categories c
-                    WHERE c.name = records.category AND c.parent_id IS NULL)
-         WHERE category_id IS NULL
-        """
-    )
-    conn.execute(
-        """
-        UPDATE records
-           SET category_id = (
-                   SELECT c.id FROM categories c
-                    WHERE c.name = records.category
-                    ORDER BY c.parent_id IS NOT NULL, c.id
-                    LIMIT 1)
-         WHERE category_id IS NULL
-        """
-    )
+    for uid in user_ids:
+        if uid <= 0:
+            uid = ADMIN_USER_ID
+
+        known = {
+            row["name"]
+            for row in conn.execute(
+                "SELECT name FROM categories WHERE user_id = ?", (uid,)
+            )
+        }
+        for row in conn.execute(
+            "SELECT DISTINCT category FROM records "
+            "WHERE user_id = ? AND category IS NOT NULL AND TRIM(category) <> ''",
+            (uid,),
+        ):
+            name = str(row["category"]).strip()
+            if name and name not in known:
+                _ensure_category(conn, name, None, "expense", uid)
+                known.add(name)
+
+        conn.execute(
+            """
+            UPDATE records
+               SET category_id = (
+                       SELECT c.id FROM categories c
+                        WHERE c.name = records.category AND c.parent_id IS NULL
+                          AND c.user_id = records.user_id)
+             WHERE category_id IS NULL AND user_id = ?
+            """,
+            (uid,),
+        )
+        conn.execute(
+            """
+            UPDATE records
+               SET category_id = (
+                       SELECT c.id FROM categories c
+                        WHERE c.name = records.category AND c.user_id = records.user_id
+                        ORDER BY c.parent_id IS NOT NULL, c.id
+                        LIMIT 1)
+             WHERE category_id IS NULL AND user_id = ?
+            """,
+            (uid,),
+        )
 
 
 def _ensure_user_schema(conn):
@@ -792,6 +901,131 @@ def _ensure_user_schema(conn):
         )
 
 
+def _backup_db():
+    """迁移前把 records.db 复制一份到 temp 备份目录，返回备份文件的绝对路径。
+
+    备份失败一律抛出，由 `_migrate_category_isolation` 中止迁移——宁可启动失败，
+    也不允许在没备份的情况下改表结构。同一进程内只备份一次（迁移幂等，重复启动无需重复拷贝）。
+    """
+    global _MIGRATION_BACKUP_FILE
+    if _MIGRATION_BACKUP_FILE and Path(_MIGRATION_BACKUP_FILE).exists():
+        return _MIGRATION_BACKUP_FILE
+    if not DB_PATH.exists():
+        # 全新库：文件还没落盘，没有任何数据可丢
+        return ""
+    MIGRATION_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = MIGRATION_BACKUP_DIR / ("records.db.bak-%s" % stamp)
+    shutil.copy2(DB_PATH, target)
+    _MIGRATION_BACKUP_FILE = str(target)
+    return _MIGRATION_BACKUP_FILE
+
+
+def _migrate_category_isolation(conn):
+    """v0.13.1 分类隔离迁移（幂等，严格按 9 步顺序执行，顺序不可调换）。
+
+    步 0 备份（失败即中止）→ 1 判表 → 2 补 user_id → 3 回填 user_id → 4 建索引
+    → 5 补 type → 6 补 icon_key/color/is_disabled/disabled_at
+    → 7 建 (user_id, parent, name) 唯一索引（失败即中止）
+    → 8 删旧的 uq_categories（失败仅告警）→ 9 建 recurring_templates。
+
+    **关键口径**：步 3 的回填必须在步 7 建唯一索引之前——SQLite 视 NULL 互不相等，
+    顺序反了会让「同名 + NULL user_id」的行静默绕过唯一约束。
+    调用点固定在 `init_db()` 里 `_ensure_user_schema()` 之后、第二段 DML 之前。
+    """
+    # 步 0：迁移前备份，失败即中止（不允许裸奔）
+    try:
+        backup_path = _backup_db()
+    except Exception as exc:  # noqa: BLE001 - 备份失败必须整体中止
+        raise RuntimeError(
+            "[v0.13.1] 迁移前备份 records.db 失败，已中止分类隔离迁移：%s" % exc
+        )
+    if backup_path:
+        print("[v0.13.1] 迁移前备份完成：%s" % backup_path, flush=True)
+
+    # 步 1：categories 表不存在（全新库首启）→ 直接返回，后续 CREATE TABLE 已带齐新列
+    table_exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'categories'"
+    ).fetchone()
+    if table_exists is None:
+        return
+
+    def _columns():
+        return [row["name"] for row in conn.execute("PRAGMA table_info(categories)")]
+
+    # 步 2：补 user_id（已有则跳过）
+    if "user_id" not in _columns():
+        conn.execute("ALTER TABLE categories ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
+
+    # 步 3：回填 user_id。必须在建唯一索引之前做
+    conn.execute("UPDATE categories SET user_id = 1 WHERE user_id IS NULL OR user_id <= 0")
+
+    # 步 4：user_id 查询索引
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_categories_user ON categories (user_id)")
+
+    # 步 5：补 type（收支分组）+ 空值回填
+    if "type" not in _columns():
+        conn.execute(
+            "ALTER TABLE categories ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'"
+        )
+    conn.execute("UPDATE categories SET type = 'expense' WHERE type IS NULL OR type = ''")
+
+    # 步 6：逐列补展示/停用字段，已存在则跳过
+    extra_columns = (
+        ("icon_key", "ALTER TABLE categories ADD COLUMN icon_key TEXT DEFAULT ''"),
+        ("color", "ALTER TABLE categories ADD COLUMN color TEXT DEFAULT ''"),
+        (
+            "is_disabled",
+            "ALTER TABLE categories ADD COLUMN is_disabled INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("disabled_at", "ALTER TABLE categories ADD COLUMN disabled_at TEXT"),
+    )
+    for column_name, statement in extra_columns:
+        if column_name not in _columns():
+            conn.execute(statement)
+
+    # 步 7：跨用户同名唯一索引。失败 = 库里有脏同名数据，必须人工处理，故中止
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_categories_user "
+            "ON categories (user_id, COALESCE(parent_id, 0), name)"
+        )
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "[v0.13.1] 建立 uq_categories_user 失败（库内存在同一用户下的同名分类，"
+            "需人工清理后重启）：%s" % exc
+        )
+
+    # 步 8：删掉旧的全局唯一索引。失败只告警——新索引已生效，不影响隔离语义
+    try:
+        conn.execute("DROP INDEX IF EXISTS uq_categories")
+    except sqlite3.Error as exc:
+        print("[v0.13.1] 警告：删除旧索引 uq_categories 失败（不影响隔离，可手工清理）：%s" % exc, flush=True)
+
+    # 步 9：周期账单模板表（C3 的数据底座，本轮只建表）
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recurring_templates (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL DEFAULT 1,
+            name           TEXT    NOT NULL DEFAULT '',
+            record_type    TEXT    NOT NULL DEFAULT 'expense',
+            amount         REAL    NOT NULL DEFAULT 0,
+            category_id    INTEGER,
+            account        TEXT    NOT NULL DEFAULT '',
+            note           TEXT    NOT NULL DEFAULT '',
+            day_of_month   INTEGER NOT NULL DEFAULT 1,
+            last_posted_at TEXT    NOT NULL DEFAULT '',
+            is_active      INTEGER NOT NULL DEFAULT 1,
+            created_at     TEXT    DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recurring_user ON recurring_templates (user_id)"
+    )
+
+
 def init_db():
     """建表 + 兼容旧库升级。反复启动不会报错，旧库也不会丢数据。"""
     conn = get_conn()
@@ -912,13 +1146,17 @@ def init_db():
                 accounts_need_order = True
 
             # 分类表：parent_id 自关联实现两级分类。parent_id 为 NULL 即一级分类
+            # F6 双保险：user_id / type 直接写进 CREATE（新库一步到位），
+            # 老库仍由 _ensure_user_schema + _migrate_category_isolation 的幂等 ALTER 补齐
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS categories (
                     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id    INTEGER NOT NULL DEFAULT 1,
                     name       TEXT    NOT NULL,
                     parent_id  INTEGER REFERENCES categories(id),
-                    sort_order INTEGER NOT NULL DEFAULT 0
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    type       TEXT    NOT NULL DEFAULT 'expense'
                 )
                 """
             )
@@ -939,11 +1177,10 @@ def init_db():
             conn.execute(
                 "UPDATE categories SET type = 'expense' WHERE type IS NULL OR type = ''"
             )
-            # 同一父级下不允许同名。parent_id 为 NULL 时 COALESCE 成 0，避免 NULL 不参与唯一约束
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_categories "
-                "ON categories (COALESCE(parent_id, 0), name)"
-            )
+            # v0.13.1：分类唯一性改由 `_migrate_category_isolation` 的
+            # `uq_categories_user (user_id, COALESCE(parent_id,0), name)` 承担，
+            # 这里**不再重建旧的全局 uq_categories**——跨用户同名是合法数据，
+            # 每次启动重建它会直接撞 UNIQUE 约束导致 init_db 失败（App 起不来）。
 
             # 通知表（v0.06.2）：开发者发布，前台右上角信封图标里按发布倒序展示。
             # image_url 存 /static/uploads/xxx 这种站内相对路径，没有图就空串
@@ -1129,10 +1366,17 @@ def init_db():
         with conn:
             _ensure_user_schema(conn)
 
-        # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）
+        # v0.13.1：分类隔离迁移。**顺序不可调换**——必须在 _ensure_user_schema 之后
+        # （categories 表此时才存在）、第二段 DML 之前（种子要用新的唯一索引语义）。
+        # 迁移独占一个 with conn: 块（SQLite DDL 会隐式提交现有事务）
         with conn:
-            _seed_categories(conn)
-            _seed_income_categories(conn)
+            _migrate_category_isolation(conn)
+
+        # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
+        # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
+        with conn:
+            _seed_categories(conn, ADMIN_USER_ID)
+            _seed_income_categories(conn, ADMIN_USER_ID)
             _seed_accounts(conn)
             _seed_notifications(conn)
             _backfill_category_ids(conn)
@@ -1156,11 +1400,17 @@ def init_db():
 # ---------------- 分类 ----------------
 
 def get_category(category_id):
-    """按 id 取一个分类，取不到返回 None。"""
+    """按 id 取一个分类，取不到返回 None（跨用户取不到 = 取不到，返回 None → 上层 400）。
+
+    D19：WHERE **只校验 id + user_id，绝不加 is_disabled = 0**。
+    停用只影响「新增场景的选项可见性」，不影响「历史账单的引用写入」。
+    """
     conn = get_conn()
     try:
         row = conn.execute(
-            "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (category_id,)
+            "SELECT id, user_id, name, parent_id, type, icon_key, color, is_disabled, disabled_at "
+            "  FROM categories WHERE id = ? AND user_id = ?",
+            (category_id, _uid()),
         ).fetchone()
         return _row_to_category(row) if row is not None else None
     finally:
@@ -1169,26 +1419,40 @@ def get_category(category_id):
 
 def ensure_category(name, category_type="expense"):
     """按名字找一级分类，没有就建一个（兼容老前端直接传分类文本的写法）。
-    category_type 决定新增分类的收支归属。"""
+    category_type 决定新增分类的收支归属。新建的行落在当前上下文用户（_uid()）名下。"""
     conn = get_conn()
     try:
         with conn:
-            new_id = _ensure_category(conn, name, None, category_type)
+            new_id = _ensure_category(conn, name, None, category_type, _uid())
         row = conn.execute(
-            "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (new_id,)
+            "SELECT id, user_id, name, parent_id, type, icon_key, color, is_disabled, disabled_at "
+            "  FROM categories WHERE id = ?",
+            (new_id,),
         ).fetchone()
         return _row_to_category(row)
     finally:
         conn.close()
 
 
-def list_categories_tree():
-    """返回两级分类树：[{id, name, children: [...]}]，一级在前、按创建顺序排。"""
+def list_categories_tree(include_disabled=False):
+    """返回两级分类树：[{id, name, children: [...]}]，一级在前、按创建顺序排。
+
+    v0.13.1 停用语义（P0）：
+    - 默认 `include_disabled=False` → `WHERE user_id=? AND is_disabled=0`，新增场景的干净列表；
+    - `include_disabled=True` 才返回全量，**只允许分类管理弹窗的「已停用」管理区使用**
+      （D18：编辑态不给列表 API 加这个开关，走前端 record 自带字段零请求合成）；
+    - 返回的节点**必带 is_disabled**。
+    """
     conn = get_conn()
     try:
-        rows = conn.execute(
-            "SELECT id, name, parent_id, type FROM categories ORDER BY sort_order, id"
-        ).fetchall()
+        sql = (
+            "SELECT id, user_id, name, parent_id, type, icon_key, color, is_disabled, disabled_at "
+            "  FROM categories WHERE user_id = ?"
+        )
+        if not include_disabled:
+            sql += " AND is_disabled = 0"
+        sql += " ORDER BY sort_order, id"
+        rows = conn.execute(sql, (_uid(),)).fetchall()
     finally:
         conn.close()
 
@@ -1208,15 +1472,22 @@ def list_categories_tree():
     return tree
 
 
-def create_category(name, parent_id=None, category_type="expense"):
+def create_category(name, parent_id=None, category_type="expense", icon_key="", color=""):
     """新建分类，返回 (分类字典, 错误信息)。parent_id 为空表示一级分类。
-    category_type: 'expense' / 'income'，决定这个分类在记账弹窗里归哪个收支分组。"""
+
+    category_type: 'expense' / 'income'，决定这个分类在记账弹窗里归哪个收支分组。
+    A4：父级必须属于同一用户，否则 400（杜绝把子分类挂到别人的一级分类下）。
+    F5：「SELECT 后 INSERT」在并发同名时会抛 IntegrityError，
+        这里捕获后转成「已存在」文案，由 app.py 映射成 409（而不是 500）。
+    """
     conn = get_conn()
     try:
         with conn:
+            uid = _uid()
             if parent_id is not None:
                 parent = conn.execute(
-                    "SELECT id, parent_id FROM categories WHERE id = ?", (parent_id,)
+                    "SELECT id, parent_id FROM categories WHERE id = ? AND user_id = ?",
+                    (parent_id, uid),
                 ).fetchone()
                 if parent is None:
                     return None, "父级分类不存在"
@@ -1225,32 +1496,42 @@ def create_category(name, parent_id=None, category_type="expense"):
 
             if parent_id is None:
                 dup = conn.execute(
-                    "SELECT id FROM categories WHERE name = ? AND parent_id IS NULL",
-                    (name,),
+                    "SELECT id FROM categories WHERE user_id = ? AND name = ? AND parent_id IS NULL",
+                    (uid, name),
                 ).fetchone()
             else:
                 dup = conn.execute(
-                    "SELECT id FROM categories WHERE name = ? AND parent_id = ?",
-                    (name, parent_id),
+                    "SELECT id FROM categories WHERE user_id = ? AND name = ? AND parent_id = ?",
+                    (uid, name, parent_id),
                 ).fetchone()
             if dup is not None:
                 return None, "同级下已存在同名分类"
 
             sibling_order = conn.execute(
-                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories WHERE parent_id IS ?",
-                (parent_id,),
+                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM categories "
+                "WHERE user_id = ? AND parent_id IS ?",
+                (uid, parent_id),
             ).fetchone()["m"]
             cat_type = "income" if category_type == "income" else "expense"
-            cur = conn.execute(
-                "INSERT INTO categories (name, parent_id, sort_order, type) "
-                "VALUES (?, ?, ?, ?)",
-                (name, parent_id, sibling_order + 1, cat_type),
-            )
+            try:
+                cur = conn.execute(
+                    "INSERT INTO categories (user_id, name, parent_id, sort_order, type, icon_key, color) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (uid, name, parent_id, sibling_order + 1, cat_type, icon_key or "", color or ""),
+                )
+            except sqlite3.IntegrityError:
+                # 并发窗口内的同名插入：转成「已存在」语义，app.py 靠这四个字判 409
+                return None, "同级下已存在同名分类"
             return {
                 "id": cur.lastrowid,
+                "user_id": uid,
                 "name": name,
                 "parent_id": parent_id,
                 "type": cat_type,
+                "icon_key": icon_key or "",
+                "color": color or "",
+                "is_disabled": 0,
+                "disabled_at": "",
                 "children": [],
             }, None
     finally:
@@ -1262,37 +1543,44 @@ def rename_category(category_id, name):
     conn = get_conn()
     try:
         with conn:
+            uid = _uid()
             row = conn.execute(
-                "SELECT id, name, parent_id, type FROM categories WHERE id = ?", (category_id,)
+                "SELECT id, name, parent_id, type FROM categories WHERE id = ? AND user_id = ?",
+                (category_id, uid),
             ).fetchone()
             if row is None:
                 return None, "分类不存在"
 
             if row["parent_id"] is None:
                 dup = conn.execute(
-                    "SELECT id FROM categories WHERE name = ? AND parent_id IS NULL AND id <> ?",
-                    (name, category_id),
+                    "SELECT id FROM categories "
+                    "WHERE user_id = ? AND name = ? AND parent_id IS NULL AND id <> ?",
+                    (uid, name, category_id),
                 ).fetchone()
             else:
                 dup = conn.execute(
                     "SELECT id FROM categories "
-                    "WHERE name = ? AND parent_id = ? AND id <> ?",
-                    (name, row["parent_id"], category_id),
+                    "WHERE user_id = ? AND name = ? AND parent_id = ? AND id <> ?",
+                    (uid, name, row["parent_id"], category_id),
                 ).fetchone()
             if dup is not None:
                 return None, "同级下已存在同名分类"
 
-            conn.execute("UPDATE categories SET name = ? WHERE id = ?", (name, category_id))
+            conn.execute(
+                "UPDATE categories SET name = ? WHERE id = ? AND user_id = ?",
+                (name, category_id, uid),
+            )
             # 账目里冗余存着分类名，改名要跟着改，否则列表还显示旧名字
             conn.execute(
-                "UPDATE records SET category = ? WHERE category_id = ?", (name, category_id)
+                "UPDATE records SET category = ? WHERE category_id = ? AND user_id = ?",
+                (name, category_id, uid),
             )
-            return {
-                "id": category_id,
-                "name": name,
-                "parent_id": row["parent_id"],
-                "children": [],
-            }, None
+            updated = conn.execute(
+                "SELECT id, user_id, name, parent_id, type, icon_key, color, is_disabled, disabled_at "
+                "  FROM categories WHERE id = ?",
+                (category_id,),
+            ).fetchone()
+            return _row_to_category(updated), None
     finally:
         conn.close()
 
@@ -1302,14 +1590,17 @@ def delete_category(category_id):
     conn = get_conn()
     try:
         with conn:
+            uid = _uid()
             row = conn.execute(
-                "SELECT id, name FROM categories WHERE id = ?", (category_id,)
+                "SELECT id, name FROM categories WHERE id = ? AND user_id = ?",
+                (category_id, uid),
             ).fetchone()
             if row is None:
                 return False, "分类不存在"
 
             children = conn.execute(
-                "SELECT COUNT(*) AS c FROM categories WHERE parent_id = ?", (category_id,)
+                "SELECT COUNT(*) AS c FROM categories WHERE parent_id = ? AND user_id = ?",
+                (category_id, uid),
             ).fetchone()["c"]
             if children:
                 return False, "该分类下还有 %d 个子分类，请先删掉子分类" % children
@@ -1317,12 +1608,12 @@ def delete_category(category_id):
             used = conn.execute(
                 "SELECT COUNT(*) AS c FROM records "
                 "WHERE user_id = ? AND category_id = ? AND deleted_at IS NULL",
-                (_uid(), category_id),
+                (uid, category_id),
             ).fetchone()["c"]
             if used:
                 return False, "还有 %d 条账目在用这个分类，删了会让它们失去分类" % used
 
-            conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
+            conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", (category_id, uid))
             return True, None
     finally:
         conn.close()
@@ -1345,8 +1636,9 @@ def reorder_categories(ids, parent_id=None):
         with conn:
             placeholders = ",".join("?" for _ in ids)
             rows = conn.execute(
-                "SELECT id, parent_id FROM categories WHERE id IN (%s)" % placeholders,
-                ids,
+                "SELECT id, parent_id FROM categories "
+                "WHERE user_id = ? AND id IN (%s)" % placeholders,
+                [_uid()] + list(ids),
             ).fetchall()
             if len(rows) != len(ids):
                 return "有分类不存在，刷新后再试"
@@ -1355,8 +1647,8 @@ def reorder_categories(ids, parent_id=None):
                     return "只能重排同一父级下的分类"
             for index, category_id in enumerate(ids):
                 conn.execute(
-                    "UPDATE categories SET sort_order = ? WHERE id = ?",
-                    (index, category_id),
+                    "UPDATE categories SET sort_order = ? WHERE id = ? AND user_id = ?",
+                    (index, category_id, _uid()),
                 )
             return None
     finally:
@@ -1364,11 +1656,13 @@ def reorder_categories(ids, parent_id=None):
 
 
 def get_all_categories():
-    """一级分类名字列表。给旧模板的下拉框用，保持向后兼容。"""
+    """当前用户的一级分类名字列表。给旧模板的下拉框用，保持向后兼容。"""
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name FROM categories WHERE parent_id IS NULL ORDER BY sort_order, id"
+            "SELECT name FROM categories "
+            "WHERE user_id = ? AND parent_id IS NULL ORDER BY sort_order, id",
+            (_uid(),),
         ).fetchall()
         return [row["name"] for row in rows]
     finally:
@@ -1843,7 +2137,8 @@ _RECORD_SELECT = (
     "       r.account, r.type, r.formula, r.to_account, r.fee, "
     "       r.is_reimbursable, r.reimbursement_contact_id, r.reimbursed_amount, "
     "       r.total_reimbursement, r.deleted_at, r.image_path, "
-    "       p.name AS category_parent, ct.name AS reimbursement_contact_name "
+    "       p.name AS category_parent, c.parent_id AS category_parent_id, "
+    "       ct.name AS reimbursement_contact_name "
     "  FROM records r "
     "  LEFT JOIN categories c ON c.id = r.category_id "
     "  LEFT JOIN categories p ON p.id = c.parent_id "
@@ -1868,9 +2163,13 @@ def list_records(account=None, category_id=None, parent_id=None):
         conditions.append("r.category_id = ?")
         params.append(category_id)
     if parent_id is not None:
-        # 一级分类筛选：命中它自己，也命中挂在它下面的所有二级分类
-        conditions.append("r.category_id IN (SELECT id FROM categories WHERE id = ? OR parent_id = ?)")
-        params.extend([parent_id, parent_id])
+        # 一级分类筛选：命中它自己，也命中挂在它下面的所有二级分类。
+        # v0.13.1：限定本用户，跨用户的同名 id 不会串进来
+        conditions.append(
+            "r.category_id IN (SELECT id FROM categories "
+            "WHERE user_id = ? AND (id = ? OR parent_id = ?))"
+        )
+        params.extend([_uid(), parent_id, parent_id])
     if conditions:
         sql += " WHERE " + " AND ".join(conditions)
     sql += " ORDER BY r.id DESC"

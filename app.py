@@ -349,6 +349,12 @@ def auth_register():
         return jsonify(error=error_message), 400
 
     database.seed_default_accounts_for(user["id"])
+    # v0.13.1 A5：注册成功后立刻给新用户补齐默认分类模板（显式传 uid，绝不依赖 _uid()）。
+    # A6b：注册是主流程，补齐失败只留控制台痕迹，不影响注册结果
+    try:
+        database.ensure_category_templates(user["id"])
+    except Exception as exc:  # noqa: BLE001 - 静默兜底，注册本身必须成功
+        print("[v0.13.1] 注册补齐默认分类失败（用户 %s）：%s" % (user["id"], exc), flush=True)
     return (
         jsonify(token=_issue_token(user), user=_public_user(user)),
         201,
@@ -556,7 +562,11 @@ def _resolve_category(data):
             return None, None, (jsonify(error="category_id 必须是整数"), 400)
         category = database.get_category(category_id)
         if category is None:
-            return None, None, (jsonify(error="category_id 对应的分类不存在"), 400)
+            # v0.13.1 A4：get_category 带 user_id 过滤，别人的分类在这里等价于「不存在」
+            return None, None, (
+                jsonify(error="category_id 对应的分类不存在或不属于当前用户"),
+                400,
+            )
         return category["name"], category["id"], None
 
     category = data.get("category")
@@ -2305,8 +2315,13 @@ def purge_record(record_id):
 
 @app.route("/api/categories", methods=["GET"])
 def list_categories():
-    """两级分类树。一级分类带 children，前端拿它做级联下拉框。"""
-    tree = database.list_categories_tree()
+    """两级分类树。一级分类带 children，前端拿它做级联下拉框。
+
+    v0.13.1 停用语义：默认只返回启用中的分类；`?include_disabled=1` 返回全量，
+    **仅允许分类管理弹窗的「已停用」管理区使用**（D18：编辑态走前端零请求合成，不用这个开关）。
+    """
+    include_disabled = request.args.get("include_disabled") in ("1", "true", "True")
+    tree = database.list_categories_tree(include_disabled=include_disabled)
     total = sum(1 + len(node["children"]) for node in tree)
     return jsonify(count=len(tree), total=total, categories=tree)
 
@@ -2372,6 +2387,24 @@ def remove_category(category_id):
             return jsonify(error=error), 404
         return jsonify(error=error), 409
     return jsonify(deleted=category_id)
+
+
+@app.route("/api/categories/ensure-templates", methods=["POST"])
+@login_required
+def ensure_category_templates():
+    """v0.13.1 A6：给当前登录用户补齐一整套默认分类模板（幂等），返回本次新增条数。
+
+    - 登录后的静默兜底：失败由前端静默（仅 console 留痕），不打断登录流程；
+    - 用户在设置 / 分类管理里手动点「同步默认分类」：失败要弹 Toast，故这里返回明确错误。
+    「补缺不覆盖」：已经齐了返回 added=0，用户自己删过的分类不会被复活。
+    """
+    user_id = g.current_user.get("id")
+    try:
+        added = database.ensure_category_templates(user_id)
+    except Exception as exc:  # noqa: BLE001 - 手动点击场景必须能看到错误，转 500 + 中文文案
+        print("[v0.13.1] 补齐默认分类失败（用户 %s）：%s" % (user_id, exc), flush=True)
+        return jsonify(error="补齐默认分类失败，请稍后重试"), 500
+    return jsonify(added=added, categories=database.list_categories_tree())
 
 
 # ---------------- 账户接口 ----------------
