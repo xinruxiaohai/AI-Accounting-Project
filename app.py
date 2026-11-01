@@ -26,6 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai_service
 import database
+import invest_mock
 
 app = Flask(__name__)
 
@@ -748,6 +749,23 @@ def _ai_account_names():
         return []
 
 
+def _ai_invest_account_names():
+    """库里**投资账户**的账户名（v0.13.3）。
+
+    注入 Prompt 让模型在 invest_buy 时正确归属账户，同时回传给前端确认卡做账户下拉；
+    没有投资账户时返回空数组（前端据此提示「先去账户管理切换账户类型」）。
+    读库失败一律吞掉——AI 解析不该因为账户读不到就整体失败。
+    """
+    try:
+        return [
+            item["name"]
+            for item in database.list_accounts()
+            if item.get("name") and item.get("type") == database.INVESTMENT_ACCOUNT_TYPE
+        ]
+    except Exception:  # noqa: BLE001 - 账户读失败不能影响 AI 解析本身
+        return []
+
+
 def _ai_contact_names():
     """库里真实存在的联系人姓名，用于借贷/报销对象的模糊匹配。"""
     try:
@@ -1028,8 +1046,16 @@ def _apply_ai_intent(parsed, text):
     分类补建、联系人查找/创建、余额联动、失败回滚全部只写一遍，
     保证普通接口与 SSE 流式接口落库行为完全一致。
     unknown 由调用方处理（普通接口返回 400，SSE 推 status=unknown），这里不该收到。
+
+    v0.13.3 保险丝（设计 D10 / §8）：`invest_buy` **绝不在这里写库**。
+    投资建仓的唯一入账口是 `POST /api/invest/holdings`（AI 确认卡、手动弹窗、CSV 导入共用）。
+    这里拦一道是防止未来有人给 invest_buy 加了分支、或模型吐出意外 action 时，
+    钱被按普通账目写进 records —— 那会让「买入 1000」凭空变成一笔支出。
     """
     action = parsed.get("action")
+
+    if action == "invest_buy":
+        return {"error": "invest_buy 不在此处写库，请走 POST /api/invest/holdings"}, 400
 
     if action == "record":
         category = parsed.get("category") or "其他"
@@ -1195,6 +1221,7 @@ def create_record_by_ai():
             memories=_memory_hints(text),
             accounts=_ai_account_names(),
             contacts=_ai_contact_names(),
+            invest_accounts=_ai_invest_account_names(),
         )
     except ai_service.AIServiceError as exc:
         # 密钥失效、网络超时、模型胡说都算上游失败，502 便于前端提示重试
@@ -1202,6 +1229,27 @@ def create_record_by_ai():
 
     if parsed["action"] == "unknown":
         return jsonify(error="AI 无法理解您的指令"), 400
+
+    # v0.13.3：投资意图**在路由层就短路**，回 200 + need_confirm，与 SSE 那条字段逐字一致。
+    # 前端 SSE 失败时会走 fallbackAiRequest() 打这条非流式接口，而 api() 对非 2xx 直接抛错，
+    # 回 400 会让投资指令被吞成「AI 无法理解您的指令」——所以这里必须是 200。
+    # 位置：必须在防重之前（_duplicate_candidate 对 invest_buy 会误判），
+    # 也必须在 _apply_ai_intent 之前（那里对 invest_buy 是 400 保险丝）。
+    if parsed["action"] == "invest_buy":
+        parsed["invest_accounts"] = _ai_invest_account_names()
+        return (
+            jsonify(
+                status="need_confirm",
+                action="invest_buy",
+                msg="请确认建仓信息",
+                message="请确认建仓信息",
+                parsed=parsed,
+                candidates=invest_mock.search_securities(
+                    parsed.get("invest_name") or "", 4
+                ),
+            ),
+            200,
+        )
 
     if previous_record is not None:
         body, status = _apply_ai_correction(previous_record, parsed, text)
@@ -1262,6 +1310,7 @@ def create_record_by_ai_stream():
                     memories=_memory_hints(text),
                     accounts=_ai_account_names(),
                     contacts=_ai_contact_names(),
+                    invest_accounts=_ai_invest_account_names(),
                 )
             except ai_service.AIServiceError as exc:
                 yield event({"status": "error", "action": "unknown", "msg": str(exc), "message": str(exc)})
@@ -1276,6 +1325,27 @@ def create_record_by_ai_stream():
                     "action": "unknown",
                     "msg": "AI 无法理解您的指令",
                     "message": "AI 无法理解您的指令",
+                })
+                return
+
+            # v0.13.3：投资意图**只推确认卡，不落库**（设计 D10）。
+            # 必须放在防重分支**之前**：_duplicate_candidate 按「金额 + 商户相似」比对 records，
+            # 对 invest_buy 会误判成重复记账，把确认卡整个吞掉。
+            # 事件序列与设计 §660 一致：thinking → extracting_amount → resolving_invest → need_confirm
+            if action == "invest_buy":
+                yield event({"status": "extracting_amount", "msg": "正在识别买入金额..."})
+                yield event({"status": "resolving_invest", "msg": "正在匹配标的..."})
+                # 账户候选回传给前端确认卡：少了它用户改不了账户，会退化成纯文本展示
+                parsed["invest_accounts"] = _ai_invest_account_names()
+                yield event({
+                    "status": "need_confirm",
+                    "action": "invest_buy",
+                    "msg": "请确认建仓信息",
+                    "message": "请确认建仓信息",
+                    "parsed": parsed,
+                    "candidates": invest_mock.search_securities(
+                        parsed.get("invest_name") or "", 4
+                    ),
                 })
                 return
 
@@ -2506,7 +2576,12 @@ def create_account():
     if isinstance(balance, bool) or not isinstance(balance, (int, float)):
         return jsonify(error="balance 必须是数字"), 400
 
-    account, error = database.create_account(name.strip(), group_name, balance)
+    # v0.13.3：可选功能类型（normal / investment）；建成投资账户时幂等补「默认」子平台
+    account_type = data.get("type", database.DEFAULT_ACCOUNT_TYPE)
+    if not isinstance(account_type, str) or account_type not in database.ACCOUNT_TYPES:
+        return jsonify(error="type 只能是 normal / investment"), 400
+
+    account, error = database.create_account(name.strip(), group_name, balance, account_type)
     if error is not None:
         status = 409 if "已存在" in error else 400
         return jsonify(error=error), status
@@ -2524,8 +2599,13 @@ def update_account(name):
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
 
-    if "balance" not in data and "group_name" not in data and "new_name" not in data:
-        return jsonify(error="至少要传 new_name / balance / group_name 之一"), 400
+    if (
+        "balance" not in data
+        and "group_name" not in data
+        and "new_name" not in data
+        and "type" not in data
+    ):
+        return jsonify(error="至少要传 new_name / balance / group_name / type 之一"), 400
 
     # v0.11.6：账户改名（改名后后续余额/大类修改都作用在新名字上）
     final_name = name
@@ -2555,7 +2635,14 @@ def update_account(name):
                 error="group_name 只能是 " + " / ".join(database.ACCOUNT_GROUPS)
             ), 400
 
-    account, error = database.update_account(final_name, balance, group_name)
+    account_type = None
+    if "type" in data:
+        account_type = data["type"]
+        if not isinstance(account_type, str) or account_type not in database.ACCOUNT_TYPES:
+            return jsonify(error="type 只能是 normal / investment"), 400
+        # 切到 investment 时数据库层会幂等补「默认」子平台；切回 normal 不删任何数据
+
+    account, error = database.update_account(final_name, balance, group_name, account_type)
     if error is not None:
         return jsonify(error=error), 404 if "不存在" in error else 400
     return jsonify(account)
@@ -2611,6 +2698,301 @@ def batch_delete_accounts():
         else:
             failed.append({"name": name, "error": error_message})
     return jsonify(deleted=len(deleted), names=deleted, failed=failed)
+
+
+# ---------------- 投资接口（v0.13.3） ----------------
+#
+# 全部落在 /api/invest/*，全部挂 @login_required，全部由 database._uid() 做用户隔离。
+# 资金口径（team-lead 决策 B）：买入 = 扣 accounts.balance + 写/加仓 holdings，**不写 records**；
+# 删除持仓 = 撤销式清仓退款。全项目只有 database.buy_holding / database.liquidate_holding
+# 两处能动这两张表，本文件禁止出现第二条扣款路径。
+
+# 单一错误码映射源：数据库层只回中文文案，状态码在这里统一决定，避免各路由各写一套
+def _invest_status(error):
+    """按数据库层返回的中文文案决定 HTTP 状态码。
+
+    跨用户 / 不存在一律 404（**不用 403**，避免泄露「这条数据存在但不属于你」）。
+    """
+    if not error:
+        return 200
+    if "不存在" in error:
+        return 404
+    # 冲突类：同名 / 已存在 / 平台下还有持仓（先清仓再删）
+    if "已有" in error or "同名" in error or "还有" in error:
+        return 409
+    return 400
+
+
+def _to_number(value, default=0.0):
+    """把请求里的数字字段转成 float；非数字 / 布尔一律回落默认值。"""
+    if isinstance(value, bool) or value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+@app.route("/api/invest/search", methods=["GET"])
+@login_required
+def invest_search():
+    """标的代码 / 名称搜索（Mock 行情）。
+
+    `?keyword=005827&limit=10` → 200 {total, items:[{ticker,name,asset_type,price,source}]}
+    未命中返回 {total: 0, items: []}（**不是 404**），前端据此显示「没有找到匹配的标的」。
+    """
+    keyword = request.args.get("keyword", "")
+    if not isinstance(keyword, str) or not keyword.strip():
+        return jsonify(error="请输入标的名称或代码"), 400
+    keyword = keyword.strip()
+    if len(keyword) > 50:
+        return jsonify(error="搜索关键字不能超过 50 个字"), 400
+
+    limit = _to_number(request.args.get("limit", 10), 10)
+    limit = int(limit)
+    if limit <= 0 or limit > 50:
+        limit = 10
+
+    items = invest_mock.search_securities(keyword, limit)
+    return jsonify(total=len(items), items=items)
+
+
+@app.route("/api/invest/board", methods=["GET"])
+@login_required
+def invest_board():
+    """投资看板聚合数据：一次请求拿全持仓 Tab 需要的全部数据。
+
+    `?account=天天基金` → 200 {account, total_market_value, total_cost, day_pl, platforms}
+    市值 / 盈亏一律服务端算好下发，前端不做二次计算。
+    """
+    account = request.args.get("account", "")
+    if not isinstance(account, str) or not account.strip():
+        return jsonify(error="请先指定要查看的投资账户"), 400
+
+    board, error = database.list_invest_board(account.strip())
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(board)
+
+
+@app.route("/api/invest/platforms", methods=["GET"])
+@login_required
+def list_invest_platforms():
+    """某投资账户下的子平台列表（带持仓数与市值），给「新建持仓」弹窗的下拉用。"""
+    account = request.args.get("account", "")
+    if not isinstance(account, str) or not account.strip():
+        return jsonify(error="请先指定投资账户"), 400
+
+    platforms, error = database.list_invest_platforms(account.strip())
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(count=len(platforms), platforms=platforms, account=account.strip())
+
+
+@app.route("/api/invest/platforms", methods=["POST"])
+@login_required
+def create_invest_platform():
+    """新建子平台。body: {"account": "天天基金", "name": "支付宝"}"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    account = data.get("account")
+    if not isinstance(account, str) or not account.strip():
+        return jsonify(error="请先指定投资账户"), 400
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="平台名称不能为空"), 400
+
+    platform, error = database.create_platform(account.strip(), name.strip())
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(platform), 201
+
+
+@app.route("/api/invest/platforms/<int:pid>", methods=["PUT"])
+@login_required
+def update_invest_platform(pid):
+    """子平台改名。body: {"name": "支付宝"}"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="平台名称不能为空"), 400
+
+    platform, error = database.rename_platform(pid, name.strip())
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(platform)
+
+
+@app.route("/api/invest/platforms/<int:pid>", methods=["DELETE"])
+@login_required
+def delete_invest_platform(pid):
+    """删子平台。平台下还有持仓就拒绝（409），先清仓再删——删空平台不涉及任何资金。"""
+    deleted, error = database.delete_platform(pid)
+    if not deleted:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(deleted=pid)
+
+
+@app.route("/api/invest/holdings", methods=["POST"])
+@login_required
+def create_invest_holding():
+    """**全局唯一的投资入账口**（手动建仓 / AI 确认建仓 / 未来的 CSV 导入都走这里）。
+
+    body: {
+      "account": "天天基金", "platform_id": 3, "ticker": "005827",
+      "name": "易方达蓝筹精选", "asset_type": "fund",
+      "shares": 1000, "cost_price": 1.0, "amount": 1000,
+      "dca": {"amount": 500, "frequency": "monthly", "next_date": "2026-11-01"}
+    }
+    201 {holding, platform, dca, record, balance}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    account = data.get("account")
+    if not isinstance(account, str) or not account.strip():
+        return jsonify(error="请先指定投资账户"), 400
+    name = data.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return jsonify(error="请填写标的名称"), 400
+
+    # 决策 D 的写入侧：只允许在**建仓**时给定金额三要素，改只能改元信息
+    price = data.get("price")
+    if price is None:
+        price = data.get("cost_price")
+    dca = data.get("dca")
+    if not isinstance(dca, dict):
+        dca = None
+
+    payload, error = database.buy_holding(
+        account.strip(),
+        platform_id=data.get("platform_id"),
+        name=name.strip(),
+        ticker=str(data.get("ticker") or "").strip(),
+        asset_type=data.get("asset_type", database.DEFAULT_ASSET_TYPE),
+        shares=_to_number(data.get("shares"), 0),
+        price=_to_number(price, 0),
+        amount=_to_number(data.get("amount"), 0),
+        dca=dca,
+    )
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(payload), 201
+
+
+@app.route("/api/invest/holdings/<int:hid>", methods=["PUT"])
+@login_required
+def update_invest_holding(hid):
+    """改持仓**元信息**（名称 / 代码 / 资产类型 / 平台）。
+
+    决策 D：**份额与成本一律不许改**——金额填错请走「删除（清仓退款）后重建」，
+    否则 shares / cost_price / cost_total 三者漂移，勾稽再也对齐不上。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    for forbidden in ("shares", "cost_price", "price", "cost_total", "amount"):
+        if forbidden in data:
+            return jsonify(
+                error="份额与成本不支持修改，金额填错了请先清仓再重新建仓"
+            ), 400
+
+    allowed = ("name", "ticker", "asset_type", "platform_id")
+    if not any(key in data for key in allowed):
+        return jsonify(error="至少要传 name / ticker / asset_type / platform_id 之一"), 400
+
+    if "name" in data and (not isinstance(data["name"], str) or not data["name"].strip()):
+        return jsonify(error="标的名称不能为空"), 400
+
+    holding, error = database.update_holding_meta(
+        hid,
+        name=data["name"].strip() if "name" in data else None,
+        ticker=data.get("ticker"),
+        asset_type=data.get("asset_type"),
+        platform_id=data.get("platform_id"),
+    )
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(holding)
+
+
+@app.route("/api/invest/holdings/<int:hid>", methods=["DELETE"])
+@login_required
+def delete_invest_holding(hid):
+    """撤销式清仓：可用资金加回累计成本并删除持仓，该持仓的定投计划一并暂停。"""
+    payload, error = database.liquidate_holding(hid)
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(payload)
+
+
+@app.route("/api/invest/dca-plans", methods=["POST"])
+@login_required
+def create_dca_plan():
+    """给持仓挂一条定投计划。本期只落库 + 展示，不自动生成任何账目。
+
+    body: {"holding_id": 5, "amount": 500, "frequency": "monthly", "next_date": "2026-11-01"}
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    holding_id = data.get("holding_id")
+    try:
+        holding_id = int(holding_id)
+    except (TypeError, ValueError):
+        return jsonify(error="holding_id 必须是整数"), 400
+
+    if "amount" not in data:
+        return jsonify(error="请填写定投金额"), 400
+
+    plan, error = database.create_dca_plan(
+        holding_id,
+        _to_number(data.get("amount"), 0),
+        frequency=data.get("frequency"),
+        next_date=str(data.get("next_date") or "").strip(),
+        status=data.get("status"),
+    )
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(plan), 201
+
+
+@app.route("/api/invest/dca-plans/<int:did>", methods=["PUT"])
+@login_required
+def update_dca_plan(did):
+    """改定投计划（金额 / 频率 / 下次扣款日 / 状态），只改计划本身，不产生任何账目。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    plan, error = database.update_dca_plan(
+        did,
+        amount=data.get("amount"),
+        frequency=data.get("frequency"),
+        next_date=data.get("next_date"),
+        status=data.get("status"),
+    )
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(plan)
+
+
+@app.route("/api/invest/dca-plans/<int:did>", methods=["DELETE"])
+@login_required
+def delete_dca_plan(did):
+    """删定投计划。计划不牵涉任何余额，可安全物理删除。"""
+    deleted, error = database.delete_dca_plan(did)
+    if not deleted:
+        return jsonify(error=error), _invest_status(error)
+    return jsonify(deleted=did)
 
 
 @app.route("/api/records/batch/delete", methods=["POST"])
@@ -3073,7 +3455,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.1-DEV"
+APP_VERSION_FALLBACK = "v0.13.3-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

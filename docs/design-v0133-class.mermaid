@@ -1,0 +1,132 @@
+%% v0.13.3 增量：投资账户体系（accounts.type / invest_platforms / holdings / dca_plans）
+classDiagram
+    class Account {
+        +int user_id
+        +str name
+        +float balance
+        +str group_name
+        +int sort_order
+        +str type
+    }
+    class InvestPlatform {
+        +int id
+        +int user_id
+        +str account
+        +str name
+        +int sort_order
+        +str created_at
+    }
+    class Holding {
+        +int id
+        +int user_id
+        +int platform_id
+        +str ticker
+        +str name
+        +str asset_type
+        +float shares
+        +float cost_price
+        +float current_price
+        +float cost_total
+        +int record_id
+        +str created_at
+        +str updated_at
+    }
+    class DcaPlan {
+        +int id
+        +int user_id
+        +int holding_id
+        +float amount
+        +str frequency
+        +str next_date
+        +str status
+        +str created_at
+    }
+    class Record {
+        +int id
+        +int user_id
+        +float amount
+        +str type
+        +str category
+        +str account
+        +str date
+    }
+    class UserContext {
+        <<contextvars>>
+        +set_current_user(user_id)
+        +current_user_id() int
+        +_uid() int
+    }
+    class InvestRepo {
+        +_migrate_investment_schema(conn)
+        +_row_to_platform(row) dict
+        +_row_to_holding(row) dict
+        +_row_to_dca(row) dict
+        +ensure_default_platform(conn, account, uid) int
+        +list_invest_board(account_name) dict
+        +create_platform(account, name) tuple
+        +rename_platform(pid, name) tuple
+        +delete_platform(pid) tuple
+        +buy_holding(account, platform_id, name, ticker, asset_type, shares, price, amount) tuple
+        +update_holding_meta(hid, name, ticker, asset_type, platform_id) tuple
+        +liquidate_holding(hid) tuple
+        +create_dca_plan(holding_id, amount, frequency, next_date) tuple
+        +update_dca_plan(did, **fields) tuple
+        +delete_dca_plan(did) bool
+        +cascade_on_rename_account(old, new)
+        +cascade_on_merge_account(source, target)
+        +cascade_on_delete_account(name)
+    }
+    class QuoteRepo {
+        +MOCK_SECURITIES list
+        +search_securities(keyword, limit) list
+        +lucky_one(keyword) dict
+    }
+    class AIIntentRouter {
+        +ACTIONS tuple
+        +SYSTEM_PROMPT str
+        +_normalize_invest(payload, now, accounts, platforms) dict
+        +parse_intent(text, ...) dict
+    }
+    class InvestAPI {
+        +GET /api/invest/search
+        +GET /api/invest/board
+        +GET~DELETE /api/invest/platforms
+        +POST~DELETE /api/invest/holdings
+        +POST~DELETE /api/invest/dca-plans
+    }
+    class InvestBoardUI {
+        +state.invest map
+        +renderInvestBoard(accountName)
+        +renderInvestHoldings(board)
+        +renderInvestLedger(records)
+        +switchInvestTab(tab)
+        +togglePlatform(id)
+        +scheduleTickerSearch(keyword)
+        +openHoldingModal(accountName)
+        +submitHolding()
+    }
+    class AssetsPageHooks {
+        +selectAccount(name)
+        +clearDetail()
+        +runAiStream(text, force)
+    }
+
+    Account "1" --> "0..*" InvestPlatform : account 名字引用(非 SQL 外键)
+    InvestPlatform "1" --> "0..*" Holding : platform_id
+    Holding "1" --> "0..*" DcaPlan : holding_id
+    Account "1" --> "0..*" Record : account 名字引用
+    Holding "0..1" --> "1" Record : record_id 审计锚点
+    UserContext ..> InvestRepo : _uid() 注入 user_id
+    UserContext ..> InvestAPI : before_request 注入
+    InvestRepo ..> Account : 扣/加 balance
+    InvestRepo ..> InvestPlatform : SQL
+    InvestRepo ..> Holding : SQL
+    InvestRepo ..> DcaPlan : SQL
+    InvestRepo ..> Record : 写 expense/income
+    InvestAPI ..> InvestRepo : 调用
+    InvestAPI ..> QuoteRepo : Mock 搜索
+    AIIntentRouter ..> QuoteRepo : 补 ticker/name
+    AIIntentRouter ..> InvestAPI : need_confirm 不写库
+    AssetsPageHooks ..> InvestBoardUI : selectAccount 分支
+    InvestBoardUI ..> InvestAPI : fetch
+    InvestBoardUI ..> AssetsPageHooks : investOnRecordChanged

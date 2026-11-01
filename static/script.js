@@ -129,7 +129,10 @@ function animateNumber(element, from, to, duration) {
     if (countUpTokens.get(element) !== token) {
       return; // 已被更新的动画接管，这一帧直接放弃
     }
-    const progress = Math.min(1, (now - startedAt) / total);
+    // rAF 回调的 now 是「帧开始时间」，可能早于注册时的 performance.now()
+    // （实测差 -15.5ms）。不钳下界时 progress 为负，easeOutCubic 会算出负插值，
+    // 数字滚动首帧闪出一个负值（终值为正时尤其明显）。上下界都要钳。
+    const progress = Math.max(0, Math.min(1, (now - startedAt) / total));
     const eased = 1 - Math.pow(1 - progress, 3); // easeOutCubic：起步轻快、收尾平稳
     element.textContent = formatAmountText(start + (end - start) * eased);
     if (progress < 1) {
@@ -184,30 +187,26 @@ function setAmountAnimated(key, element, value) {
  *
  * 关键：资产页的核心数字在**页面还隐藏时**就已经渲染完了，
  * 0 → 目标值的滚动会跑在看不见的页面上，等用户切过去动画早已结束，看着像"没生效"。
- * 所以这里在「首次进入某个页面」时再补一次滚动，保证用户真的看得到。
+ * 所以这里进入某个页面时再补一次滚动，保证用户真的看得到。
+ *
+ * v0.13.3：资金需求改成「每次进入页面 / 每次刷新，核心数字都要从 0 滚到目标值」，
+ * 去掉原先 enteredPages 的「只对首次生效」去重，改成每次切入都重放一次 0 → 当前值。
  */
 const AMOUNT_PAGE_KEYS = {
   home: ["hero-expense", "hero-income", "hero-net"],
   assets: ["asset-net", "asset-borrow", "asset-lend", "reimb-pending", "reimb-done"],
 };
 
-const enteredPages = new Set();
-
-// 脚本解析时页面上已经有一页是 active（通常是首页），它算作「已进入」，
-// 避免刚加载完第一次切页时把首页的数字又滚一遍。
-(function () {
-  const active = document.querySelector(".page.active");
-  if (active) {
-    enteredPages.add(String(active.id || "").replace(/^page-/, ""));
-  }
-})();
-
-function rollAmountsOnFirstEnter(page) {
-  if (enteredPages.has(page)) {
-    return;
-  }
-  enteredPages.add(page);
-  if (prefersReducedMotion()) {
+/**
+ * 进入某个页面时，把该页核心数字从 0 重新滚到当前值。
+ *
+ * 每次切入都会重放；animateNumber() 内部的 countUpTokens 令牌会让上一次未跑完
+ * 的 rAF 自动退出，所以反复来回切换不会出现多个动画抢写同一个节点。
+ * @param {string} page 页面标识（home / assets …）
+ */
+function rollAmountsOnEnter(page) {
+  // 金额被小眼睛隐藏时不能滚，滚起来等于把真实数字露出来
+  if (prefersReducedMotion() || (state && state.amountHidden)) {
     return;
   }
   (AMOUNT_PAGE_KEYS[page] || []).forEach(function (key) {
@@ -293,16 +292,33 @@ function todayText() {
 
 /* ==================== Toast 轻提示 ==================== */
 
-function toast(message, type) {
+// 各类 Toast 的停留时长（毫秒）。错误类要给用户足够时间读完后续到底错在哪，
+// 2400ms 实测来不及看清（v0.13.3 QA）；成功类是「知道了」的确认感，保持短。
+const TOAST_DURATION = { success: 2400, warn: 3600, error: 4800 };
+
+/**
+ * 顶部堆叠提示。
+ * @param {string} message 文案
+ * @param {string} type "success" | "warn" | "error"
+ * @param {object} [options] 传 { duration: ms } 可覆盖默认时长
+ */
+function toast(message, type, options) {
   const stack = $("toast-stack");
   if (!stack) {
     return;
   }
+  const kind =
+    type === "error" ? "error" : type === "warn" ? "warn" : "success";
+  let duration = TOAST_DURATION[kind];
+  if (options && Number.isFinite(options.duration) && options.duration > 0) {
+    duration = options.duration;
+  }
   const item = document.createElement("div");
   item.className =
     "toast-item " +
-    (type === "error" ? "toast-error" : type === "warn" ? "toast-warn" : "toast-success");
+    (kind === "error" ? "toast-error" : kind === "warn" ? "toast-warn" : "toast-success");
   item.textContent = String(message || "");
+  item.setAttribute("data-toast-duration", String(duration));
   stack.appendChild(item);
 
   // 先插进 DOM 再加 show，才有从上面滑下来的动画
@@ -312,12 +328,13 @@ function toast(message, type) {
 
   setTimeout(function () {
     item.classList.remove("show");
+    item.setAttribute("data-toast-hiding", "1");
     setTimeout(function () {
       if (item.parentNode) {
         item.parentNode.removeChild(item);
       }
     }, 260);
-  }, 2400);
+  }, duration);
 }
 
 /* ==================== 表单防呆：字段错误提示 ==================== */
@@ -741,6 +758,9 @@ const state = {
    * 新增记账、批量改分类、分类管理树、父级下拉一律不读它 —— 停用分类不会漏进新增场景。
    */
   recordOnlyCategories: [],
+  // v0.13.3：投资账户双视图看板（会话态）。activeTab 只记 holdings / ledger，
+  // 默认 holdings（持仓）；每次打开投资账户沿用会话内上一次停留的视图。
+  invest: { accountName: "", activeTab: "holdings" },
 };
 
 let recordModal = null;
@@ -1809,6 +1829,9 @@ function renderAccountGroups() {
           const balance = Number(account.balance || 0);
           // v0.11.6：行内编辑表单，保存 / 取消由事件委托处理
           if (state.editingAccount === account.name) {
+            // v0.13.3：账户类型可改（普通 ⇄ 投资）。改成投资账户时后端幂等补「默认」子平台；
+            // 改回普通账户不删任何平台/持仓/定投，只是不再显示投资看板。
+            const editType = account.type === "investment" ? "investment" : "normal";
             return (
               '<div class="account-row is-editing" data-account="' +
               name +
@@ -1822,8 +1845,21 @@ function renderAccountGroups() {
               '<input class="form-control form-control-sm account-edit-balance" type="number" step="0.01" value="' +
               balance.toFixed(2) +
               '" aria-label="账户余额" autocomplete="off">' +
+              '<select class="form-select form-select-sm account-edit-type" aria-label="账户类型">' +
+              '<option value="normal"' +
+              (editType === "normal" ? " selected" : "") +
+              ">普通账户</option>" +
+              '<option value="investment"' +
+              (editType === "investment" ? " selected" : "") +
+              ">投资账户</option>" +
+              "</select>" +
               '<button class="btn btn-sm btn-primary account-edit-save" type="button">保存</button>' +
               '<button class="btn btn-sm btn-light account-edit-cancel" type="button">取消</button>' +
+              '<p class="account-edit-hint">' +
+              (editType === "investment"
+                ? "改为普通账户后，平台 / 持仓 / 定投数据不会删除，只是不再显示投资看板。"
+                : "改成投资账户后，右栏会换成【投资看板】，并自动建一个「默认」子平台。") +
+              "</p>" +
               "</form></div>"
             );
           }
@@ -1853,6 +1889,9 @@ function renderAccountGroups() {
             '<span class="account-row-main">' +
             '<span class="account-row-name">' +
             name +
+            (account.type === "investment"
+              ? '<span class="account-row-badge" title="投资账户">投资</span>'
+              : "") +
             "</span>" +
             '<span class="account-row-sub">' +
             escapeHtml(group.name) +
@@ -1963,14 +2002,50 @@ async function loadAccounts() {
       renderAccountGroups();
     }
     renderAccountBalanceCard();
+    // v0.13.3：账户列表变了同步给投资看板（改名 / 删除 / 新增）
+    if (typeof window.investOnAccountsChanged === "function") {
+      window.investOnAccountsChanged();
+    }
   } finally {
     finish();
+  }
+}
+
+/* ==================== v0.13.3：投资看板钩子（详细实现在 static/invest-v0133.js） ==================== */
+
+/** 取当前账户对象（拿不到就 null），供投资账户判定使用 */
+function findAccount(name) {
+  return (
+    (state.accounts || []).filter(function (account) {
+      return account.name === name;
+    })[0] || null
+  );
+}
+
+/** 普通账户 ⇄ 投资看板：两套 DOM 互斥显隐，右栏内容整块切换 */
+function toggleInvestBoard(show) {
+  const board = $("invest-board");
+  const balanceCard = $("account-balance-card");
+  const records = $("account-records");
+  const on = Boolean(show);
+  if (board) {
+    board.hidden = !on;
+  }
+  if (balanceCard) {
+    balanceCard.hidden = on;
+  }
+  if (records) {
+    records.hidden = on;
   }
 }
 
 function clearDetail() {
   state.detailAccount = "";
   state.detailRecords = [];
+  toggleInvestBoard(false);
+  if (typeof window.investResetBoard === "function") {
+    window.investResetBoard();
+  }
   $("detail-title").textContent = "账户流水";
   $("quick-add-btn").disabled = true;
   $("account-records").innerHTML = feedEmptyHtml("先在上方点一个账户，这里会显示它的流水");
@@ -1979,9 +2054,26 @@ function clearDetail() {
 
 async function selectAccount(name) {
   state.detailAccount = name;
+  renderAccountGroups();
+
+  // v0.13.3：投资账户走独立看板（持仓 / 流水双 Tab），不再渲染普通流水列表
+  if (typeof window.isInvestmentAccount === "function" && window.isInvestmentAccount(findAccount(name))) {
+    $("quick-add-btn").disabled = false;
+    renderAccountBalanceCard();
+    toggleInvestBoard(true);
+    state.detailRecords = [];
+    if (typeof window.renderInvestBoard === "function") {
+      await window.renderInvestBoard(name);
+    }
+    return;
+  }
+
+  toggleInvestBoard(false);
+  if (typeof window.investResetBoard === "function") {
+    window.investResetBoard();
+  }
   $("detail-title").textContent = name + " · 流水";
   $("quick-add-btn").disabled = false;
-  renderAccountGroups();
   renderAccountBalanceCard();
 
   const finish = beginTableLoad($("account-records"), 5);
@@ -2128,8 +2220,10 @@ async function saveAccountEdit(form) {
   const name = form.getAttribute("data-edit-form");
   const nameInput = form.querySelector(".account-edit-name");
   const balanceInput = form.querySelector(".account-edit-balance");
+  const typeInput = form.querySelector(".account-edit-type");
   const newName = String((nameInput && nameInput.value) || "").trim();
   const balance = Number((balanceInput && balanceInput.value) || 0);
+  const nextType = String((typeInput && typeInput.value) || "normal");
   if (!newName) {
     toast("账户名不能为空", "error");
     return;
@@ -2138,13 +2232,40 @@ async function saveAccountEdit(form) {
     toast("余额必须是数字", "error");
     return;
   }
+  const current = findAccount(name);
+  const wasInvestment = !!(current && current.type === "investment");
+  // v0.13.3：投资 → 普通 是一次「降级」，必须让用户确认「数据没被删，只是不再显示看板」
+  if (wasInvestment && nextType !== "investment") {
+    const accepted = await confirmAction({
+      title: "改为普通账户",
+      text: "把「" + name + "」改回普通账户？",
+      extra: "平台 / 持仓 / 定投数据不会被删除，只是不再显示投资看板；改回投资账户即可重新看到。",
+      confirmText: "改为普通账户",
+      danger: false,
+    });
+    if (!accepted) {
+      return;
+    }
+  }
   try {
     await api(
       "/api/accounts/" + encodeURIComponent(name),
-      jsonOptions("PUT", { new_name: newName, balance: balance })
+      jsonOptions("PUT", {
+        new_name: newName,
+        balance: balance,
+        type: nextType === "investment" ? "investment" : "normal",
+      })
     );
     state.editingAccount = "";
-    toast(newName === name ? "账户已更新" : "账户已重命名为 " + newName, "success");
+    toast(
+      newName === name
+        ? "账户已更新"
+        : "账户已重命名为 " + newName,
+      "success"
+    );
+    if (wasInvestment && nextType !== "investment") {
+      toast("已改为普通账户，持仓数据保留未删除", "success");
+    }
     const wasSelected = state.detailAccount === name;
     await loadAccounts();
     if (wasSelected) {
@@ -4077,6 +4198,17 @@ async function refreshDetail() {
   if (!state.detailAccount) {
     return;
   }
+  // v0.13.3：投资账户的右栏是看板，账目变动交给看板自己刷新（只刷当前可见的视图）
+  if (
+    typeof window.isInvestmentAccount === "function" &&
+    window.isInvestmentAccount(findAccount(state.detailAccount))
+  ) {
+    if (typeof window.investOnRecordChanged === "function") {
+      window.investOnRecordChanged();
+    }
+    renderAccountBalanceCard();
+    return;
+  }
   const finish = beginTableLoad($("account-records"), 5);
   try {
     const data = await api("/api/records?account=" + encodeURIComponent(state.detailAccount));
@@ -4638,12 +4770,36 @@ function collectRecordValues() {
   return { issues: issues, values: values };
 }
 
+/**
+ * 账户大类 → 账户类型 的双向联动。
+ *
+ * - 大类选「投资账户」→ 类型切成 investment（替用户补上，省一步）
+ * - 大类改成其它任何值 → 类型复位成 normal
+ *
+ * 复位是必须的：大类改回「资金账户」后如果类型还停在 investment，存下来的就是一个
+ * 「大类=资金账户、却带投资角标、有投资看板、还自动建了『默认』子平台」的自相矛盾账户。
+ * 大类是用户的显式动作，改了大类应该把上一次联动的结果一并撤掉。
+ *
+ * 「大类=资金账户 + 类型=投资账户」这种组合没有实际意义，不为它保留逃生通道。
+ */
+function syncAccountTypeFromGroup() {
+  const group = $("new-account-group");
+  const type = $("new-account-type");
+  if (!group || !type) {
+    return;
+  }
+  type.value = group.value === "投资账户" ? "investment" : "normal";
+}
+
 function collectAccountValues() {
   const issues = [];
   const name = $("new-account-name").value.trim();
   const group = $("new-account-group").value;
   const balanceText = String($("new-account-balance").value || "").trim();
   const balance = Number(balanceText === "" ? 0 : balanceText);
+  // v0.13.3：账户类型（normal / investment）。投资账户会在后端幂等补一个「默认」子平台。
+  const typeSelect = $("new-account-type");
+  const type = typeSelect && typeSelect.value === "investment" ? "investment" : "normal";
 
   if (!name) {
     issues.push({ field: $("new-account-name"), message: "请填写账户名称" });
@@ -4657,7 +4813,12 @@ function collectAccountValues() {
 
   return {
     issues: issues,
-    values: { name: name, group: group, balance: cents(Number.isFinite(balance) ? balance : 0) },
+    values: {
+      name: name,
+      group: group,
+      balance: cents(Number.isFinite(balance) ? balance : 0),
+      type: type,
+    },
   };
 }
 
@@ -5968,12 +6129,19 @@ async function addAccount() {
         name: check.values.name,
         group_name: check.values.group,
         balance: check.values.balance,
+        type: check.values.type,
       })
     );
     $("new-account-name").value = "";
     $("new-account-balance").value = "0";
+    if ($("new-account-type")) {
+      $("new-account-type").value = "normal";
+    }
     clearFormErrors($("account-modal"));
-    toast("账户已添加", "success");
+    toast(
+      check.values.type === "investment" ? "投资账户已添加，已自动建「默认」平台" : "账户已添加",
+      "success"
+    );
     if (accountModal) {
       accountModal.hide();
     }
@@ -6059,8 +6227,8 @@ function switchPage(page) {
   // 连续点同一个导航项也要能重放：先移除类 → 强制重排 → 再加回。
   playPageEnterAnimation(target);
 
-  // 核心数字在页面隐藏时就渲染完了，首次进入才补一次滚动，让用户真的看得到
-  rollAmountsOnFirstEnter(target);
+  // v0.13.3：核心数字在页面隐藏时就渲染完了，所以每次切入都补一次 0 → 当前值的滚动
+  rollAmountsOnEnter(target);
 
   if (target === "bills") {
     renderBillsPage();
@@ -8078,10 +8246,21 @@ function bindEvents() {
   // 新增账户：先把「已有账户」排序列表按最新顺序重画，再开弹窗
   $("open-account-btn").addEventListener("click", function () {
     renderAccountSortList();
+    // v0.13.3：类型下拉每次开弹窗都回到「普通账户」，避免上一次选了投资账户被带进来
+    if ($("new-account-type")) {
+      $("new-account-type").value = "normal";
+    }
+    syncAccountTypeFromGroup();
     if (accountModal) {
       accountModal.show();
     }
   });
+
+  // v0.13.3：大类选「投资账户」时自动把类型切成 investment。
+  // 两个下拉里都有「投资账户」，只在大类选了、类型留默认的话，建出来其实是普通账户
+  // （没有角标、没有看板），用户会以为是自己没选上。用联动而不是删选项 —— 迁移回填
+  // 正是按 group_name='投资账户' 认老账户的，删了会把既有语义打断。
+  $("new-account-group").addEventListener("change", syncAccountTypeFromGroup);
   $("save-account-btn").addEventListener("click", addAccount);
 
   // 分类管理
@@ -10271,6 +10450,8 @@ const AI_STATUS_TEXT = {
   extracting_account: "正在确认账户…",
   extracting_date: "正在解析日期…",
   extracting_contact: "正在识别联系人…",
+  // v0.13.3：invest_buy 的事件序列 thinking → extracting_amount → resolving_invest → need_confirm
+  resolving_invest: "正在匹配标的…",
   writing: "正在写入账本…",
   saving: "正在保存账目…",
   done: "处理完成",
@@ -10312,6 +10493,75 @@ function aiResultRecordId(result) {
   return null;
 }
 
+/** 从任意一层数据里取 AI 写库后的账目对象：payload.record → record → payload → 顶层 */
+function aiResultRecord(result) {
+  if (!result) {
+    return null;
+  }
+  const candidates = [
+    result.payload && result.payload.record,
+    result.record,
+    result.payload,
+    result,
+  ];
+  for (let i = 0; i < candidates.length; i += 1) {
+    const item = candidates[i];
+    if (item && typeof item === "object" && (item.type || item.amount !== undefined)) {
+      return item;
+    }
+  }
+  return null;
+}
+
+/**
+ * v0.13.3：转账成功后在气泡里补一张小卡片（转出 / 转入 / 金额 / 手续费）。
+ * 转账只是「账户之间挪钱」，写 records 联动 balance，不碰 holdings，
+ * 所以这里只做展示，**不改任何落库路径**。
+ */
+function attachTransferSummary(bubble, terminal) {
+  const record = aiResultRecord(terminal);
+  if (!bubble || bubble.removed || !record || record.type !== "transfer") {
+    return false;
+  }
+  const fee = Number(record.fee || 0);
+  const rows = [
+    { label: "转出账户", value: record.account || "-" },
+    { label: "转入账户", value: record.to_account || "-" },
+    { label: "金额", value: money(record.amount) },
+  ];
+  if (fee > 0) {
+    rows.push({ label: "手续费", value: money(fee) });
+  }
+  attachBubbleCard(bubble, rows);
+  return true;
+}
+
+/** 在气泡正文下挂一张两列小卡片（label / value），与「修改」表单互斥 */
+function attachBubbleCard(bubble, rows) {
+  if (!bubble || bubble.removed || !bubble.element || !rows || !rows.length) {
+    return null;
+  }
+  const main = bubble.element.querySelector(".bubble-main");
+  if (!main || main.querySelector(".bubble-card")) {
+    return null;
+  }
+  const card = document.createElement("div");
+  card.className = "bubble-card";
+  card.innerHTML = rows
+    .map(function (row) {
+      return (
+        '<div class="bubble-card-row"><span class="bubble-card-label">' +
+        escapeHtml(row.label) +
+        '</span><span class="bubble-card-value">' +
+        escapeHtml(row.value) +
+        "</span></div>"
+      );
+    })
+    .join("");
+  main.appendChild(card);
+  return card;
+}
+
 function restoreAiInput(text) {
   const input = $("ai-input");
   if (input) {
@@ -10346,6 +10596,9 @@ async function runAiStream(text, force) {
 
   let terminal = null;
   let duplicatePayload = null;
+  // v0.13.3：invest_buy 专用。后端推到 need_confirm 就停（此时没有写任何库），
+  // 确认由前端直接 POST /api/invest/holdings，与手动建仓同一个入账口（设计 D10）。
+  let needConfirmPayload = null;
   try {
     const body = { text: text };
     if (force) {
@@ -10399,6 +10652,15 @@ async function runAiStream(text, force) {
           }
           break streamLoop;
         }
+        // v0.13.3：投资建仓待确认。必须像 duplicate 一样 break，否则流走完会被当成
+        // 「没有 terminal」→ fallbackAiRequest 二次请求（F4 已知坑）。
+        if (status === "need_confirm" && payload.action === "invest_buy") {
+          needConfirmPayload = payload;
+          if (reader && typeof reader.cancel === "function") {
+            reader.cancel().catch(function () {});
+          }
+          break streamLoop;
+        }
         if (
           status === "done" ||
           status === "success" ||
@@ -10420,6 +10682,21 @@ async function runAiStream(text, force) {
 
   if (duplicatePayload) {
     await handleAiDuplicate(bubble, text, duplicatePayload);
+    return;
+  }
+
+  // v0.13.3：投资建仓确认卡（渲染与落库都在 invest-v0133.js 里，这里只做分流）
+  if (needConfirmPayload) {
+    if (typeof window.handleInvestConfirm === "function") {
+      window.handleInvestConfirm(bubble, text, needConfirmPayload);
+      return;
+    }
+    bubbleFinish(bubble, {
+      title: "AI 解析失败",
+      message: "投资建仓模块未加载，请刷新页面重试",
+      error: true,
+    });
+    restoreAiInput(text);
     return;
   }
 
@@ -10453,8 +10730,10 @@ async function runAiStream(text, force) {
   const confidence = aiConfidenceOf(terminal);
   const warn = confidence !== null && confidence < AI_CONFIDENCE_WARN;
   const recordId = action === "record" ? aiResultRecordId(terminal) : null;
+  // v0.13.3：转账单独一个标题，避免和「记账成功」混在一起看不出是挪钱
+  const isTransfer = attachTransferSummary(bubble, terminal);
   bubbleFinish(bubble, {
-    title: warn ? "识别成功，请核对" : aiActionTitle(action),
+    title: warn ? "识别成功，请核对" : isTransfer ? "转账已记录" : aiActionTitle(action),
     message:
       (terminal.message || terminal.msg || "已写入账本") +
       (warn ? "，置信度 " + confidence + "%，请核对分类与金额" : ""),
@@ -10480,6 +10759,14 @@ async function fallbackAiRequest(bubble, text, force) {
       body.force = true;
     }
     const data = await apiRecordRequest("/api/records/ai", jsonOptions("POST", body));
+    // v0.13.3：invest_buy 在普通接口上也是 HTTP 200 + status=="need_confirm"（同样未写库），
+    // 与 SSE 走同一张确认卡，保证流式不可用时投资指令不会退化成「AI 无法理解」
+    if (data && data.status === "need_confirm" && data.action === "invest_buy") {
+      if (typeof window.handleInvestConfirm === "function") {
+        window.handleInvestConfirm(bubble, text, data);
+        return;
+      }
+    }
     // 普通接口的防重是 HTTP 200 + status=="duplicate"，同样未保存
     if (data && data.status === "duplicate") {
       const accepted = await openDuplicateModal(data.duplicate, data.parsed);

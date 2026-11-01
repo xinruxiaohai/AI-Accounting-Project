@@ -60,6 +60,41 @@ TRANSFER_CATEGORY = "转账"
 # 公式（比如 "15.5+20*2"）只做留存展示，不参与任何计算，长度限制防止存进一整段垃圾文本
 MAX_FORMULA_LENGTH = 200
 
+# ---------------- 投资体系（v0.13.3） ----------------
+
+# 账户**功能类型**（与 group_name 的「展示分组」并存但不等价）：
+#   normal      = 普通账户（走今天的流水列表）
+#   investment  = 投资账户（资产页渲染投资看板，可建平台 / 持仓 / 定投）
+# 列上加 NOT NULL DEFAULT 'normal'，取值由应用层白名单校验（设计 U2：不加 CHECK 约束，
+# 否则「新库带 CHECK / 老库无 CHECK」会形成双形态，违反幂等迁移结构一致的纪律）。
+ACCOUNT_TYPES = ("normal", "investment")
+DEFAULT_ACCOUNT_TYPE = "normal"
+INVESTMENT_ACCOUNT_TYPE = "investment"
+
+# 持仓资产类型白名单；非法值一律回落 fund（不报错，避免 AI 乱吐词导致建仓失败）
+INVEST_ASSET_TYPES = ("fund", "stock", "bond", "cash", "other")
+DEFAULT_ASSET_TYPE = "fund"
+
+# 投资平台默认名：每个投资账户至少有一个「默认」平台（迁移步 9 与 ensure_default_platform 补）
+INVEST_PLATFORM_DEFAULT = "默认"
+
+# 分类口径（设计 §8）：买入侧与清仓侧**不能共用同一个分类名**，因为
+# uq_categories_user (user_id, COALESCE(parent_id,0), name) 不含 type，同名不同 type 会撞唯一约束。
+# v0.13.3 决策 B 下 invest_buy **不写 records**，这两个常量只作为分类名留存与未来扩展用，
+# 但常量必须保留：AI / 导入 / 未来的 CSV 都按它对齐名字，杜绝各处硬编码字符串。
+INVEST_BUY_CATEGORY = "投资买入"
+INVEST_REFUND_CATEGORY = "投资理财"
+
+# 定投频率与状态白名单（本期只落库 + 展示，不自动生成任何账目，设计 §1.2 第 3 条）
+DCA_FREQUENCIES = ("weekly", "biweekly", "monthly", "quarterly")
+DCA_STATUSES = ("active", "paused")
+DEFAULT_DCA_FREQUENCY = "monthly"
+DEFAULT_DCA_STATUS = "active"
+
+# 名称长度上限：平台名 20 字（设计 §3.7 #4），标的名 40 字
+MAX_PLATFORM_NAME_LENGTH = 20
+MAX_HOLDING_NAME_LENGTH = 40
+
 
 class RecordError(Exception):
     """写账目时的业务校验失败（转账余额不足、转出转入账户相同等）。
@@ -1026,6 +1061,198 @@ def _migrate_category_isolation(conn):
     )
 
 
+def _migrate_investment_schema(conn, accounts_need_type=False):
+    """v0.13.3 投资体系迁移（幂等，严格按 10 步顺序执行，顺序不可调换）。
+
+    步 0 备份（失败即中止）→ 1 判列补 `accounts.type` + 建迁移标记表
+    → 2 **按标记位一次性回填 investment** → 3 净化非法 type → 4 明确不建 type 索引
+    → 5 建 invest_platforms → 6 平台索引 + 唯一索引（失败即中止）
+    → 7 建 holdings + 索引 + 唯一索引（失败即中止）→ 8 建 dca_plans + 索引
+    → 9 给每个投资账户补「默认」子平台 → 10 打印日志。
+
+    **步 2 为什么改用 `schema_migrations` 标记位**（v0.13.3 实测踩坑）：
+    原实现是「只在刚补出 type 列的那一轮回填」，靠 `accounts_need_type` 标志位判断。
+    但本机真实库是**先落了 type 列、后补迁移函数**的——列早就存在，标志位永远是 False，
+    回填永远不执行，结果 10 个账户全是 normal，「投资账户」分组也挂不上看板。
+    标记位方案可恢复：只要没打过 `invest_type_backfill_v0133` 标记就回填一次并打标记，
+    打过之后**用户手动改过的 type 永不被覆盖**（幂等 + 可自愈，两者兼得）。
+
+    **为什么独占一个 `with conn:` 块且挂在 `_migrate_category_isolation()` 之后、
+    第二段 DML 之前**（设计 D4）：
+    ① SQLite 的 DDL 会隐式提交当前事务，三张新表的 DDL 必须与其它 DML 分开提交；
+    ② 挂在第二段 DML 之后会让「本段给投资账户补默认平台」时表还不存在；
+    ③ 与 v0.13.1 的九步范式完全同构，审计时一眼能对上。
+
+    `accounts_need_type` 由 `init_db()` 传入（第一段 DDL 里刚 ALTER 出来的那一轮为 True）；
+    本函数内部若自己补了列也会置 True，保证「标志位只由真实补列动作驱动」。
+    """
+    # 步 0：迁移前备份，失败即中止（不允许裸奔改表）
+    # 注意：`_backup_db()` 是进程级单例，v0.13.1 与本轮共用同一份 BASELINE 备份（设计 F8）。
+    try:
+        backup_path = _backup_db()
+    except Exception as exc:  # noqa: BLE001 - 备份失败必须整体中止
+        raise RuntimeError(
+            "[v0.13.3] 迁移前备份 records.db 失败，已中止投资体系迁移：%s" % exc
+        )
+    if backup_path:
+        print("[v0.13.3] 迁移前备份完成：%s" % backup_path, flush=True)
+
+    # 步 1：accounts 没有 type 就补（带非空默认值，已有行自动填 'normal'，一行不丢）
+    has_accounts = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'accounts'"
+    ).fetchone()
+    if has_accounts is not None:
+        account_columns = [
+            row["name"] for row in conn.execute("PRAGMA table_info(accounts)")
+        ]
+        if "type" not in account_columns:
+            conn.execute(
+                "ALTER TABLE accounts ADD COLUMN type TEXT NOT NULL DEFAULT 'normal'"
+            )
+            accounts_need_type = True
+
+    # 步 1.5：迁移标记表。单行一个标记名，供后续各版迁移「一次性动作」复用
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            name       TEXT PRIMARY KEY,
+            applied_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    # 步 2：**按标记位一次性回填**——展示分组为「投资账户」的账户升级为投资账户。
+    # 标记位兜住是硬性要求：回填只做一次，之后用户手动改的 type 永不被覆盖。
+    marker = "invest_type_backfill_v0133"
+    already_done = conn.execute(
+        "SELECT name FROM schema_migrations WHERE name = ?", (marker,)
+    ).fetchone()
+    if already_done is None or accounts_need_type:
+        conn.execute(
+            "UPDATE accounts SET type = ? WHERE group_name = ?",
+            (INVESTMENT_ACCOUNT_TYPE, "投资账户"),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO schema_migrations (name) VALUES (?)", (marker,)
+        )
+
+    # 步 3：净化非法取值（每次执行成本极低，可重复）。无 CHECK 约束，靠这里兜底
+    conn.execute(
+        "UPDATE accounts SET type = ? WHERE type IS NULL OR type NOT IN (?, ?)",
+        (DEFAULT_ACCOUNT_TYPE, DEFAULT_ACCOUNT_TYPE, INVESTMENT_ACCOUNT_TYPE),
+    )
+
+    # 步 4：明确**不建** type 索引——基数只有 2，且 (user_id, name) 已覆盖所有查询
+
+    # 步 5：投资子平台（账户 → 平台 一对多）。
+    # 注意列名叫 `account`（账户**名**）而不是 account_id：accounts 主键是 (user_id, name)
+    # 没有单列 id，全项目引用账户一律用名字（设计 U1 / F1）。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS invest_platforms (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL DEFAULT 1,
+            account    TEXT    NOT NULL,
+            name       TEXT    NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    # 步 6：平台索引。唯一索引失败 = 库里有同名脏数据，必须人工处理，故中止
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ip_user ON invest_platforms (user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ip_user_account "
+        "ON invest_platforms (user_id, account)"
+    )
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_ip_user_account_name "
+            "ON invest_platforms (user_id, account, name)"
+        )
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "[v0.13.3] 建立 uq_ip_user_account_name 失败（同一投资账户下存在同名子平台，"
+            "需人工清理后重启）：%s" % exc
+        )
+
+    # 步 7：持仓。current_price 恒存 0 表示「未接行情」，读取时由 _row_to_holding 回落 cost_price
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS holdings (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL DEFAULT 1,
+            platform_id   INTEGER NOT NULL REFERENCES invest_platforms(id),
+            ticker        TEXT    NOT NULL DEFAULT '',
+            name          TEXT    NOT NULL,
+            asset_type    TEXT    NOT NULL DEFAULT 'fund',
+            shares        REAL    NOT NULL DEFAULT 0,
+            cost_price    REAL    NOT NULL DEFAULT 0,
+            current_price REAL    NOT NULL DEFAULT 0,
+            cost_total    REAL    NOT NULL DEFAULT 0,
+            record_id     INTEGER,
+            created_at    TEXT    DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TEXT    DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_h_user ON holdings (user_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_h_user_platform ON holdings (user_id, platform_id)"
+    )
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_h_user_platform_name "
+            "ON holdings (user_id, platform_id, name)"
+        )
+    except sqlite3.Error as exc:
+        raise RuntimeError(
+            "[v0.13.3] 建立 uq_h_user_platform_name 失败（同一平台下存在同名持仓，"
+            "需人工清理后重启）：%s" % exc
+        )
+
+    # 步 8：定投计划。本期只落库 + 展示，不自动生成任何账目
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dca_plans (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL DEFAULT 1,
+            holding_id INTEGER NOT NULL REFERENCES holdings(id),
+            amount     REAL    NOT NULL DEFAULT 0,
+            frequency  TEXT    NOT NULL DEFAULT 'monthly',
+            next_date  TEXT    NOT NULL DEFAULT '',
+            status     TEXT    NOT NULL DEFAULT 'active',
+            created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dca_user ON dca_plans (user_id)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dca_user_holding "
+        "ON dca_plans (user_id, holding_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dca_user_next ON dca_plans (user_id, next_date)"
+    )
+
+    # 步 9：给每个投资账户补一个「默认」子平台。
+    # INSERT OR IGNORE + 唯一索引双保险：重复执行行数绝不增长（迁移幂等的核心验证点之一）
+    conn.execute(
+        "INSERT OR IGNORE INTO invest_platforms (user_id, account, name, sort_order) "
+        "SELECT user_id, name, ?, 0 FROM accounts WHERE type = ?",
+        (INVEST_PLATFORM_DEFAULT, INVESTMENT_ACCOUNT_TYPE),
+    )
+
+    # 步 10：一行日志，便于现场确认迁移跑过
+    platform_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM invest_platforms"
+    ).fetchone()["c"]
+    print("[v0.13.3] 投资体系迁移完成：platforms=%d" % platform_count, flush=True)
+
+
 def init_db():
     """建表 + 兼容旧库升级。反复启动不会报错，旧库也不会丢数据。"""
     conn = get_conn()
@@ -1033,6 +1260,9 @@ def init_db():
     # 否则每次启动都会把用户拖拽出来的顺序重置回「按 id / rowid」
     categories_need_order = False
     accounts_need_order = False
+    # v0.13.3：这一轮是不是刚给 accounts 补的 type 列——只有刚补时才回填
+    # 「投资账户」分组的账户类型，否则每次启动都会把用户手动改过的类型重置回去
+    accounts_need_type = False
     try:
         # 第一段：只做结构（DDL）。SQLite 的 DDL 会先提交已有事务，所以单独一段更清楚
         with conn:
@@ -1127,6 +1357,7 @@ def init_db():
                     balance    REAL NOT NULL DEFAULT 0,
                     group_name TEXT NOT NULL DEFAULT '资金账户',
                     sort_order INTEGER NOT NULL DEFAULT 0,
+                    type       TEXT NOT NULL DEFAULT 'normal',
                     PRIMARY KEY (user_id, name)
                 )
                 """
@@ -1134,6 +1365,14 @@ def init_db():
             account_columns = [
                 row["name"] for row in conn.execute("PRAGMA table_info(accounts)")
             ]
+            # v0.13.3 F6 双保险：type 直接写进 CREATE（新库一步到位），
+            # 老库由下面的幂等 ALTER 补齐。只有「刚补列的那一次」才回填
+            # group_name='投资账户' → type='investment'（accounts_need_type 标志控制）。
+            if "type" not in account_columns:
+                conn.execute(
+                    "ALTER TABLE accounts ADD COLUMN type TEXT NOT NULL DEFAULT 'normal'"
+                )
+                accounts_need_type = True
             if "group_name" not in account_columns:
                 # 老账户统一归到「资金账户」，用户之后可以在账户管理里改大类
                 conn.execute(
@@ -1371,6 +1610,12 @@ def init_db():
         # 迁移独占一个 with conn: 块（SQLite DDL 会隐式提交现有事务）
         with conn:
             _migrate_category_isolation(conn)
+
+        # v0.13.3：投资体系迁移。**顺序不可调换**——必须在 _migrate_category_isolation
+        # 之后（同属结构迁移段）、第二段 DML 之前（本段自己会 INSERT 默认子平台）。
+        # 同样独占一个 with conn: 块（SQLite DDL 隐式提交）。
+        with conn:
+            _migrate_investment_schema(conn, accounts_need_type=accounts_need_type)
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
@@ -1811,12 +2056,22 @@ def get_all_categories():
 
 # ---------------- 账户 ----------------
 
+def _clean_account_type(value):
+    """把账户类型收敛到白名单，非法 / 空值一律回落 'normal'（应用层校验，列上无 CHECK）。"""
+    text = str(value or "").strip().lower()
+    return text if text in ACCOUNT_TYPES else DEFAULT_ACCOUNT_TYPE
+
+
 def list_accounts():
-    """当前用户的账户列表（复合主键 user_id + name），余额统一收敛到两位小数。"""
+    """当前用户的账户列表（复合主键 user_id + name），余额统一收敛到两位小数。
+
+    v0.13.3：多下发 `type`（normal / investment）。老前端不读这个键也完全不坏，
+    符合「新增字段一律可空兼容」纪律（设计 §3.5 保障 2）。
+    """
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name, balance, group_name FROM accounts "
+            "SELECT name, balance, group_name, type FROM accounts "
             "WHERE user_id = ? ORDER BY sort_order, rowid",
             (_uid(),),
         ).fetchall()
@@ -1824,6 +2079,7 @@ def list_accounts():
         for row in rows:
             account = dict(row)
             account["balance"] = round(account["balance"], 2)
+            account["type"] = _clean_account_type(account.get("type"))
             accounts.append(account)
         return accounts
     finally:
@@ -1840,8 +2096,13 @@ def list_accounts_grouped():
     return groups
 
 
-def create_account(name, group_name=DEFAULT_GROUP, balance=0):
-    """新建账户，返回 (账户字典, 错误信息)。同名账户只在当前用户空间内判重。"""
+def create_account(name, group_name=DEFAULT_GROUP, balance=0, account_type=DEFAULT_ACCOUNT_TYPE):
+    """新建账户，返回 (账户字典, 错误信息)。同名账户只在当前用户空间内判重。
+
+    v0.13.3：`account_type` 可选（normal / investment），非法值回落 normal。
+    建成投资账户时顺带补一个「默认」子平台（幂等），保证数据永远三层整齐。
+    """
+    account_type = _clean_account_type(account_type)
     conn = get_conn()
     try:
         with conn:
@@ -1857,22 +2118,41 @@ def create_account(name, group_name=DEFAULT_GROUP, balance=0):
                 (_uid(),),
             ).fetchone()["m"]
             conn.execute(
-                "INSERT INTO accounts (user_id, name, balance, group_name, sort_order) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (_uid(), name, round(balance, 2), group_name, account_order + 1),
+                "INSERT INTO accounts (user_id, name, balance, group_name, sort_order, type) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    _uid(),
+                    name,
+                    round(balance, 2),
+                    group_name,
+                    account_order + 1,
+                    account_type,
+                ),
             )
-            return {"name": name, "balance": round(balance, 2), "group_name": group_name}, None
+            if account_type == INVESTMENT_ACCOUNT_TYPE:
+                ensure_default_platform(conn, name, _uid())
+            return {
+                "name": name,
+                "balance": round(balance, 2),
+                "group_name": group_name,
+                "type": account_type,
+            }, None
     finally:
         conn.close()
 
 
-def update_account(name, balance=None, group_name=None):
-    """改账户余额和/或大类，返回 (账户字典, 错误信息)。"""
+def update_account(name, balance=None, group_name=None, account_type=None):
+    """改账户余额 / 大类 / 功能类型，返回 (账户字典, 错误信息)。
+
+    v0.13.3：`account_type` 可选。切到 investment 时幂等补「默认」子平台；
+    切回 normal 时**不删**已有平台与持仓（用户可能只是临时关掉看板，数据必须留着）。
+    """
     conn = get_conn()
     try:
         with conn:
             row = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                "SELECT name, balance, group_name, type FROM accounts "
+                "WHERE name = ? AND user_id = ?",
                 (name, _uid()),
             ).fetchone()
             if row is None:
@@ -1882,17 +2162,34 @@ def update_account(name, balance=None, group_name=None):
 
             new_balance = round(row["balance"], 2) if balance is None else round(balance, 2)
             new_group = row["group_name"] if group_name is None else group_name
-            conn.execute(
-                "UPDATE accounts SET balance = ?, group_name = ? WHERE name = ? AND user_id = ?",
-                (new_balance, new_group, name, _uid()),
+            new_type = (
+                _clean_account_type(row["type"])
+                if account_type is None
+                else _clean_account_type(account_type)
             )
-            return {"name": name, "balance": new_balance, "group_name": new_group}, None
+            conn.execute(
+                "UPDATE accounts SET balance = ?, group_name = ?, type = ? "
+                "WHERE name = ? AND user_id = ?",
+                (new_balance, new_group, new_type, name, _uid()),
+            )
+            if new_type == INVESTMENT_ACCOUNT_TYPE:
+                ensure_default_platform(conn, name, _uid())
+            return {
+                "name": name,
+                "balance": new_balance,
+                "group_name": new_group,
+                "type": new_type,
+            }, None
     finally:
         conn.close()
 
 
 def delete_account(name):
-    """删账户，返回 (是否删除, 错误信息)。还有账目引用它就不让删。"""
+    """删账户，返回 (是否删除, 错误信息)。还有账目引用它就不让删。
+
+    v0.13.3 级联：删账户必须同时删掉它的投资平台 → 持仓 → 定投计划（设计 F5）。
+    少了这一步会留下一批「账户没了但平台和持仓还在」的孤儿数据，看板再也查不到。
+    """
     conn = get_conn()
     try:
         with conn:
@@ -1912,6 +2209,7 @@ def delete_account(name):
             if used:
                 return False, "还有 %d 条账目和这个账户有关，先处理掉再删" % used
 
+            _cascade_delete_invest(conn, name, _uid())
             conn.execute("DELETE FROM accounts WHERE name = ? AND user_id = ?", (name, _uid()))
             return True, None
     finally:
@@ -1919,7 +2217,7 @@ def delete_account(name):
 
 
 def rename_account(old_name, new_name):
-    """账户改名（v0.11.6）：当前用户的主键 + 账目/借贷引用一起改。"""
+    """账户改名（v0.11.6）：当前用户的主键 + 账目/借贷/投资平台引用一起改。"""
     old_name = str(old_name or "").strip()
     new_name = str(new_name or "").strip()
     if not old_name:
@@ -1931,7 +2229,8 @@ def rename_account(old_name, new_name):
     try:
         with conn:
             row = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                "SELECT name, balance, group_name, type FROM accounts "
+                "WHERE name = ? AND user_id = ?",
                 (old_name, _uid()),
             ).fetchone()
             if row is None:
@@ -1941,6 +2240,7 @@ def rename_account(old_name, new_name):
                     "name": old_name,
                     "balance": round(row["balance"], 2),
                     "group_name": row["group_name"],
+                    "type": _clean_account_type(row["type"]),
                 }, None
             exists = conn.execute(
                 "SELECT name FROM accounts WHERE name = ? AND user_id = ?", (new_name, _uid())
@@ -1964,10 +2264,18 @@ def rename_account(old_name, new_name):
                 "UPDATE debts SET account = ? WHERE account = ? AND user_id = ?",
                 (new_name, old_name, _uid()),
             )
+            # v0.13.3 级联：投资平台按**账户名**引用账户（设计 U1），改名不改这里的话，
+            # 改个账户名就会让该账户下所有持仓「找不到家」（设计 F6）。
+            conn.execute(
+                "UPDATE invest_platforms SET account = ? "
+                "WHERE account = ? AND user_id = ?",
+                (new_name, old_name, _uid()),
+            )
             return {
                 "name": new_name,
                 "balance": round(row["balance"], 2),
                 "group_name": row["group_name"],
+                "type": _clean_account_type(row["type"]),
             }, None
     finally:
         conn.close()
@@ -1986,13 +2294,15 @@ def merge_account(source, target):
     try:
         with conn:
             src = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                "SELECT name, balance, group_name, type FROM accounts "
+                "WHERE name = ? AND user_id = ?",
                 (source, _uid()),
             ).fetchone()
             if src is None:
                 return None, "账户「%s」不存在" % source
             tgt = conn.execute(
-                "SELECT name, balance, group_name FROM accounts WHERE name = ? AND user_id = ?",
+                "SELECT name, balance, group_name, type FROM accounts "
+                "WHERE name = ? AND user_id = ?",
                 (target, _uid()),
             ).fetchone()
             if tgt is None:
@@ -2015,6 +2325,8 @@ def merge_account(source, target):
                 "UPDATE debts SET account = ? WHERE account = ? AND user_id = ?",
                 (target, source, _uid()),
             )
+            # v0.13.3 级联：源账户的投资平台迁到目标账户；目标已有同名平台则合并持仓后删源平台
+            _cascade_merge_invest(conn, source, target, _uid())
             conn.execute(
                 "DELETE FROM accounts WHERE name = ? AND user_id = ?", (source, _uid())
             )
@@ -2022,6 +2334,7 @@ def merge_account(source, target):
                 "name": target,
                 "balance": new_balance,
                 "group_name": tgt["group_name"],
+                "type": _clean_account_type(tgt["type"]),
             }, None
     finally:
         conn.close()
@@ -2087,6 +2400,926 @@ def reorder_accounts(names):
 def get_all_accounts():
     """账户名字列表。给旧模板的下拉框用，保持向后兼容。"""
     return [account["name"] for account in list_accounts()]
+
+
+# ---------------- 投资（v0.13.3） ----------------
+#
+# 资金口径（team-lead 决策 B —— 与 v0.13.3 设计文档 §3.7 第 7 条不同，**以决策 B 为准**）：
+#   ① accounts.balance = 该账户的「可用资金」，永不含持仓市值；
+#   ② 买入 = 扣 balance + 写（或加仓）holdings，**不写 records**。
+#      理由：需求原文是「买入 → 直接写入 holdings」，且只有转入 / 转出走 records。
+#      若按 expense + 分类「投资买入」写 records，「买入 1000 元」会让本月支出凭空多 1000，
+#      那不是支出。因此勾稽口径改为：
+#          账户可用资金 + 持仓成本市值 = 累计转入 - 累计转出
+#   ③ 删除持仓 = 撤销式清仓：balance 加回累计成本（≡ 成本价 × 份额）并删 holdings；
+#   ④ ②③的「改 balance + 改 holdings」必须在**同一个 with conn: 事务**里完成。
+# 全项目只有 buy_holding / liquidate_holding 两处能动这两张表，
+# app.py 里禁止出现第二条扣款路径。
+
+
+def _row_to_platform(row):
+    """平台行 → 字典。holding_count / market_value 由调用方按需补。"""
+    return {
+        "id": int(row["id"]),
+        "user_id": int(row["user_id"]),
+        "account": row["account"],
+        "name": row["name"],
+        "sort_order": int(row["sort_order"] or 0),
+        "created_at": row["created_at"] or "",
+    }
+
+
+def _row_to_holding(row):
+    """持仓行 → 字典。**市值 / 盈亏只在服务端算**（设计 §8：禁止前端二次计算）。
+
+    D8：current_price 存 0 表示未接行情，读取时统一回落 cost_price，
+    `price` 就是对外可见的单价；未来接行情只改这一处函数，前端零改动。
+    D9：day_pl 固定占位（未接行情），未来补了 prev_close 再改成 available=True。
+    """
+    shares = round(float(row["shares"] or 0), 4)
+    cost_price = round(float(row["cost_price"] or 0), 4)
+    current_price = round(float(row["current_price"] or 0), 4)
+    # 唯一的「价格回落」逻辑：有行情价用行情价，没有就用成本价
+    price = current_price if current_price > 0 else cost_price
+    cost_total = round(float(row["cost_total"] or 0), 2)
+    market_value = round(shares * price, 2)
+    profit = round(market_value - cost_total, 2)
+    profit_percent = round(profit / cost_total * 100, 2) if cost_total > 0 else 0.0
+    return {
+        "id": int(row["id"]),
+        "user_id": int(row["user_id"]),
+        "platform_id": int(row["platform_id"]),
+        "ticker": row["ticker"] or "",
+        "name": row["name"],
+        "asset_type": row["asset_type"] or DEFAULT_ASSET_TYPE,
+        "shares": shares,
+        "cost_price": cost_price,
+        "current_price": current_price,
+        "price": price,
+        "cost_total": cost_total,
+        "market_value": market_value,
+        "pl": profit,
+        "pl_percent": profit_percent,
+        "record_id": row["record_id"],
+        "created_at": row["created_at"] or "",
+        "updated_at": row["updated_at"] or "",
+        "day_pl": {"amount": 0.0, "percent": 0.0, "available": False},
+    }
+
+
+def _row_to_dca(row):
+    """定投计划行 → 字典。"""
+    return {
+        "id": int(row["id"]),
+        "user_id": int(row["user_id"]),
+        "holding_id": int(row["holding_id"]),
+        "amount": round(float(row["amount"] or 0), 2),
+        "frequency": row["frequency"] or DEFAULT_DCA_FREQUENCY,
+        "next_date": row["next_date"] or "",
+        "status": row["status"] or DEFAULT_DCA_STATUS,
+        "created_at": row["created_at"] or "",
+    }
+
+
+def _clean_asset_type(value):
+    """资产类型收敛到白名单，非法值回落 fund（AI 乱吐词不该让建仓失败）。"""
+    text = str(value or "").strip().lower()
+    return text if text in INVEST_ASSET_TYPES else DEFAULT_ASSET_TYPE
+
+
+def _clean_frequency(value):
+    """定投频率收敛到白名单，非法值回落 monthly。"""
+    text = str(value or "").strip().lower()
+    return text if text in DCA_FREQUENCIES else DEFAULT_DCA_FREQUENCY
+
+
+def _clean_dca_status(value):
+    """定投状态收敛到白名单，非法值回落 active。"""
+    text = str(value or "").strip().lower()
+    return text if text in DCA_STATUSES else DEFAULT_DCA_STATUS
+
+
+def _account_row(conn, account_name, user_id):
+    """取指定用户的账户行；不存在返回 None。"""
+    return conn.execute(
+        "SELECT name, balance, group_name, type FROM accounts "
+        "WHERE name = ? AND user_id = ?",
+        (account_name, user_id),
+    ).fetchone()
+
+
+def _require_invest_account(conn, account_name, user_id):
+    """校验「账户存在 且 是投资账户」，返回 (账户行, 错误信息)。
+
+    跨用户 / 不存在走**同一条文案**，由上层统一映射成 404，不泄露资源的存在性。
+    """
+    name = str(account_name or "").strip()
+    if not name:
+        return None, "请先指定投资账户"
+    row = _account_row(conn, name, user_id)
+    if row is None:
+        return None, "账户「%s」不存在" % name
+    if _clean_account_type(row["type"]) != INVESTMENT_ACCOUNT_TYPE:
+        return None, "「%s」不是投资账户，请先在账户管理里切换账户类型" % name
+    return row, None
+
+
+def _platform_row(conn, platform_id, user_id):
+    """取平台行；不存在 / 跨用户 / 非整数 id 一律返回 None（统一按「不存在」处理）。"""
+    try:
+        pid = int(platform_id)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        "SELECT * FROM invest_platforms WHERE id = ? AND user_id = ?", (pid, user_id)
+    ).fetchone()
+
+
+def _holding_row(conn, holding_id, user_id):
+    """取持仓行；不存在 / 跨用户 / 非整数 id 一律返回 None。"""
+    try:
+        hid = int(holding_id)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        "SELECT * FROM holdings WHERE id = ? AND user_id = ?", (hid, user_id)
+    ).fetchone()
+
+
+def _dca_row(conn, plan_id, user_id):
+    """取定投计划行；不存在 / 跨用户 / 非整数 id 一律返回 None。"""
+    try:
+        did = int(plan_id)
+    except (TypeError, ValueError):
+        return None
+    return conn.execute(
+        "SELECT * FROM dca_plans WHERE id = ? AND user_id = ?", (did, user_id)
+    ).fetchone()
+
+
+def _holding_by_name(conn, platform_id, name, user_id, exclude_id=None):
+    """按「同平台 + 同名」找持仓，用于加仓判定与改名查重。"""
+    sql = (
+        "SELECT * FROM holdings WHERE user_id = ? AND platform_id = ? AND name = ?"
+    )
+    params = [user_id, platform_id, name]
+    if exclude_id is not None:
+        sql += " AND id <> ?"
+        params.append(exclude_id)
+    return conn.execute(sql, params).fetchone()
+
+
+def ensure_default_platform(conn, account_name, user_id=None):
+    """保证某投资账户下有一个「默认」子平台，返回平台 id。
+
+    幂等：靠 `uq_ip_user_account_name` 唯一索引 + INSERT OR IGNORE，重复调用行数不增长。
+    必须在调用方的事务里执行（不自己开关连接）。
+    """
+    uid = _resolve_user_id(user_id)
+    conn.execute(
+        "INSERT OR IGNORE INTO invest_platforms (user_id, account, name, sort_order) "
+        "VALUES (?, ?, ?, 0)",
+        (uid, account_name, INVEST_PLATFORM_DEFAULT),
+    )
+    row = conn.execute(
+        "SELECT id FROM invest_platforms WHERE user_id = ? AND account = ? AND name = ?",
+        (uid, account_name, INVEST_PLATFORM_DEFAULT),
+    ).fetchone()
+    return int(row["id"]) if row is not None else None
+
+
+def _cascade_delete_invest(conn, account_name, user_id):
+    """删账户时级联清理：定投计划 → 持仓 → 平台（设计 F5）。
+
+    不做这一步会留下「账户没了但平台/持仓还在」的孤儿数据，看板永远查不到。
+    """
+    platforms = conn.execute(
+        "SELECT id FROM invest_platforms WHERE user_id = ? AND account = ?",
+        (user_id, account_name),
+    ).fetchall()
+    for platform in platforms:
+        holdings = conn.execute(
+            "SELECT id FROM holdings WHERE user_id = ? AND platform_id = ?",
+            (user_id, platform["id"]),
+        ).fetchall()
+        for holding in holdings:
+            conn.execute(
+                "DELETE FROM dca_plans WHERE user_id = ? AND holding_id = ?",
+                (user_id, holding["id"]),
+            )
+        conn.execute(
+            "DELETE FROM holdings WHERE user_id = ? AND platform_id = ?",
+            (user_id, platform["id"]),
+        )
+    conn.execute(
+        "DELETE FROM invest_platforms WHERE user_id = ? AND account = ?",
+        (user_id, account_name),
+    )
+
+
+def _merge_platform_holdings(conn, source_platform_id, target_platform_id, user_id):
+    """把源平台的持仓并进目标平台（账户合并时用）。
+
+    同名持仓走**加权合并**：份额相加、成本相加、成本价重算；定投计划改挂到存活的持仓上，
+    不静默丢数据。不同名的直接改 platform_id。
+    """
+    holdings = conn.execute(
+        "SELECT * FROM holdings WHERE user_id = ? AND platform_id = ?",
+        (user_id, source_platform_id),
+    ).fetchall()
+    for holding in holdings:
+        same = _holding_by_name(conn, target_platform_id, holding["name"], user_id)
+        if same is None:
+            conn.execute(
+                "UPDATE holdings SET platform_id = ? WHERE id = ? AND user_id = ?",
+                (target_platform_id, holding["id"], user_id),
+            )
+            continue
+        new_shares = round(float(same["shares"] or 0) + float(holding["shares"] or 0), 4)
+        new_cost = round(float(same["cost_total"] or 0) + float(holding["cost_total"] or 0), 2)
+        new_price = round(new_cost / new_shares, 4) if new_shares > 0 else 0.0
+        conn.execute(
+            "UPDATE holdings SET shares = ?, cost_total = ?, cost_price = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            (new_shares, new_cost, new_price, same["id"], user_id),
+        )
+        conn.execute(
+            "UPDATE dca_plans SET holding_id = ? WHERE user_id = ? AND holding_id = ?",
+            (same["id"], user_id, holding["id"]),
+        )
+        conn.execute(
+            "DELETE FROM holdings WHERE id = ? AND user_id = ?", (holding["id"], user_id)
+        )
+
+
+def _cascade_merge_invest(conn, source_account, target_account, user_id):
+    """账户合并时级联迁移投资平台（设计 F5）。
+
+    目标账户已有同名平台 → 合并持仓后删源平台；否则直接把平台改挂到目标账户。
+    """
+    platforms = conn.execute(
+        "SELECT id, name FROM invest_platforms WHERE user_id = ? AND account = ?",
+        (user_id, source_account),
+    ).fetchall()
+    for platform in platforms:
+        same = conn.execute(
+            "SELECT id FROM invest_platforms WHERE user_id = ? AND account = ? AND name = ?",
+            (user_id, target_account, platform["name"]),
+        ).fetchone()
+        if same is None:
+            conn.execute(
+                "UPDATE invest_platforms SET account = ? WHERE id = ? AND user_id = ?",
+                (target_account, platform["id"], user_id),
+            )
+        else:
+            _merge_platform_holdings(conn, platform["id"], same["id"], user_id)
+            conn.execute(
+                "DELETE FROM invest_platforms WHERE id = ? AND user_id = ?",
+                (platform["id"], user_id),
+            )
+
+
+def list_invest_platforms(account_name):
+    """某投资账户下的平台列表（带持仓数与市值），返回 (列表, 错误信息)。"""
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, _uid())
+            if error is not None:
+                return None, error
+            rows = conn.execute(
+                "SELECT * FROM invest_platforms WHERE user_id = ? AND account = ? "
+                "ORDER BY sort_order, id",
+                (_uid(), account["name"]),
+            ).fetchall()
+            platforms = []
+            for row in rows:
+                platform = _row_to_platform(row)
+                holdings = conn.execute(
+                    "SELECT * FROM holdings WHERE user_id = ? AND platform_id = ? "
+                    "ORDER BY id",
+                    (_uid(), platform["id"]),
+                ).fetchall()
+                platform["holding_count"] = len(holdings)
+                platform["market_value"] = round(
+                    sum(_row_to_holding(h)["market_value"] for h in holdings), 2
+                )
+                platforms.append(platform)
+            return platforms, None
+    finally:
+        conn.close()
+
+
+def get_invest_platform(platform_id):
+    """按 id 取平台（带持仓数与市值），返回 (平台字典, 错误信息)。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = _platform_row(conn, platform_id, _uid())
+            if row is None:
+                return None, "平台不存在"
+            platform = _row_to_platform(row)
+            holdings = conn.execute(
+                "SELECT * FROM holdings WHERE user_id = ? AND platform_id = ? ORDER BY id",
+                (_uid(), platform["id"]),
+            ).fetchall()
+            platform["holding_count"] = len(holdings)
+            platform["market_value"] = round(
+                sum(_row_to_holding(h)["market_value"] for h in holdings), 2
+            )
+            return platform, None
+    finally:
+        conn.close()
+
+
+def create_platform(account_name, name):
+    """在某投资账户下新建子平台，返回 (平台字典, 错误信息)。
+
+    同名平台在这个账户下直接拒绝（409）；上限 20 字（设计 §3.7 #4）。
+    """
+    name = str(name or "").strip()
+    if not name:
+        return None, "平台名称不能为空"
+    if len(name) > MAX_PLATFORM_NAME_LENGTH:
+        return None, "平台名称不能超过 %d 个字" % MAX_PLATFORM_NAME_LENGTH
+
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, _uid())
+            if error is not None:
+                return None, error
+            exists = conn.execute(
+                "SELECT id FROM invest_platforms "
+                "WHERE user_id = ? AND account = ? AND name = ?",
+                (_uid(), account["name"], name),
+            ).fetchone()
+            if exists is not None:
+                return None, "该账户下已有平台「%s」" % name
+            sort_order = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) AS m FROM invest_platforms "
+                "WHERE user_id = ? AND account = ?",
+                (_uid(), account["name"]),
+            ).fetchone()["m"]
+            cursor = conn.execute(
+                "INSERT INTO invest_platforms (user_id, account, name, sort_order) "
+                "VALUES (?, ?, ?, ?)",
+                (_uid(), account["name"], name, int(sort_order or 0) + 1),
+            )
+            row = _platform_row(conn, cursor.lastrowid, _uid())
+            platform = _row_to_platform(row)
+            platform["holding_count"] = 0
+            platform["market_value"] = 0.0
+            return platform, None
+    except sqlite3.IntegrityError as exc:
+        return None, "该账户下已有平台「%s」" % name
+    finally:
+        conn.close()
+
+
+def rename_platform(platform_id, name):
+    """平台改名，返回 (平台字典, 错误信息)。只改名字，不动任何持仓与资金。"""
+    name = str(name or "").strip()
+    if not name:
+        return None, "平台名称不能为空"
+    if len(name) > MAX_PLATFORM_NAME_LENGTH:
+        return None, "平台名称不能超过 %d 个字" % MAX_PLATFORM_NAME_LENGTH
+
+    conn = get_conn()
+    try:
+        with conn:
+            row = _platform_row(conn, platform_id, _uid())
+            if row is None:
+                return None, "平台不存在"
+            if row["name"] == name:
+                return _row_to_platform(row), None
+            exists = conn.execute(
+                "SELECT id FROM invest_platforms "
+                "WHERE user_id = ? AND account = ? AND name = ?",
+                (_uid(), row["account"], name),
+            ).fetchone()
+            if exists is not None:
+                return None, "该账户下已有平台「%s」" % name
+            conn.execute(
+                "UPDATE invest_platforms SET name = ? WHERE id = ? AND user_id = ?",
+                (name, row["id"], _uid()),
+            )
+            return _row_to_platform(_platform_row(conn, row["id"], _uid())), None
+    except sqlite3.IntegrityError:
+        return None, "该账户下已有平台「%s」" % name
+    finally:
+        conn.close()
+
+
+def delete_platform(platform_id):
+    """删平台，返回 (是否删除, 错误信息)。
+
+    平台下还有持仓就拒绝删除——先清仓再删平台，避免资金「蒸发」在看不见的地方。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            row = _platform_row(conn, platform_id, _uid())
+            if row is None:
+                return False, "平台不存在"
+            count = conn.execute(
+                "SELECT COUNT(*) AS c FROM holdings WHERE user_id = ? AND platform_id = ?",
+                (_uid(), row["id"]),
+            ).fetchone()["c"]
+            if count:
+                return False, "该平台下还有 %d 个持仓，请先清仓再删除平台" % count
+            conn.execute(
+                "DELETE FROM invest_platforms WHERE id = ? AND user_id = ?",
+                (row["id"], _uid()),
+            )
+            return True, None
+    finally:
+        conn.close()
+
+
+def get_holding(holding_id):
+    """按 id 取持仓（带平台名与账户名），返回 (持仓字典, 错误信息)。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = _holding_row(conn, holding_id, _uid())
+            if row is None:
+                return None, "持仓不存在"
+            holding = _row_to_holding(row)
+            platform = _platform_row(conn, row["platform_id"], _uid())
+            holding["platform_name"] = platform["name"] if platform else ""
+            holding["account"] = platform["account"] if platform else ""
+            return holding, None
+    finally:
+        conn.close()
+
+
+def buy_holding(
+    account_name,
+    platform_id=None,
+    name="",
+    ticker="",
+    asset_type=DEFAULT_ASSET_TYPE,
+    shares=0,
+    price=0,
+    amount=0,
+    dca=None,
+    record_id=None,
+):
+    """**全局唯一的投资入账口**：扣可用资金 + 写（或加仓）持仓，返回 (payload, 错误信息)。
+
+    payload = {"holding", "platform", "balance", "added", "dca", "record"}
+    - `added=True` 表示命中同平台同名持仓走了**加权加仓**（设计 D6），False 表示新建；
+    - `record` 恒为 None：决策 B 下不写 records，保留键位只为契约稳定。
+
+    **必须在同一个 with conn: 事务里**完成「扣 balance + 写 holdings」：
+    任何一步失败都整体回滚，绝不出现「钱扣了但持仓没建」。
+    """
+    name = str(name or "").strip()
+    ticker = str(ticker or "").strip()
+    if not name:
+        return None, "请填写标的名称"
+    if len(name) > MAX_HOLDING_NAME_LENGTH:
+        return None, "标的名称不能超过 %d 个字" % MAX_HOLDING_NAME_LENGTH
+
+    # ---- 金额 / 份额 / 单价 三者推导（设计 D7 的 4 种组合）----
+    try:
+        shares = float(shares or 0)
+        price = float(price or 0)
+        amount = float(amount or 0)
+    except (TypeError, ValueError):
+        return None, "份额 / 单价 / 金额必须是数字"
+    if shares < 0 or price < 0 or amount < 0:
+        return None, "份额 / 单价 / 金额不能是负数"
+
+    if shares > 0 and price > 0:
+        # 组合 1：份额 + 单价都有 → 金额由二者算出，自洽
+        amount = round(shares * price, 2)
+    elif shares > 0 and amount > 0:
+        # 组合 2：份额 + 金额 → 反推单价
+        price = round(amount / shares, 4)
+    elif shares > 0:
+        # 组合 3：只有份额 → 单价回落 1.0，金额 = 份额（「投入金额 ≡ 市值」自洽）
+        price = 1.0
+        amount = round(shares * price, 2)
+    elif amount > 0 and price > 0:
+        # 组合 4：金额 + 单价 → 反推份额
+        shares = round(amount / price, 4)
+    elif amount > 0:
+        # 组合 5：只有金额 → 单价 1.0，份额 = 金额
+        price = 1.0
+        shares = round(amount / price, 4)
+    else:
+        return None, "请填写份额或投入金额"
+
+    if amount <= 0 or shares <= 0:
+        return None, "份额与金额都必须大于 0"
+    amount = round(amount, 2)
+    asset_type = _clean_asset_type(asset_type)
+
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, _uid())
+            if error is not None:
+                return None, error
+
+            # 平台：不传就用该账户的「默认」子平台（不存在则幂等补一个）
+            if platform_id is None or str(platform_id).strip() == "":
+                platform_row = None
+            else:
+                platform_row = _platform_row(conn, platform_id, _uid())
+                if platform_row is None:
+                    return None, "平台不存在"
+                if platform_row["account"] != account["name"]:
+                    return None, "该平台不属于账户「%s」" % account["name"]
+            if platform_row is None:
+                platform_id = ensure_default_platform(conn, account["name"], _uid())
+                platform_row = _platform_row(conn, platform_id, _uid())
+
+            balance = round(float(account["balance"] or 0), 2)
+            # 余额不足直接拒绝（设计 U8）：引导用户先转账，不做隐式透支
+            if balance + 1e-6 < amount:
+                return None, (
+                    "「%s」可用资金不足：当前 %.2f 元，本次需要 %.2f 元，"
+                    "请先从其他账户转入" % (account["name"], balance, amount)
+                )
+
+            # ---- 第一写：扣可用资金（唯一合法扣款点）----
+            conn.execute(
+                "UPDATE accounts SET balance = ROUND(balance - ?, 2) "
+                "WHERE name = ? AND user_id = ?",
+                (amount, account["name"], _uid()),
+            )
+
+            # ---- 第二写：新建或加权加仓 ----
+            same = _holding_by_name(conn, platform_row["id"], name, _uid())
+            if same is not None:
+                new_shares = round(float(same["shares"] or 0) + shares, 4)
+                new_cost_total = round(float(same["cost_total"] or 0) + amount, 2)
+                new_cost_price = (
+                    round(new_cost_total / new_shares, 4) if new_shares > 0 else price
+                )
+                conn.execute(
+                    "UPDATE holdings SET shares = ?, cost_price = ?, cost_total = ?, "
+                    "ticker = ?, asset_type = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND user_id = ?",
+                    (
+                        new_shares,
+                        new_cost_price,
+                        new_cost_total,
+                        ticker or same["ticker"],
+                        asset_type,
+                        same["id"],
+                        _uid(),
+                    ),
+                )
+                holding_id = int(same["id"])
+                added = True
+            else:
+                cursor = conn.execute(
+                    "INSERT INTO holdings (user_id, platform_id, ticker, name, asset_type, "
+                    "shares, cost_price, current_price, cost_total, record_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
+                    (
+                        _uid(),
+                        platform_row["id"],
+                        ticker,
+                        name,
+                        asset_type,
+                        shares,
+                        price,
+                        amount,
+                        record_id,
+                    ),
+                )
+                holding_id = int(cursor.lastrowid)
+                added = False
+
+            # 可选：建仓时顺手挂一条定投计划
+            dca_row = None
+            if isinstance(dca, dict) and dca.get("amount"):
+                # 同一事务内插计划（不另开 with conn:，见 _insert_dca_plan 注释）
+                dca_row = _insert_dca_plan(
+                    conn,
+                    holding_id,
+                    dca.get("amount", 0),
+                    _clean_frequency(dca.get("frequency")),
+                    str(dca.get("next_date") or "").strip(),
+                    DEFAULT_DCA_STATUS,
+                )
+
+            holding = _row_to_holding(_holding_row(conn, holding_id, _uid()))
+            holding["platform_name"] = platform_row["name"]
+            holding["account"] = platform_row["account"]
+            new_balance = conn.execute(
+                "SELECT ROUND(balance, 2) AS b FROM accounts WHERE name = ? AND user_id = ?",
+                (account["name"], _uid()),
+            ).fetchone()["b"]
+            return {
+                "holding": holding,
+                "platform": _row_to_platform(platform_row),
+                "balance": round(float(new_balance or 0), 2),
+                "added": added,
+                "dca": dca_row,
+                "record": None,
+            }, None
+    finally:
+        conn.close()
+
+
+def update_holding_meta(holding_id, name=None, ticker=None, asset_type=None, platform_id=None):
+    """只改持仓**元信息**（名称 / 代码 / 资产类型 / 平台），返回 (持仓字典, 错误信息)。
+
+    决策 D：**份额 / 成本一律不许改**——金额填错了走「删除（清仓退款）后重建」，
+    否则 shares / cost_price / cost_total 三者会漂移，勾稽再也对齐不上。
+    跨账户搬平台也被拒绝（会把资金从一个账户的勾稽口径里挪走）。
+    """
+    if name is not None:
+        name = str(name or "").strip()
+        if not name:
+            return None, "标的名称不能为空"
+        if len(name) > MAX_HOLDING_NAME_LENGTH:
+            return None, "标的名称不能超过 %d 个字" % MAX_HOLDING_NAME_LENGTH
+
+    conn = get_conn()
+    try:
+        with conn:
+            row = _holding_row(conn, holding_id, _uid())
+            if row is None:
+                return None, "持仓不存在"
+
+            target_platform_id = int(row["platform_id"])
+            if platform_id is not None:
+                platform = _platform_row(conn, platform_id, _uid())
+                if platform is None:
+                    return None, "平台不存在"
+                if platform["account"] != _account_of_platform(conn, row["platform_id"], _uid()):
+                    return None, "不能把持仓移动到其他账户的平台下"
+                target_platform_id = int(platform["id"])
+
+            new_name = row["name"] if name is None else name
+            if new_name != row["name"] or target_platform_id != int(row["platform_id"]):
+                same = _holding_by_name(
+                    conn, target_platform_id, new_name, _uid(), exclude_id=row["id"]
+                )
+                if same is not None:
+                    return None, "该平台下已有同名持仓「%s」" % new_name
+
+            new_ticker = row["ticker"] if ticker is None else str(ticker or "").strip()
+            new_asset_type = (
+                row["asset_type"] if asset_type is None else _clean_asset_type(asset_type)
+            )
+            conn.execute(
+                "UPDATE holdings SET name = ?, ticker = ?, asset_type = ?, platform_id = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+                (new_name, new_ticker, new_asset_type, target_platform_id, row["id"], _uid()),
+            )
+            holding = _row_to_holding(_holding_row(conn, row["id"], _uid()))
+            platform = _platform_row(conn, target_platform_id, _uid())
+            holding["platform_name"] = platform["name"] if platform else ""
+            holding["account"] = platform["account"] if platform else ""
+            return holding, None
+    except sqlite3.IntegrityError:
+        return None, "该平台下已有同名持仓"
+    finally:
+        conn.close()
+
+
+def _account_of_platform(conn, platform_id, user_id):
+    """取平台所属账户名；平台不在当前用户空间时返回空串。"""
+    row = _platform_row(conn, platform_id, user_id)
+    return row["account"] if row is not None else ""
+
+
+def liquidate_holding(holding_id):
+    """撤销式清仓：可用资金加回累计成本 + 删持仓，返回 (payload, 错误信息)。
+
+    退款额取 `cost_total`（≡ 成本价 × 份额，取累计成本可避免浮点漂移），
+    保证「买入 → 删除 → 再买，余额回到初值」精确成立。
+    挂在该持仓下的定投计划一并暂停（不删，保留用户设定）。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            row = _holding_row(conn, holding_id, _uid())
+            if row is None:
+                return None, "持仓不存在"
+            platform = _platform_row(conn, row["platform_id"], _uid())
+            if platform is None:
+                return None, "持仓所属平台不存在"
+
+            refund = round(float(row["cost_total"] or 0), 2)
+            # ---- 第一写：退款回可用资金（唯一合法退款点）----
+            conn.execute(
+                "UPDATE accounts SET balance = ROUND(balance + ?, 2) "
+                "WHERE name = ? AND user_id = ?",
+                (refund, platform["account"], _uid()),
+            )
+            conn.execute(
+                "UPDATE dca_plans SET status = ? WHERE user_id = ? AND holding_id = ?",
+                ("paused", _uid(), row["id"]),
+            )
+            # ---- 第二写：删持仓 ----
+            conn.execute(
+                "DELETE FROM holdings WHERE id = ? AND user_id = ?", (row["id"], _uid())
+            )
+            new_balance = conn.execute(
+                "SELECT ROUND(balance, 2) AS b FROM accounts WHERE name = ? AND user_id = ?",
+                (platform["account"], _uid()),
+            ).fetchone()["b"]
+            return {
+                "deleted": int(row["id"]),
+                "name": row["name"],
+                "account": platform["account"],
+                "refunded": refund,
+                "balance": round(float(new_balance or 0), 2),
+            }, None
+    finally:
+        conn.close()
+
+
+def list_invest_board(account_name):
+    """投资看板聚合数据（设计 §3.3）：返回 (board, 错误信息)。
+
+    board = {
+        account: {name, type, balance, cash_label},
+        total_market_value, total_cost, day_pl,
+        platforms: [{..., market_value, holdings: [...] }]
+    }
+    市值 / 盈亏一律在这里算好下发，前端不做二次计算（设计 §8）。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, _uid())
+            if error is not None:
+                return None, error
+            platforms = []
+            total_market_value = 0.0
+            total_cost = 0.0
+            rows = conn.execute(
+                "SELECT * FROM invest_platforms WHERE user_id = ? AND account = ? "
+                "ORDER BY sort_order, id",
+                (_uid(), account["name"]),
+            ).fetchall()
+            for row in rows:
+                platform = _row_to_platform(row)
+                holding_rows = conn.execute(
+                    "SELECT * FROM holdings WHERE user_id = ? AND platform_id = ? ORDER BY id",
+                    (_uid(), platform["id"]),
+                ).fetchall()
+                holdings = [_row_to_holding(h) for h in holding_rows]
+                # 定投计划挂在持仓上，看板一次带出去：否则「定了投但界面上查不到」
+                plan_rows = conn.execute(
+                    "SELECT d.* FROM dca_plans d JOIN holdings h ON h.id = d.holding_id "
+                    "WHERE d.user_id = ? AND h.platform_id = ? ORDER BY d.next_date, d.id",
+                    (_uid(), platform["id"]),
+                ).fetchall()
+                plans_by_holding = {}
+                for plan_row in plan_rows:
+                    plans_by_holding.setdefault(int(plan_row["holding_id"]), []).append(
+                        _row_to_dca(plan_row)
+                    )
+                for holding in holdings:
+                    holding["dca_plans"] = plans_by_holding.get(holding["id"], [])
+                market_value = round(sum(h["market_value"] for h in holdings), 2)
+                platform["holding_count"] = len(holdings)
+                platform["market_value"] = market_value
+                platform["holdings"] = holdings
+                platforms.append(platform)
+                total_market_value += market_value
+                total_cost += round(sum(h["cost_total"] for h in holdings), 2)
+
+            return {
+                "account": {
+                    "name": account["name"],
+                    "type": _clean_account_type(account["type"]),
+                    "balance": round(float(account["balance"] or 0), 2),
+                    "cash_label": "可用资金",
+                },
+                "total_market_value": round(total_market_value, 2),
+                "total_cost": round(total_cost, 2),
+                "day_pl": {"amount": 0.0, "percent": 0.0, "available": False},
+                "platforms": platforms,
+            }, None
+    finally:
+        conn.close()
+
+
+def _insert_dca_plan(conn, holding_id, amount, frequency, next_date, status):
+    """在**调用方已有事务**里插一条定投计划，返回计划字典。
+
+    刻意不开自己的 `with conn:`：buy_holding 建仓挂计划时必须与「扣款 + 写持仓」
+    同属一个事务，嵌套 with 会让内层提前 COMMIT，破坏原子性。
+    """
+    row = _holding_row(conn, holding_id, _uid())
+    if row is None:
+        return None
+    cursor = conn.execute(
+        "INSERT INTO dca_plans (user_id, holding_id, amount, frequency, "
+        "next_date, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (_uid(), row["id"], round(amount, 2), frequency, next_date, status),
+    )
+    return _row_to_dca(_dca_row(conn, cursor.lastrowid, _uid()))
+
+
+def create_dca_plan(holding_id, amount, frequency=None, next_date="", status=None):
+    """给持仓挂一条定投计划，返回 (计划字典, 错误信息)。
+
+    本期只落库 + 展示（设计 §1.2 第 3 条），**绝不自动生成任何账目**。
+    """
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        return None, "定投金额必须是数字"
+    if amount <= 0:
+        return None, "定投金额必须大于 0"
+    frequency = _clean_frequency(frequency)
+    next_date = str(next_date or "").strip()
+    status = _clean_dca_status(status) if status is not None else DEFAULT_DCA_STATUS
+
+    conn = get_conn()
+    try:
+        with conn:
+            row = _holding_row(conn, holding_id, _uid())
+            if row is None:
+                return None, "持仓不存在"
+            plan = _insert_dca_plan(conn, row["id"], amount, frequency, next_date, status)
+            return plan, None
+    finally:
+        conn.close()
+
+
+def update_dca_plan(plan_id, amount=None, frequency=None, next_date=None, status=None):
+    """改定投计划，返回 (计划字典, 错误信息)。本期只改计划本身，不产生任何账目。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = _dca_row(conn, plan_id, _uid())
+            if row is None:
+                return None, "定投计划不存在"
+            new_amount = round(float(row["amount"] or 0), 2)
+            if amount is not None:
+                try:
+                    new_amount = round(float(amount), 2)
+                except (TypeError, ValueError):
+                    return None, "定投金额必须是数字"
+                if new_amount <= 0:
+                    return None, "定投金额必须大于 0"
+            new_frequency = row["frequency"] if frequency is None else _clean_frequency(frequency)
+            new_next_date = row["next_date"] if next_date is None else str(next_date or "").strip()
+            new_status = row["status"] if status is None else _clean_dca_status(status)
+            conn.execute(
+                "UPDATE dca_plans SET amount = ?, frequency = ?, next_date = ?, status = ? "
+                "WHERE id = ? AND user_id = ?",
+                (new_amount, new_frequency, new_next_date, new_status, row["id"], _uid()),
+            )
+            return _row_to_dca(_dca_row(conn, row["id"], _uid())), None
+    finally:
+        conn.close()
+
+
+def delete_dca_plan(plan_id):
+    """删定投计划，返回 (是否删除, 错误信息)。只删计划，不动持仓与资金。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = _dca_row(conn, plan_id, _uid())
+            if row is None:
+                return False, "定投计划不存在"
+            conn.execute(
+                "DELETE FROM dca_plans WHERE id = ? AND user_id = ?", (row["id"], _uid())
+            )
+            return True, None
+    finally:
+        conn.close()
+
+
+def list_dca_plans(holding_id=None):
+    """当前用户的定投计划列表（可按持仓过滤），按 next_date 升序。"""
+    conn = get_conn()
+    try:
+        with conn:
+            if holding_id is None:
+                rows = conn.execute(
+                    "SELECT * FROM dca_plans WHERE user_id = ? "
+                    "ORDER BY next_date, id",
+                    (_uid(),),
+                ).fetchall()
+            else:
+                try:
+                    hid = int(holding_id)
+                except (TypeError, ValueError):
+                    return []
+                rows = conn.execute(
+                    "SELECT * FROM dca_plans WHERE user_id = ? AND holding_id = ? "
+                    "ORDER BY next_date, id",
+                    (_uid(), hid),
+                ).fetchall()
+            return [_row_to_dca(row) for row in rows]
+    finally:
+        conn.close()
 
 
 # ---------------- 账目 ----------------

@@ -505,3 +505,16 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 新增文档：`README.md`、`docs/prompts/37-v0131-*.md`、`docs/prompts/38-v0132-*.md`、`docs/video-script.md`
 - 自测：`temp/cdp_v0132_ui.py` 真实 Chrome CDP **40/40**；滚动采样到 13 个不同中间值；
   回归 5/5、10/10、26/26、49/49、67/67 全过，console 0 error
+
+## v0.13.3-DEV（投资账户体系 + 双视图看板 + AI 深度适配）
+
+- **Step 1 前置修复**：流水折叠改为「会话内记忆」（内存 Map，初始化不读历史缓存 → 默认全展开，点击可收起，不跨刷新记忆）；数字滚动从「仅首次进入」改为**每次 `switchPage()` 都从 0 重放**，并在首次进入某页时补滚（核心数字在页面隐藏时就渲染完了，动画跑在看不见的页面上等于没有）；静态资源串与 SW 缓存名统一到 `0.13.3`、`APP_VERSION_FALLBACK` 到 `v0.13.3-DEV`。
+- **Step 2 数据层与 API**：`accounts.type` 新增（默认 `normal`）；三张新表 `invest_platforms`（用 `account` 存账户名，因为 `accounts` 主键是 `(user_id,name)` 没有单列 id）、`holdings`、`dca_plans`；`_migrate_investment_schema()` 10 步幂等迁移，挂在 `_migrate_category_isolation()` 之后、第二段 DML 之前；**回填改用 `schema_migrations` 标记位**（原先靠"刚补列那一轮"判断，遇到"先落列、后补迁移函数"的库会永远不执行，无法自愈）；`rename_account` / `merge_account` / `delete_account` 补三处级联（否则改名即丢持仓、删户留孤儿）；12 条 `/api/invest/*` 路由全部 `@login_required` + `user_id` 隔离，不存在一律 404。
+- **资金口径（决策 B）**：`accounts.balance` = **可用资金**，永不含持仓市值；**买入不写 `records`**，只写 holdings + 扣可用资金，删除按 `cost_total` 退回；勾稽式 `可用资金 + Σ持仓成本 = 累计转入 − 累计转出`；入账口全局唯一（只有 `POST /api/invest/holdings`），AI 只推 `need_confirm` 不写库。
+- **Step 3 AI 意图**：`ACTIONS` 加 `invest_buy`，Prompt 字段 16→21（`invest_name/ticker/shares/platform/price`），示例 JSON 全部补齐；SSE 与**非流式兜底路**都要在 `_duplicate_candidate` 之前短路返回 **200 + `need_confirm`**（少做非流式那条，SSE 一失败投资指令就被吞成「AI 无法理解您的指令」）；`_apply_ai_intent` 留 400 保险丝当纵深防御；前端确认卡三重防重复（同步置 `data-locked` + `lockAction` + `setButtonBusy`），实测连点 3 次只发 1 次 POST。
+- **Step 4 投资看板**：独立文件 `static/invest-v0133.js`，双 Tab 默认【持仓】、切换只切 class 不重建 DOM（`document.contains` 验证节点同一性）；ticker 小字灰（12px / 饱和度 0.168 vs 名称 15px）；当日盈亏骨架两个独立节点；平台折叠按实体 id 记（非下标）；300ms 防抖搜索实测只发 1 次请求。
+- **金额规范化（本轮最核心的修复）**：原先三数（amount/shares/price）无论是否自洽都原样透传，而入库侧 `buy_holding()` 的组合 1 恒命中「`amount = shares×price`」——**用户亲口说的金额从来不是扣款依据**，模型吐矛盾三元组时就是「卡片 1000、实际扣 500」。现改为 `_normalize_invest` 与入库端推导同构：`amount>0` 做最外层闸门（金额主导、由它反推份额或单价），`amount` 缺失时才由份额×单价补出，三者凑不出则**抛错**。
+- **「金额只能推导，不能假设」**：`amount` 缺失且无单价时，**不许**用 `price=1.0` 编出金额（用户说"买 100 份"可能实际是 ¥4.5/份花 ¥450，编 1.0 会只扣 ¥100 却记 100 份持仓）。反之 `amount` 有值时可以用 `price=1.0 / shares=amount` 占位，因为扣的钱是用户认过的数。占位时产出 `price_assumed: true`，前端据此隐藏「单价」并显示说明。
+- **体验补强**：建仓失败补**字段级行内红字**（`.field-error[data-for]` + `is-invalid` + `aria-invalid`，改动即清；映射不上就只弹 Toast，**绝不把报错挂到不相干的输入框**——旧代码只认「已存在」一个词，而后端用「已有/同名/还有」，所以此前一次都没命中）；持仓行删掉与顶部重复的当日盈亏、无行情显示 `—`、金额与百分比之间补空格；Toast 分档 `success 2400 / warn 3600 / error 4800`；持仓弹窗补 Enter 提交（候选展开时优先选中候选）、Esc 关闭、打开即聚焦代码输入框。
+- **其他修正**：`animateNumber` 的 progress 补 `Math.max(0, …)`（rAF 的 `now` 可能早于注册时刻，`Math.min` 只钳上界会闪一帧负数）；账户大类→类型联动改双向（单向会让"先选投资再改资金账户"保存成投资账户）；删除持仓文案去掉手写 `¥`（`money()` 自带，渲染成 `¥¥100.00`）。
+- **自测**：迁移 39/39、API 109/109、AI SSE 48/48、前端 fixture 50/50、隔离 49/49、T05 后端 67/67、老测试 5/5 + 10/10 + 26/26；真实浏览器 UI/端到端 31/31、定向复查 17/19 → 修复后复验通过；全程主库 md5 不变（`98867f04…`），业务基线 分类 32 / 账目 18 / 账户 10 / 余额 −4665.8 零变化。

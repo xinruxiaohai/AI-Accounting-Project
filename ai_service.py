@@ -49,8 +49,15 @@ VISION_TIMEOUT = 45.0
 IMAGE_MAX_BYTES = 5 * 1024 * 1024
 IMAGE_MIME_FALLBACK = "image/jpeg"
 
-ACTIONS = ("record", "debt", "add_contact", "unknown")
+# v0.13.3：新增 invest_buy（买入 / 加仓投资标的）。
+# F10 警告：忘记把新 action 加进这里，模型再准也会被 _normalize_intent 打成 unknown。
+ACTIONS = ("record", "debt", "add_contact", "invest_buy", "unknown")
 RECORD_TYPES = ("expense", "income", "transfer")
+
+# 投资标的的资产类型白名单，与 database.INVEST_ASSET_TYPES 保持一致
+INVEST_ASSET_TYPES = ("fund", "stock", "bond", "cash", "other")
+# 用户没提单价时的回落值（设计 D7）：cost_price = 1.0000、shares = amount
+INVEST_PRICE_FALLBACK = 1.0
 
 # v0.11.4 同义词纠错：模型经常把商户名/口语直接当分类返回（「滴滴」「星巴克」），
 # 这里在归一化阶段强制改写成标准分类，避免给用户凭空建出一堆商户分类。
@@ -127,8 +134,8 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段键名固定为下面 16 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 ""、0 或 false：
-  action          字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"unknown"（听不懂）
+- 字段键名固定为下面 21 个，不得增删、不得改名；每个意图只填自己需要的字段，其余留空字符串 ""、0 或 false。**即使某个意图用不到后面 5 个投资字段，也必须在 JSON 里写出来（留空即可），一个都不能少**：
+  action          字符串，只能是 "record"（记账）、"debt"（借贷）、"add_contact"（添加联系人）、"invest_buy"（买入 / 加仓投资标的）、"unknown"（听不懂）
   amount          数字，金额，必须大于 0，不带货币符号
   type            记账时只能是 "expense"/"income"/"transfer"；借贷时只能是 "lend"（我借出）/ "borrow"（我借入）
   category        字符串，记账分类，如 餐饮、交通、购物、工资；不适用时填 ""
@@ -143,6 +150,11 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
   phone           字符串，联系人电话
   wechat          字符串，联系人微信
   name            字符串，添加联系人时的姓名
+  invest_name     字符串，仅 invest_buy 时填：标的名称（如 易方达蓝筹、沪深300ETF、贵州茅台）；其余意图一律 ""
+  ticker          字符串，仅 invest_buy 时填：标的代码（如 005827、600519）；模型不确定就留 ""，后端会用本地库补全
+  shares          数字，仅 invest_buy 时填：持有份额；用户没提就填 0（后端按金额 / 单价折算）
+  platform        字符串，仅 invest_buy 时填：子平台名（如 天天基金、蚂蚁财富）；用户没提就留 ""，后端落到该账户的「默认」平台
+  price           数字，仅 invest_buy 时填：买入单价；用户没提就填 0（后端按 1.0000 回落）
   confidence      整数 0-100，你对本次解析结果的确定程度：金额、分类、时间都能从原话明确确定时给 90 以上；有猜测成分、语句含糊、字段靠默认值补齐时给低分（低于 80）
 
 【置信度规则】
@@ -162,8 +174,11 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 - action = "record"：用户在记一笔自己的收支、替别人代买/垫付，或账户转账，例如「昨天打车30」「工资到账8000」「帮同事代买咖啡30」。
 - action = "debt"：用户在和某个人发生借入/借出，例如「借给小王20元」「向小李借了100」。
 - action = "add_contact"：用户只想存一个联系人信息，例如「添加小王，他是亲戚，电话13800000000」。
+- action = "invest_buy"：用户在**买入 / 加仓某个投资标的**（基金、股票、ETF、债券、黄金），句子里有「买 / 买入 / 申购 / 加仓 / 定投」+ 标的名，例如「买入1000元易方达蓝筹」「买500沪深300ETF」「每月定投500沪深300」。
 - action = "unknown"：闲聊、提问、没有金额也看不出记账/借贷/联系人意图，例如「今天天气不错」「你好」。
 - 一句话同时像记账又像借贷时，以「钱是否借给了某个人、之后要还」为准，选 debt；代买/垫付之后要找对方或公司报销的，仍然选 record 并标 is_reimbursable。
+- **买实物 / 消费不是 invest_buy**：「买了件衣服300」「买奶茶20」「买了个手机」一律是 record + expense；只有买的是**可交易的金融标的**（基金、股票、ETF、债券、黄金）才是 invest_buy。
+- **账户之间转钱是 record + transfer，不是 invest_buy**：「从微信转入5000到天天基金」「银行卡转支付宝2000」只是把钱从一个账户挪到另一个账户，没有买任何标的。
 
 【record 规则】
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
@@ -187,33 +202,52 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 - identity、phone、wechat 有就填，没有留空。
 - amount 填 0，type 留空字符串，is_reimbursable 填 false，category/account/date/note 等其余字段留空或按格式补 0。
 
+【invest_buy 规则】
+- invest_name 必填：标的名称原样提取（「易方达蓝筹」不要擅自补全成「易方达蓝筹精选」，后端会自己补全）。
+- account 必须是**投资账户**（天天基金、蚂蚁财富、基金、余额宝这类），从 Prompt 末尾的【用户真实账户列表】里选；用户没提就留 ""，后端会自动落到该用户的投资账户。
+- platform 是子平台名（天天基金 / 蚂蚁财富）；用户没提留 ""。
+- amount 是本次投入的**金额**（元），必填且大于 0。
+- ticker / shares / price 能看出来就填，看不出来分别留 ""、0、0，后端会补。
+- type 留空字符串，category / to_account / fee / contact_name / identity / phone / wechat / name 一律留空或 0，is_reimbursable 填 false。
+- 「每月定投 500 沪深300」这类仍然判 invest_buy：amount 填每期金额（500），note 里写清「定投」，后端会提示配置定投计划。
+
 【示例】
 用户：昨天打车花了30
-输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{yesterday} 00:00", "note": "打车", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：工资到账 8000
-输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "record", "amount": 8000, "type": "income", "category": "工资", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "工资到账", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：帮同事小明代买咖啡30
-输出：{{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "帮小明代买咖啡", "is_reimbursable": true, "contact_name": "小明", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "帮小明代买咖啡", "is_reimbursable": true, "contact_name": "小明", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：给公司垫付打车50，记得报销
-输出：{{"action": "record", "amount": 50, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "垫付打车报销", "is_reimbursable": true, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "record", "amount": 50, "type": "expense", "category": "交通", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "垫付打车报销", "is_reimbursable": true, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：测试乙41215 买了奶茶20元
-输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：借给小王20元
-输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "is_reimbursable": false, "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给小王20元", "is_reimbursable": false, "contact_name": "小王", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：向小李借了100
-输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "is_reimbursable": false, "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "debt", "amount": 100, "type": "borrow", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "向小李借100", "is_reimbursable": false, "contact_name": "小李", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：添加小王，他是亲戚，电话13800000000
-输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "is_reimbursable": false, "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王"}}
+输出：{{"action": "add_contact", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "添加联系人小王", "is_reimbursable": false, "contact_name": "", "identity": "亲戚", "phone": "13800000000", "wechat": "", "name": "小王", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
 
 用户：今天天气不错
-输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}}
+输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
+用户：买入1000元易方达蓝筹
+输出：{{"action": "invest_buy", "amount": 1000, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买入易方达蓝筹", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "易方达蓝筹", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 90}}
+
+用户：每月定投500沪深300
+输出：{{"action": "invest_buy", "amount": 500, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "每月定投沪深300", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "沪深300", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 88}}
+
+用户：从微信转入5000到天天基金
+输出：{{"action": "record", "amount": 5000, "type": "transfer", "category": "", "account": "微信", "to_account": "天天基金", "fee": 0, "date": "{now}", "note": "微信转入天天基金", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 92}}
 """
 
 
@@ -738,6 +772,151 @@ def _normalize_contact(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _resolve_invest_accounts(invest_accounts: Optional[list[str]] = None) -> list[str]:
+    """拿到「当前用户的投资账户名列表」。
+
+    优先用调用方显式传入的（app.py 未来会传）；没传时尝试惰性读一次 database
+    ——ai_service 原则上不碰库，但这一步只为补一个名字列表，任何异常都静默返回空，
+    绝不因为拿不到就让整条 AI 链路失败。
+    """
+    if invest_accounts:
+        return [str(item) for item in invest_accounts if str(item).strip()]
+    try:
+        import database  # 惰性导入，避免与 app 形成模块级循环
+
+        rows = database.list_accounts()
+        return [
+            str(row.get("name"))
+            for row in rows
+            if str(row.get("type") or "") == "investment" and row.get("name")
+        ]
+    except Exception:  # noqa: BLE001 - 拿不到就当没有，交给前端让用户选
+        return []
+
+
+def _invest_lookup(keyword: str) -> Optional[dict[str, Any]]:
+    """用本地 Mock 行情库补 ticker / name / asset_type；库缺失时返回 None。"""
+    text = _as_text(keyword)
+    if not text:
+        return None
+    try:
+        import invest_mock
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return invest_mock.lucky_one(text)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _normalize_invest(
+    payload: dict[str, Any],
+    now: datetime,
+    accounts: Optional[list[str]] = None,
+    invest_accounts: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """归一化 invest_buy（买入 / 加仓投资标的）。
+
+    五步校验（设计 §3.6）：
+      1. amount 解析后参与推导，「能否成单」的判决放到第 4 步末尾；
+      2. invest_name 必填；
+      3. account 先模糊纠错，再要求它必须是投资账户，否则回落到第一个投资账户；
+      4. shares / price / amount 三者推导（见下方铁律）；
+      5. ticker 为空时用 Mock 行情库补全，并顺带把 name 补成库的正式名。
+
+    **三者推导的两条铁律（v0.13.3，与 database.buy_holding() 的 D7 对齐）：**
+      1. `amount` 是唯一真相：用户亲口说出的钱只能**推导**，不能**假设**。
+         由用户给出的另两个数算出来 = 推导（可用）；其中的 1.0 是我们替用户
+         填的 = 假设（禁止）。所以「只有份额、没有金额」必须抛错，绝不落成
+         `price=1.0, amount=shares`——那会让实际买的 ¥450 只扣 ¥100。
+      2. 入库侧 D7 是有**优先级**的 if/elif 链，第一优先是 `shares*price` 反算
+         `amount`。前端确认卡三个数全发，所以归一化端必须自己先做到自洽
+         （`shares * price == amount`），否则用户看到的金额会被入库侧覆盖掉
+         （「卡片显示 1000、实际扣 500」）。
+
+    **本函数不写任何库**：返回体只是「待确认」，落库统一走 POST /api/invest/holdings。
+    """
+    # amount 在这里只「解析」不「判决」：缺失 / 空串 / 0 一律先按 0 参与下面的推导，
+    # 「三者都无法成单」的判决挪到推导链末尾 —— 否则模型漏给 amount 但给了份额单价时，
+    # 连「shares × price」这条本可以救回来的分支都走不到。
+    # 注：负数金额仍由 _as_amount 的 minimum 直接抛「不能小于 0」：金额为负说明这条
+    # 解析整体不可信，不做局部抢救，让用户重说一句。
+    amount = _as_amount(payload.get("amount") or 0, "amount")
+
+    invest_name = _as_text(payload.get("invest_name"))
+    if not invest_name:
+        raise AIServiceError("识别成买入，但没有提取到标的名称")
+
+    invest_accounts = _resolve_invest_accounts(invest_accounts)
+    raw_account = _as_text(payload.get("account"))
+    account = raw_account
+    if account and accounts:
+        matched, _changed = _match_account(account, list(accounts) + list(invest_accounts))
+        account = matched or account
+    if account and invest_accounts and account not in invest_accounts:
+        # 模型给了账户，但它不是投资账户 → 也回落到第一个投资账户
+        account = ""
+    if not account:
+        account = invest_accounts[0] if invest_accounts else ""
+    if not account:
+        raise AIServiceError("还没有投资账户，请先在账户管理里把某个账户设为投资账户")
+
+    shares = _as_amount(payload.get("shares", 0), "shares")
+    price = _as_amount(payload.get("price", 0), "price")
+    # v0.13.3：与入库侧 D7 组合表同构的推导链。amount > 0 是最外层闸门。
+    price_assumed = False
+    if amount > 0:
+        if price > 0:
+            # 用户给了真实单价 → 以金额为准反推份额，丢弃模型自相矛盾的 shares
+            shares = round(amount / price, 4)
+        elif shares > 0:
+            # 用户给了真实份额与金额 → 反推真实单价，绝不落成占位的 1.0
+            price = round(amount / shares, 4)
+        else:
+            # 只有金额：按 D7 记「单价 1.0、份额 = 金额」。
+            # 这里的 1.0 是占位不是净值，必须标记给前端，别让它当成真的单位净值显示。
+            price = INVEST_PRICE_FALLBACK
+            shares = round(amount, 4)
+            price_assumed = True
+    elif shares > 0 and price > 0:
+        # 模型漏了金额，但份额与单价都是用户真说的 → 算术补出，份额单价都不动
+        amount = round(shares * price, 2)
+    else:
+        # 金额既没给，也不是份额单价齐全 → 绝不替用户编一个数，让他重说
+        raise AIServiceError("没识别出金额，请说清这笔花了多少钱")
+
+    ticker = _as_text(payload.get("ticker"))
+    asset_type = _as_text(payload.get("asset_type") or payload.get("platform_type") or "")
+    platform = _as_text(payload.get("platform"))
+    if not ticker:
+        hit = _invest_lookup(invest_name)
+        if hit:
+            ticker = hit["ticker"]
+            # 用户说「易方达蓝筹」时补成库的正式名「易方达蓝筹精选」
+            if hit["name"] and hit["name"] not in invest_name:
+                invest_name = hit["name"]
+            asset_type = asset_type or hit.get("asset_type", "")
+    if asset_type.lower() not in INVEST_ASSET_TYPES:
+        asset_type = "fund"
+
+    return {
+        "amount": amount,
+        "account": account,
+        "invest_name": invest_name[:50],
+        "ticker": ticker[:20],
+        "shares": shares,
+        "price": price,
+        # True 表示 price 是 D7 占位（1.0），不是这只基金真实的单位净值；
+        # 前端见 True 时应隐藏「单价」并说明「按份额=金额记录」。
+        "price_assumed": price_assumed,
+        "platform": platform[:30],
+        "asset_type": asset_type,
+        "date": _normalize_date(payload.get("date"), now),
+        "note": _as_text(payload.get("note"))[:50],
+        "invest_accounts": invest_accounts,
+    }
+
+
 def _apply_fuzzy_names(
     result: dict[str, Any],
     action: str,
@@ -790,6 +969,7 @@ def _normalize_intent(
     now: datetime,
     accounts: Optional[list[str]] = None,
     contacts: Optional[list[str]] = None,
+    invest_accounts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AIServiceError("模型返回的不是 JSON 对象")
@@ -817,6 +997,8 @@ def _normalize_intent(
         result = _normalize_debt(payload, now)
     elif action == "add_contact":
         result = _normalize_contact(payload)
+    elif action == "invest_buy":
+        result = _normalize_invest(payload, now, accounts, invest_accounts)
 
     corrections = _apply_fuzzy_names(result, action, accounts, contacts)
     result["auto_corrected"] = corrections
@@ -831,6 +1013,7 @@ def _chat(
     memories: Optional[list[dict[str, Any]]] = None,
     accounts: Optional[list[str]] = None,
     contacts: Optional[list[str]] = None,
+    invest_accounts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if not cleaned:
@@ -871,7 +1054,7 @@ def _chat(
     except json.JSONDecodeError as error:
         raise AIServiceError("模型返回的不是合法 JSON：%s" % error)
 
-    return _normalize_intent(payload, now, accounts, contacts)
+    return _normalize_intent(payload, now, accounts, contacts, invest_accounts)
 
 
 def parse_intent(
@@ -881,15 +1064,24 @@ def parse_intent(
     memories: Optional[list[dict[str, Any]]] = None,
     accounts: Optional[list[str]] = None,
     contacts: Optional[list[str]] = None,
+    invest_accounts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """理解一句话的意图，返回带 action 与 confidence 的字段；失败抛 AIServiceError。
 
     previous_record 非空表示「补充修改账单」，会把原账单完整 JSON 注入 Prompt；
     memories 是关键词命中的历史纠错（AI 记忆库），当 few-shot 注入；
-    accounts / contacts 是库里的真实名字，用于 Prompt 提示 + 返回后的 difflib 强制纠正。
+    accounts / contacts 是库里的真实名字，用于 Prompt 提示 + 返回后的 difflib 强制纠正；
+    invest_accounts 是投资账户名列表（v0.13.3），给 invest_buy 做归属判定，
+    不传时会惰性从 database 读一次，读不到也不影响其它意图。
     """
     return _chat(
-        text, now or datetime.now(), previous_record, memories, accounts, contacts
+        text,
+        now or datetime.now(),
+        previous_record,
+        memories,
+        accounts,
+        contacts,
+        invest_accounts,
     )
 
 

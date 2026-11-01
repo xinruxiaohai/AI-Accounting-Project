@@ -1,0 +1,138 @@
+%% v0.13.3 增量：AI 投资指令落库 / 投资看板双 Tab / 新建持仓三张时序图
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant FE as 前端 runAiStream
+    participant BR as before_request _identity_guard
+    participant CX as database contextvars
+    participant RT as /api/records/ai/stream SSE
+    participant AI as ai_service.parse_intent
+    participant QT as invest_mock.search_securities
+    participant CF as 气泡「确认 / 取消」
+    participant API as POST /api/invest/holdings
+    participant REPO as database.buy_holding
+    participant SQL as sqlite3 单事务
+
+    U->>FE: 输入「买入 1000 元易方达蓝筹」
+    FE->>RT: POST {text} Authorization: Bearer JWT
+    RT->>BR: 进入 before_request
+    BR->>CX: set_current_user(user.id)  ★ 唯一 user_id 注入点
+    RT->>AI: parse_intent(text, accounts=真实账户名列表, platforms=投资账户列表)
+    AI-->>RT: {action:"invest_buy", amount:1000, invest_name:"易方达蓝筹", invest_platform:"天天基金"}
+    RT->>AI: _normalize_invest 本地校验
+    Note over AI: amount 大于 0 / invest_name 非空<br/>account 必须是 type='investment'<br/>shares ≤ 0 且 price ≤ 0 → price=1.0, shares=amount
+    AI->>QT: search_securities("易方达蓝筹")
+    QT-->>AI: [{ticker:"005827", name:"易方达蓝筹精选", price:0.00, asset_type:"fund", source:"mock"}]
+    AI-->>RT: parsed 补齐 ticker / auto_corrected
+    RT-->>FE: event {status:"need_confirm", action:"invest_buy", parsed, candidates}
+    Note over RT,FE: 此时**没有写任何库**，一次大模型调用到此为止
+    FE->>CF: 渲染确认卡：标的 005827 易方达蓝筹精选<br/>账户 天天基金 · 金额 ¥1000.00 · 份额 1000.0000（单价回落 1.0000）
+    U->>CF: 点「确认建仓」
+    CF->>API: POST /api/invest/holdings {account:"天天基金", platform_id, ticker:"005827", name:"易方达蓝筹精选", asset_type:"fund", shares:1000, cost_price:1.0, amount:1000}
+    API->>REPO: buy_holding(...)（一个 with conn 事务）
+    REPO->>SQL: SELECT balance FROM accounts WHERE name='天天基金' AND user_id=uid
+    alt 可用资金不足
+        SQL-->>REPO: 0.00
+        REPO-->>API: (None, "「天天基金」可用资金不足：当前 0.00，本次需要 1000.00")
+        API-->>CF: 400 {error}
+        CF-->>U: Toast 红色提示，引导先「从微信转入」
+    else 资金充足
+        REPO->>SQL: INSERT records(type='expense', category='投资买入', account='天天基金', amount=1000)
+        REPO->>SQL: UPDATE accounts SET balance = balance - 1000 WHERE name='天天基金' AND user_id=uid
+        alt 同平台已有同名标的
+            REPO->>SQL: UPDATE holdings SET shares=shares+1000, cost_total=cost_total+1000, cost_price=cost_total/shares, updated_at=now
+        else 新建
+            REPO->>SQL: INSERT holdings(..., shares=1000, cost_price=1.0, cost_total=1000, record_id=?)
+        end
+        REPO->>SQL: UPDATE holdings SET record_id=<新 records.id>
+        REPO-->>API: (holding, None)
+        API-->>CF: 201 {holding, record, balance, platform}
+        CF->>FE: 气泡 done「已建仓：易方达蓝筹精选」
+        FE->>FE: investOnRecordChanged() → 重拉看板（若当前在该投资账户）
+    end
+    Note over REPO,SQL: 关键：余额 / 账目 / 持仓三者在**同一事务**<br/>任一失败整体回滚，绝不出现「钱扣了持仓没建」
+
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant AG as account-groups 事件委托
+    participant SA as selectAccount(name)
+    participant WEB as GET /api/accounts
+    participant IB as window.renderInvestBoard
+    participant API as GET /api/invest/board
+    participant REPO as database.list_invest_board
+    participant DOM as invest-board 容器
+
+    U->>AG: 点左侧「天天基金」账户行
+    AG->>SA: selectAccount("天天基金")
+    SA->>SA: state.detailAccount = "天天基金"
+    SA->>WEB: 命中 state.accounts 缓存（loadAccounts 已拉过，含 type 字段）
+    alt account.type 为 investment
+        SA->>SA: 隐藏 account-balance-card / account-records，显示 invest-board
+        SA->>IB: window.renderInvestBoard("天天基金")
+        IB->>DOM: 先渲染骨架 invest-hero / invest-tabs（不等数据）
+        IB->>API: GET /api/invest/board?account=天天基金
+        API->>REPO: list_invest_board(account_name)
+        REPO->>REPO: 校验该账户属于 uid 且 type='investment'
+        REPO->>REPO: 逐平台累加 _row_to_holding（price 回落 cost_price）
+        REPO-->>API: {account, total_market_value, total_cost, day_pl, platforms}
+        API-->>IB: 200
+        IB->>DOM: 渲染大数字（setAmountAnimated 0→市值，复用 v0.13.2 动效）+ 当日盈亏占位灰字 +0.00 (0.00%)
+        IB->>DOM: 渲染平台折叠面板 → 每个平台内持仓行（有 ticker 时在名称后加小字灰色代码）
+        IB->>DOM: **同时**渲染流水 pane（骨架 + idle，不请求）
+        Note over IB,DOM: 两个 pane 一次性建好 DOM。<br/>默认给持仓 pane 加 .is-active，**默认展示持仓**
+    else account.type 为 normal
+        SA->>DOM: 走今天的 renderAccountBalanceCard + refreshDetail 老逻辑
+    end
+    U->>DOM: 点【流水】Tab
+    DOM->>IB: switchInvestTab('ledger')（事件委托，只切 .is-active，**不重建 DOM**）
+    alt 流水尚未加载过
+        IB->>API: GET /api/records?account=天天基金（懒加载）
+        API-->>IB: {records:[买入 expense、转入 transfer、清仓 income...]}
+        IB->>DOM: feedGroupsHtml 复用现有折叠组件渲染
+    else 已缓存
+        IB->>DOM: 只切 class
+    end
+    U->>DOM: 点平台标题
+    DOM->>IB: togglePlatform(id) → isCollapsed('ai-accounting-invest-platform-collapse', 'platform:'+id)
+    Note over IB: key 用实体 id 派生，禁用数组下标；<br/>sessionCollapseMap + 按用户隔离的 userScopedKey
+
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant HM as holding-modal 弹窗
+    participant EV as invest-v0133.js 事件委托
+    participant API as GET /api/invest/search
+    participant QT as invest_mock.search_securities
+    participant POST as POST /api/invest/holdings
+    participant REPO as database.buy_holding
+    participant T as Toast
+
+    U->>HM: 点「+ 新建持仓」
+    HM->>API: GET /api/invest/platforms?account=天天基金（填平台下拉）
+    API-->>HM: [{id:1,name:"默认"},{id:2,name:"蚂蚁财富"}]
+    U->>EV: 在代码框输入「005827」
+    EV->>EV: clearTimeout + setTimeout(300ms)（INVEST_SEARCH_DEBOUNCE_MS，沿用 SEARCH_DEBOUNCE_MS 常量风格）
+    Note over EV: 输入不足 1 字或失去焦点则取消；<br/>连续输入只在最后一次触发请求
+    EV->>API: GET /api/invest/search?keyword=005827
+    API->>QT: search_securities("005827")
+    QT-->>API: 代码精确命中优先 → 名称包含次之 → difflib 兜底
+    API-->>EV: 200 {total:1, items:[{ticker:"005827",name:"易方达蓝筹精选",asset_type:"fund",price:0.00}]}
+    EV->>HM: 渲染下拉候选（最多 8 条，点击/Enter 选中，Esc 关闭，全程无 alert）
+    U->>HM: 点选候选
+    HM->>HM: 回填 name / ticker / asset_type；price>0 时回填单价
+    U->>HM: 选择输入模式：① 手填份额+单价 ② 直接填投入金额（金额模式按 D7 自动 shares=金额, price=1.0）
+    U->>HM: （可选）勾选「配置定投计划」→ 填 amount / frequency / next_date
+    U->>EV: 点「保存」
+    EV->>EV: 本地校验：名称必填、金额>0、份额>0、平台必选、定投金额>0（走 setFieldError 的既有红色行内报错风格）
+    alt 校验失败
+        EV->>HM: reportIssues() 行内红字 + 聚焦第一个错误字段
+    else 校验通过
+        EV->>POST: POST /api/invest/holdings {...}
+        POST->>REPO: buy_holding 单事务（写 records + 扣 balance + 写 holdings + 可选 dca）
+        REPO-->>POST: OK
+        POST-->>EV: 201 {holding, record, balance, dca}
+        EV->>HM: hideModalSafe 关弹窗
+        EV->>T: toast("已建仓：易方达蓝筹精选", "success")
+        EV->>EV: window.renderInvestBoard(state.invest.accountName) 局部刷新，**不整页 reload**
+    end

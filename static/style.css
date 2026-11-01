@@ -18,6 +18,9 @@
   --brand-blue: #2563eb;
   --brand-blue-ink: #1d4ed8;
   --brand-soft: rgba(37, 99, 235, 0.1);
+  /* 盖在品牌色底上的文字色（v0.13.3）：两种主题下品牌底都是深蓝，取值一致。
+     取代原先散落的 #fff / #ffffff 硬编码，方便统一调整对比度。 */
+  --text-on-brand: #ffffff;
 
   /* ===== v0.13.1 全局语义色（唯一真相源）=====
    * 支出 = 红 / 收入 = 绿 / 转账·结余 = 灰。
@@ -9878,4 +9881,812 @@ body.auth-locked {
     animation: none;
     will-change: auto;
   }
+}
+
+/* ===================== v0.13.3 投资看板（.invest-*） =====================
+ * 纪律（HANDOFF 已知坑）：新样式一律 .invest-* 前缀，追加到 style.css 文件末尾，
+ * 同权重靠文件末尾覆盖。全部颜色走 :root / [data-theme="dark"] 的语义令牌，
+ * 不在本段写死任何 hex —— 切深色时组件规则一份就够。
+ * 盈利 = --color-income（绿）/ 亏损 = --color-expense（红）/ 占位灰 = --text-dim。
+ */
+
+/* 看板容器：与普通账户的余额卡 + 流水列表互斥显隐 */
+.invest-board {
+  margin: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* hidden 属性必须显式兜底：容器自身是 display:flex，否则 [hidden] 会被覆盖 */
+.invest-board[hidden],
+.account-balance-card[hidden],
+#account-records[hidden] {
+  display: none !important;
+}
+
+/* ---------- 顶部：总市值大数字 + 当日盈亏占位 ---------- */
+
+.invest-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, var(--surface-2) 0%, var(--surface) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.invest-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.invest-hero-label {
+  font-size: 13px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.invest-hero-value {
+  font-size: 34px;
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+/* 可用资金 ≠ 总市值：两个词必须分开写，别混用 */
+.invest-hero-cash {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invest-hero-pl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+
+.invest-pl-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invest-pl-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 骨架期（未接行情）恒为灰字，不参与涨跌配色 */
+.invest-hero-pl.is-placeholder .invest-pl-amount,
+.invest-hero-pl.is-placeholder .invest-pl-percent {
+  color: var(--text-dim);
+}
+
+.invest-hero-pl.is-up .invest-pl-amount,
+.invest-hero-pl.is-up .invest-pl-percent {
+  color: var(--color-income);
+}
+
+.invest-hero-pl.is-down .invest-pl-amount,
+.invest-hero-pl.is-down .invest-pl-percent {
+  color: var(--color-expense);
+}
+
+/* 持仓行右侧的当日盈亏占位：金额与百分比各自独立节点，将来只改 textContent */
+.invest-holding-pl .invest-pl-amount,
+.invest-holding-pl .invest-pl-percent {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 双 Tab ---------- */
+
+.invest-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 8px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.invest-tab {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  font-weight: 600;
+  padding: 6px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.invest-tab:hover {
+  color: var(--text-main);
+  background: var(--surface-soft);
+}
+
+.invest-tab.is-active {
+  color: var(--text-on-brand);
+  background: var(--brand-blue);
+  border-color: var(--brand-blue);
+}
+
+.invest-tabs-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+
+/* 两个 pane 常驻 DOM，只靠 .is-active 切换显示 —— 绝不重建（HANDOFF 已知坑） */
+.invest-pane {
+  display: none;
+  min-width: 0;
+}
+
+.invest-pane.is-active {
+  display: block;
+}
+
+#invest-pane-ledger.is-active {
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.invest-loading {
+  padding: 24px 8px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.invest-empty {
+  padding: 28px 12px;
+  text-align: center;
+}
+
+.invest-empty-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.invest-empty-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ---------- 持仓视图：汇总条 ---------- */
+
+.invest-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+
+.invest-summary-item {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invest-summary-item strong {
+  margin-left: 4px;
+  font-size: 14px;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-summary-item strong.is-up {
+  color: var(--color-income);
+}
+
+.invest-summary-item strong.is-down {
+  color: var(--color-expense);
+}
+
+/* ---------- 平台折叠面板 ---------- */
+
+.invest-platforms {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.invest-platform {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.invest-platform-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.18s ease;
+}
+
+.invest-platform-head:hover {
+  background: var(--surface-soft);
+}
+
+.invest-platform-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-main);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invest-platform-meta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.invest-platform-count {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.invest-platform-value {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-chevron {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+
+.invest-platform.is-collapsed .invest-chevron {
+  transform: rotate(-90deg);
+}
+
+.invest-platform-body {
+  display: block;
+  padding: 0 8px 8px;
+}
+
+.invest-platform.is-collapsed .invest-platform-body {
+  display: none;
+}
+
+.invest-platform-empty {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+/* ---------- 持仓行 ---------- */
+
+.invest-holding {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
+  transition: background 0.18s ease;
+}
+
+.invest-holding:hover {
+  background: var(--surface-soft);
+}
+
+.invest-holding-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.invest-holding-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 有 ticker 时：名称后用小字灰色显示代码 */
+.invest-holding-ticker {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+.invest-holding-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-holding-right {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.invest-holding-value {
+  min-width: 92px;
+  text-align: right;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-holding-pl {
+  min-width: 118px;
+  text-align: right;
+}
+
+.invest-holding-cost {
+  min-width: 118px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-holding-cost.is-up {
+  color: var(--color-income);
+}
+
+.invest-holding-cost.is-down {
+  color: var(--color-expense);
+}
+
+.invest-holding-ops {
+  flex: 0 0 auto;
+}
+
+.invest-holding-del {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.invest-holding:hover .invest-holding-del,
+.invest-holding-del:focus-visible {
+  opacity: 1;
+}
+
+.invest-holding-del:hover {
+  color: var(--color-expense);
+  border-color: var(--color-expense);
+}
+
+/* ---------- 新建持仓弹窗 ---------- */
+
+.invest-search-wrap {
+  position: relative;
+}
+
+.invest-candidates {
+  display: none;
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  right: 0;
+  top: calc(100% - 12px);
+  max-height: 232px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.invest-candidates.show {
+  display: block;
+}
+
+.invest-candidate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--line-faint);
+}
+
+.invest-candidate:last-child {
+  border-bottom: none;
+}
+
+.invest-candidate:hover {
+  background: var(--surface-soft);
+}
+
+.invest-candidate.is-empty {
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: default;
+}
+
+.invest-candidate-ticker {
+  flex: 0 0 68px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-candidate-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invest-candidate-type {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.invest-mode-switch {
+  display: flex;
+  gap: 8px;
+}
+
+.invest-mode-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-main);
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.invest-mode-item input {
+  accent-color: var(--brand-blue);
+}
+
+/* 录入方式两组输入互斥：只切 .is-active，不重建 DOM */
+.invest-input-box {
+  display: none;
+}
+
+.invest-input-box.is-active {
+  display: block;
+}
+
+.invest-dca-wrap {
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.invest-dca-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.invest-dca-toggle input {
+  accent-color: var(--brand-blue);
+}
+
+.invest-dca-box {
+  display: none;
+  margin-top: 10px;
+}
+
+.invest-dca-box.is-active {
+  display: block;
+}
+
+/* ---------- 窄屏 ---------- */
+
+@media (max-width: 820px) {
+  .invest-board {
+    margin: 10px 8px 14px;
+  }
+
+  .invest-hero {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .invest-hero-pl {
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .invest-holding-right {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .invest-holding-cost {
+    min-width: 0;
+  }
+}
+
+/* 系统设置了「减少动态效果」就关掉过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .invest-tab,
+  .invest-platform-head,
+  .invest-chevron,
+  .invest-holding,
+  .invest-holding-del {
+    transition: none;
+  }
+}
+
+/* ===================== v0.13.3 T03：AI 投资建仓确认卡 =====================
+ * 挂聊天气泡（.bubble-main）内部，配色全部走语义令牌，深浅色自动跟随。
+ * 气泡有确认卡时 noFade，不会三秒淡出把按钮带走。
+ */
+
+.bubble-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bubble-card-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.bubble-card-label {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.bubble-card-value {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  word-break: break-all;
+}
+
+/* ---------- 投资建仓确认卡 ---------- */
+
+.invest-confirm {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+}
+
+.invest-confirm-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.invest-confirm-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.invest-confirm-label {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.invest-confirm-value {
+  color: var(--text-strong);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 账户下拉只在有多个投资账户时出现 */
+.invest-confirm-account {
+  flex: 0 1 auto;
+  max-width: 62%;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px 8px;
+}
+
+.invest-confirm-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.invest-confirm-actions button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.invest-confirm-ok {
+  background: var(--brand-blue);
+  border-color: var(--brand-blue);
+  color: #ffffff;
+}
+
+.invest-confirm-ok:hover:not(:disabled) {
+  background: var(--brand-blue-ink);
+  border-color: var(--brand-blue-ink);
+}
+
+.invest-confirm-cancel {
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--text-muted);
+}
+
+.invest-confirm-cancel:hover:not(:disabled) {
+  color: var(--text-main);
+  background: var(--surface-soft);
+}
+
+.invest-confirm-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.invest-confirm-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--color-expense);
+  word-break: break-all;
+}
+
+/* 系统设置了「减少动态效果」就关掉过渡 */
+@media (prefers-reduced-motion: reduce) {
+  .invest-confirm-actions button {
+    transition: none;
+  }
+}
+
+/* ===================== v0.13.3 T05：账户类型 UI =====================
+ * 账户行的「投资」小角标 + 行内编辑表单里的类型下拉与提示语。
+ * 颜色全部走语义令牌，深色自动跟随。
+ */
+
+/* 账户行名称后的「投资」小角标 */
+.account-row-badge {
+  margin-left: 6px;
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--brand-blue);
+  background: var(--brand-soft);
+  border: 1px solid var(--brand-soft);
+  white-space: nowrap;
+}
+
+/* 行内编辑表单：类型下拉与两个按钮排一行，提示语独占一行 */
+.account-edit-form .account-edit-type {
+  flex: 0 0 96px;
+  width: 96px;
+  font-size: 12px;
+}
+
+.account-edit-hint {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* 新建账户弹窗：类型下拉下方的说明文案 */
+#new-account-type + .form-text {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+/* ===== v0.13.3 解冻批：确认卡单价说明 / 看板静态说明 ===== */
+
+/* AI 建仓确认卡：单价是 D7 占位（price_assumed）时的口径说明，淡灰小字 */
+.invest-confirm-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* 看板顶部的静态说明：买入 / 清仓不计入收支统计，避免用户来问「我的钱去哪了」 */
+.invest-board-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
 }
