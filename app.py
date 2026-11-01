@@ -2870,6 +2870,13 @@ def create_invest_holding():
     if not isinstance(dca, dict):
         dca = None
 
+    # v0.13.3：扣款来源账户（可选）。空串 = 用投资账户自己的可用资金。
+    source_account = data.get("source_account", "")
+    if source_account is None:
+        source_account = ""
+    if not isinstance(source_account, str):
+        return jsonify(error="source_account 必须是账户名"), 400
+
     payload, error = database.buy_holding(
         account.strip(),
         platform_id=data.get("platform_id"),
@@ -2880,6 +2887,7 @@ def create_invest_holding():
         price=_to_number(price, 0),
         amount=_to_number(data.get("amount"), 0),
         dca=dca,
+        source_account=source_account.strip(),
     )
     if error is not None:
         return jsonify(error=error), _invest_status(error)

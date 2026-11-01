@@ -72,7 +72,9 @@ DEFAULT_ACCOUNT_TYPE = "normal"
 INVESTMENT_ACCOUNT_TYPE = "investment"
 
 # 持仓资产类型白名单；非法值一律回落 fund（不报错，避免 AI 乱吐词导致建仓失败）
-INVEST_ASSET_TYPES = ("fund", "stock", "bond", "cash", "other")
+# v0.13.3：补 `gold`（黄金）——黄金的计价单位（元/克、元/份）与基金份额差异大，
+# 混在 fund 里会让看板的类型分布失真，用户也一直要求下拉里有「黄金」这一项。
+INVEST_ASSET_TYPES = ("fund", "stock", "bond", "gold", "cash", "other")
 DEFAULT_ASSET_TYPE = "fund"
 
 # 投资平台默认名：每个投资账户至少有一个「默认」平台（迁移步 9 与 ensure_default_platform 补）
@@ -1224,6 +1226,7 @@ def _migrate_investment_schema(conn, accounts_need_type=False):
             amount     REAL    NOT NULL DEFAULT 0,
             frequency  TEXT    NOT NULL DEFAULT 'monthly',
             next_date  TEXT    NOT NULL DEFAULT '',
+            source_account TEXT NOT NULL DEFAULT '',
             status     TEXT    NOT NULL DEFAULT 'active',
             created_at TEXT    DEFAULT CURRENT_TIMESTAMP
         )
@@ -1237,6 +1240,15 @@ def _migrate_investment_schema(conn, accounts_need_type=False):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_dca_user_next ON dca_plans (user_id, next_date)"
     )
+
+    # 步 8.5（v0.13.3 补）：定投计划的**扣款来源账户**。
+    # 15 位的旧库里 dca_plans 没有这一列，靠 PRAGMA 判存在后再 ALTER，幂等且可自愈。
+    # 空串表示「就用投资账户自己的可用资金」，与买入不指定来源时的口径一致。
+    dca_columns = [row["name"] for row in conn.execute("PRAGMA table_info(dca_plans)")]
+    if "source_account" not in dca_columns:
+        conn.execute(
+            "ALTER TABLE dca_plans ADD COLUMN source_account TEXT NOT NULL DEFAULT ''"
+        )
 
     # 步 9：给每个投资账户补一个「默认」子平台。
     # INSERT OR IGNORE + 唯一索引双保险：重复执行行数绝不增长（迁移幂等的核心验证点之一）
@@ -2865,18 +2877,27 @@ def buy_holding(
     amount=0,
     dca=None,
     record_id=None,
+    source_account="",
 ):
     """**全局唯一的投资入账口**：扣可用资金 + 写（或加仓）持仓，返回 (payload, 错误信息)。
 
-    payload = {"holding", "platform", "balance", "added", "dca", "record"}
+    payload = {"holding", "platform", "balance", "added", "dca", "record", "transfer"}
     - `added=True` 表示命中同平台同名持仓走了**加权加仓**（设计 D6），False 表示新建；
     - `record` 恒为 None：决策 B 下不写 records，保留键位只为契约稳定。
 
     **必须在同一个 with conn: 事务里**完成「扣 balance + 写 holdings」：
     任何一步失败都整体回滚，绝不出现「钱扣了但持仓没建」。
+
+    v0.13.3 新增 `source_account`（扣款来源账户，如「微信」「现金」）：
+    - 空串 / 与投资账户同名 → 老行为：直接从投资账户的可用资金里扣；
+    - 其它账户 → 先在同一事务里从来源账户**转出** amount，并**转入**投资账户的可用资金，
+      随后照旧从投资账户扣款。净效果：来源账户 −amount、投资账户可用资金不变、
+      持仓 +amount。两笔 UPDATE 与写持仓同事务，任何一步失败全部回滚，
+      不会出现「微信的钱扣了、持仓没建」。
     """
     name = str(name or "").strip()
     ticker = str(ticker or "").strip()
+    source_account = str(source_account or "").strip()
     if not name:
         return None, "请填写标的名称"
     if len(name) > MAX_HOLDING_NAME_LENGTH:
@@ -2938,6 +2959,43 @@ def buy_holding(
                 platform_row = _platform_row(conn, platform_id, _uid())
 
             balance = round(float(account["balance"] or 0), 2)
+
+            # ---- 第零写（v0.13.3）：先把钱从「扣款来源账户」转进投资账户的可用资金 ----
+            # 与买入同事务：转出→转入→扣款→写持仓，四步要么全成要么全回滚。
+            transfer = None
+            if source_account and source_account != account["name"]:
+                source_row = conn.execute(
+                    "SELECT name, balance, type FROM accounts WHERE name = ? AND user_id = ?",
+                    (source_account, _uid()),
+                ).fetchone()
+                if source_row is None:
+                    return None, "扣款来源账户「%s」不存在" % source_account
+                if _clean_account_type(source_row["type"]) == INVESTMENT_ACCOUNT_TYPE:
+                    return None, "扣款来源不能是同业投资账户「%s」" % source_account
+                source_balance = round(float(source_row["balance"] or 0), 2)
+                if source_balance + 1e-6 < amount:
+                    return None, (
+                        "「%s」余额不足：当前 %.2f 元，本次需要 %.2f 元"
+                        % (source_account, source_balance, amount)
+                    )
+                conn.execute(
+                    "UPDATE accounts SET balance = ROUND(balance - ?, 2) "
+                    "WHERE name = ? AND user_id = ?",
+                    (amount, source_account, _uid()),
+                )
+                conn.execute(
+                    "UPDATE accounts SET balance = ROUND(balance + ?, 2) "
+                    "WHERE name = ? AND user_id = ?",
+                    (amount, account["name"], _uid()),
+                )
+                balance = round(balance + amount, 2)
+                transfer = {
+                    "from": source_account,
+                    "from_balance": round(source_balance - amount, 2),
+                    "to": account["name"],
+                    "amount": amount,
+                }
+
             # 余额不足直接拒绝（设计 U8）：引导用户先转账，不做隐式透支
             if balance + 1e-6 < amount:
                 return None, (
@@ -3007,6 +3065,7 @@ def buy_holding(
                     _clean_frequency(dca.get("frequency")),
                     str(dca.get("next_date") or "").strip(),
                     DEFAULT_DCA_STATUS,
+                    source_account,
                 )
 
             holding = _row_to_holding(_holding_row(conn, holding_id, _uid()))
@@ -3023,6 +3082,7 @@ def buy_holding(
                 "added": added,
                 "dca": dca_row,
                 "record": None,
+                "transfer": transfer,
             }, None
     finally:
         conn.close()
@@ -3207,7 +3267,9 @@ def list_invest_board(account_name):
         conn.close()
 
 
-def _insert_dca_plan(conn, holding_id, amount, frequency, next_date, status):
+def _insert_dca_plan(
+    conn, holding_id, amount, frequency, next_date, status, source_account=""
+):
     """在**调用方已有事务**里插一条定投计划，返回计划字典。
 
     刻意不开自己的 `with conn:`：buy_holding 建仓挂计划时必须与「扣款 + 写持仓」
@@ -3218,13 +3280,23 @@ def _insert_dca_plan(conn, holding_id, amount, frequency, next_date, status):
         return None
     cursor = conn.execute(
         "INSERT INTO dca_plans (user_id, holding_id, amount, frequency, "
-        "next_date, status) VALUES (?, ?, ?, ?, ?, ?)",
-        (_uid(), row["id"], round(amount, 2), frequency, next_date, status),
+        "next_date, status, source_account) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            _uid(),
+            row["id"],
+            round(amount, 2),
+            frequency,
+            next_date,
+            status,
+            str(source_account or "").strip(),
+        ),
     )
     return _row_to_dca(_dca_row(conn, cursor.lastrowid, _uid()))
 
 
-def create_dca_plan(holding_id, amount, frequency=None, next_date="", status=None):
+def create_dca_plan(
+    holding_id, amount, frequency=None, next_date="", status=None, source_account=""
+):
     """给持仓挂一条定投计划，返回 (计划字典, 错误信息)。
 
     本期只落库 + 展示（设计 §1.2 第 3 条），**绝不自动生成任何账目**。
@@ -3245,7 +3317,9 @@ def create_dca_plan(holding_id, amount, frequency=None, next_date="", status=Non
             row = _holding_row(conn, holding_id, _uid())
             if row is None:
                 return None, "持仓不存在"
-            plan = _insert_dca_plan(conn, row["id"], amount, frequency, next_date, status)
+            plan = _insert_dca_plan(
+                conn, row["id"], amount, frequency, next_date, status, source_account
+            )
             return plan, None
     finally:
         conn.close()

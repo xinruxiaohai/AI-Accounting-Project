@@ -10690,3 +10690,432 @@ body.auth-locked {
   line-height: 1.5;
   color: var(--text-muted);
 }
+
+/* ==================================================================
+ * v0.13.3 第二轮：新建持仓弹窗重做（金额优先 / 扣款来源 / 自定义下拉）
+ *
+ * 这层的三个硬约束，来自 2026-11 的 QA 反馈：
+ * ① 深色模式下原生 <select> 的选项面板由系统绘制，白底会直接糊在深色弹窗上，
+ *    所以弹窗里的 select 全部换成 .inv-select（按钮 + 面板），原生 select 只留数据。
+ * ② 「按金额输入」曾经输不进去：旧版切模式会把没选中的输入框 disabled 掉。
+ *    现在两个输入框都可以随时改，谁变谁当主输入。
+ * ③ 总市值 ¥0.00 时的空态以前只有两行灰字，容易看成渲染错乱，改成卡片式引导。
+ * ================================================================== */
+
+.invest-dialog {
+  max-width: 620px;
+}
+
+.invest-dialog .modal-body.invest-form {
+  padding: 6px 20px 4px;
+}
+
+/* ---------- 分块：标的 / 金额 / 资金来源 / 定投 ---------- */
+
+.invest-form-block {
+  padding: 16px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.invest-form-block:last-child {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+
+.invest-form-caption {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+.invest-form .form-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.invest-form .req {
+  color: var(--brand-red);
+  font-weight: 700;
+}
+
+.invest-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.invest-form-row > .mb-3 {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.invest-form-row + .mb-3,
+.invest-form-row + .invest-form-row {
+  margin-top: 14px;
+}
+
+/* 输入框统一 42px 高 / 14px 字，避免"凑在一起分不清" */
+.invest-form .form-control,
+.invest-form .form-select,
+.invest-form .input-group-text,
+.inv-select-btn {
+  min-height: 42px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+
+.invest-form .input-group-text {
+  padding: 0 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.invest-form .form-text {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.invest-form .mb-3 {
+  margin-bottom: 14px;
+}
+
+/* 「自动 / 手填」小徽标 */
+.invest-auto-tag {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  border-radius: 999px;
+  color: var(--brand-blue);
+  background: var(--brand-soft);
+  border: 1px solid transparent;
+  letter-spacing: 0;
+}
+
+.invest-auto-tag.is-manual {
+  color: var(--brand-amber, #b45309);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.invest-form-hint {
+  margin: 2px 0 0;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-radius: 10px;
+  border-left: 3px solid var(--brand-blue);
+  word-break: break-word;
+}
+
+/* 定投：开关行 + 折叠区 */
+.invest-dca-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  cursor: pointer;
+  user-select: none;
+}
+
+.invest-dca-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--brand-blue);
+  cursor: pointer;
+}
+
+.invest-dca-box {
+  display: none;
+  margin-top: 14px;
+}
+
+.invest-dca-box.is-active {
+  display: block;
+  animation: investFadeIn 0.18s ease;
+}
+
+@keyframes investFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+#holding-dca-next-label.is-shifted {
+  color: var(--brand-amber, #b45309);
+  font-weight: 600;
+}
+
+/* ---------- 自定义下拉（替代原生 select） ---------- */
+
+.inv-select {
+  position: relative;
+}
+
+/* 原生 select 只当数据源，视觉上完全退出，但 .value 依旧可读可写 */
+select.inv-select-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  border: 0;
+  pointer-events: none;
+}
+
+.inv-select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  color: var(--text-main);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.inv-select-btn:hover {
+  border-color: var(--brand-blue);
+}
+
+.inv-select-btn:focus-visible,
+.inv-select.is-open .inv-select-btn {
+  outline: 0;
+  border-color: var(--brand-blue);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.inv-select-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inv-select-value.is-placeholder {
+  color: var(--text-dim);
+}
+
+.inv-select-chevron {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+
+.inv-select.is-open .inv-select-chevron {
+  transform: rotate(180deg);
+}
+
+.inv-select-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 1085;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+}
+
+.inv-select.is-open .inv-select-panel {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+
+.inv-select-list {
+  max-height: 248px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.inv-select-item {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: left;
+  color: var(--text-main);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.inv-select-item:hover {
+  background: var(--surface-2);
+}
+
+.inv-select-item.is-active {
+  color: var(--brand-blue);
+  background: var(--brand-soft);
+  font-weight: 600;
+}
+
+[data-theme="dark"] .inv-select-panel {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+[data-theme="dark"] .inv-select-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme="dark"] .inv-select-item.is-active {
+  background: rgba(37, 99, 235, 0.24);
+  color: #bfd4ff;
+}
+
+/* ---------- 看板 hero：总市值 + 可用资金 并列 ---------- */
+
+.invest-hero-main {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.invest-hero-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.invest-hero-stat.is-cash {
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+
+.invest-hero-cash {
+  font-size: 21px;
+  line-height: 1.3;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.invest-hero-cash.is-zero {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ---------- 空态：卡片式引导，不再两行灰字 ---------- */
+
+.invest-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 44px 24px 40px;
+  text-align: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.invest-empty-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  color: var(--brand-blue);
+  background: var(--brand-soft);
+}
+
+.invest-empty-art svg {
+  width: 28px;
+  height: 28px;
+}
+
+.invest-empty-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.invest-empty-hint {
+  max-width: 420px;
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+.invest-empty-btn {
+  margin-top: 8px;
+}
+
+.invest-empty-note {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+
+[data-theme="dark"] .invest-empty {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: var(--line-strong);
+}
+
+@media (max-width: 560px) {
+  .invest-form-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .invest-form-row > .mb-3 + .mb-3 {
+    margin-top: 14px;
+  }
+
+  .invest-hero-main {
+    gap: 18px;
+  }
+
+  .invest-hero-stat.is-cash {
+    padding-left: 0;
+    border-left: 0;
+  }
+}

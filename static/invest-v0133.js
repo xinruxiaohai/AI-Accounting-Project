@@ -41,11 +41,12 @@ const INVEST_TABS = [
 ];
 const INVEST_DEFAULT_TAB = "holdings";
 
-const INVEST_ASSET_TYPES = ["fund", "stock", "bond", "cash", "other"];
+const INVEST_ASSET_TYPES = ["fund", "stock", "bond", "gold", "cash", "other"];
 const INVEST_ASSET_LABELS = {
   fund: "基金",
   stock: "股票",
   bond: "债券",
+  gold: "黄金",
   cash: "现金",
   other: "其它",
 };
@@ -292,6 +293,8 @@ const invest = {
   candidates: [],
   // 弹窗里已选中的平台
   modalPlatformId: 0,
+  // 份额是不是"自动算的"：true=跟着金额/单价走，false=用户手填过
+  sharesAuto: true,
 };
 
 /* ==================== 小工具 ==================== */
@@ -496,9 +499,14 @@ function investRenderSkeleton(accountName) {
   board.innerHTML =
     '<div class="invest-hero">' +
     '<div class="invest-hero-main">' +
+    '<div class="invest-hero-stat">' +
     '<span class="invest-hero-label">总市值</span>' +
     '<strong class="invest-hero-value" id="invest-total-value">¥0.00</strong>' +
-    '<span class="invest-hero-cash" id="invest-cash-line">可用资金 ¥0.00</span>' +
+    "</div>" +
+    '<div class="invest-hero-stat is-cash">' +
+    '<span class="invest-hero-label" id="invest-cash-label">可用资金</span>' +
+    '<strong class="invest-hero-cash" id="invest-cash-line">¥0.00</strong>' +
+    "</div>" +
     "</div>" +
     '<div class="invest-hero-pl" id="invest-day-pl" title="暂未接入实时行情">' +
     '<span class="invest-pl-label">当日盈亏</span>' +
@@ -573,11 +581,15 @@ function investRenderHero(board) {
     }
   }
   const cashEl = investEl("invest-cash-line");
+  const cashLabelEl = investEl("invest-cash-label");
+  if (cashLabelEl) {
+    cashLabelEl.textContent = account.cash_label || "可用资金";
+  }
   if (cashEl) {
     const balance = investNumber(account.balance, 0);
-    cashEl.textContent = investState().amountHidden
-      ? "可用资金 ¥••••"
-      : (account.cash_label || "可用资金") + " " + money(balance);
+    cashEl.textContent = investState().amountHidden ? "¥••••" : money(balance);
+    // 可用资金为 0 时给一句能点的引导，避免"钱去哪了"的疑虑
+    cashEl.classList.toggle("is-zero", !investState().amountHidden && balance <= 0);
   }
   const pl = investDayPl(board);
   const amountEl = investEl("invest-day-pl-amount");
@@ -772,10 +784,16 @@ function investRenderHoldings(board) {
   if (holdingCount === 0) {
     pane.innerHTML =
       '<div class="invest-empty">' +
+      '<div class="invest-empty-art" aria-hidden="true">' +
+      '<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M8 34l10-9 7 6 15-16"/>' +
+      '<path d="M8 40h32"/>' +
+      "</svg></div>" +
       '<p class="invest-empty-title">还没有持仓</p>' +
-      '<p class="invest-empty-hint">点右上角「+ 新建持仓」，会自动落到「' +
-      INVEST_PLATFORM_DEFAULT +
-      '」平台</p>' +
+      '<p class="invest-empty-hint">先填「投入金额」，填了成本单价会自动算出份额；' +
+      "扣款来源选现金或微信，钱会先转入这个投资账户再买入。</p>" +
+      '<button type="button" class="btn btn-sm btn-primary invest-empty-btn" data-invest-empty-add>+ 新建第一笔持仓</button>' +
+      '<p class="invest-empty-note">买基金、清仓退款只影响这里的持仓和可用资金，不计入收支统计。</p>' +
       "</div>";
     return;
   }
@@ -1080,8 +1098,10 @@ async function openHoldingModal() {
     return;
   }
   investResetHoldingForm();
+  investFillSourceSelect();
   modal.show();
   investFillPlatformSelect([]);
+  investEnhanceSelects(modal);
   try {
     const platforms = await investFetchPlatforms();
     invest.platforms = platforms;
@@ -1119,6 +1139,46 @@ function investFillPlatformSelect(platforms) {
     })
     .join("");
   select.value = String(list[0].id);
+  investRefreshSelectLabels();
+}
+
+/**
+ * 扣款来源下拉：列出所有普通账户（现金 / 微信 / 银行卡…），
+ * 投资账户自身不算来源（把钱从自己转给自己没有意义）。
+ */
+function investFillSourceSelect() {
+  const select = investEl("holding-source");
+  if (!select) {
+    return;
+  }
+  const accounts = (typeof state !== "undefined" && Array.isArray(state.accounts)
+    ? state.accounts
+    : []
+  ).filter(function (account) {
+    const type = String((account && account.type) || "normal");
+    return type !== "investment" && account && account.name !== invest.accountName;
+  });
+  const current = invest.accountName;
+  const options = ['<option value="">投资账户可用资金</option>'];
+  accounts.forEach(function (account) {
+    const name = String(account.name || "");
+    if (!name || name === current) {
+      return;
+    }
+    const balance = investNumber(account.balance, 0);
+    options.push(
+      '<option value="' +
+        investText(name) +
+        '">' +
+        investText(name) +
+        "（" +
+        money(balance) +
+        "）</option>"
+    );
+  });
+  select.innerHTML = options.join("");
+  select.value = "";
+  investRefreshSelectLabels();
 }
 
 function investResetHoldingForm() {
@@ -1136,6 +1196,7 @@ function investResetHoldingForm() {
     ["holding-dca-amount", ""],
     ["holding-dca-frequency", "monthly"],
     ["holding-dca-next", ""],
+    ["holding-source", ""],
   ];
   pairs.forEach(function (pair) {
     const field = investEl(pair[0]);
@@ -1143,39 +1204,201 @@ function investResetHoldingForm() {
       field.value = pair[1];
     }
   });
-  const mode = investEl("holding-mode-shares");
-  if (mode) {
-    mode.checked = true;
-  }
   const dca = investEl("holding-dca-on");
   if (dca) {
     dca.checked = false;
   }
-  investApplyMode();
+  invest.sharesAuto = true;
+  investSyncAmounts("reset");
   investApplyDca();
+  investRefreshSelectLabels();
   investHideCandidates();
   invest.candidates = [];
 }
 
-/** 份额模式 ↔ 金额模式：只切换两行的可用态，不重建 DOM */
-function investApplyMode() {
-  const byShares = !!(investEl("holding-mode-shares") || {}).checked;
-  const boxShares = investEl("holding-shares-box");
-  const boxAmount = investEl("holding-amount-box");
-  if (boxShares) {
-    boxShares.classList.toggle("is-active", byShares);
+/* ---------- 金额 ↔ 份额 ↔ 单价 三方联动 ---------- */
+
+/**
+ * 读一个输入框里的数字，空串 / 非法值一律返回 NaN。
+ * @param {string} id 输入框 id
+ * @returns {number} 解析后的数字，或 NaN
+ */
+function investFieldNumber(id) {
+  const field = investEl(id);
+  const raw = String((field && field.value) || "").trim();
+  if (!raw) {
+    return NaN;
   }
-  if (boxAmount) {
-    boxAmount.classList.toggle("is-active", !byShares);
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : NaN;
+}
+
+/** 金额 ÷ 单价 = 份额，保留 4 位（基金份额常见精度） */
+function investSharesFromAmount(amount, price) {
+  if (!(amount > 0) || !(price > 0)) {
+    return NaN;
   }
-  const shares = investEl("holding-shares");
-  const price = investEl("holding-price");
-  const amount = investEl("holding-amount");
-  [shares, price, amount].forEach(function (field) {
-    if (field) {
-      field.disabled = byShares ? field === amount : field !== amount;
+  return Math.round((amount / price) * 10000) / 10000;
+}
+
+/**
+ * 三方联动：改哪个就按哪个当"主输入"，另外两个跟着算。
+ *
+ * @param {"amount"|"price"|"shares"|"reset"} source 用户刚改的那个字段
+ */
+function investSyncAmounts(source) {
+  const amountField = investEl("holding-amount");
+  const priceField = investEl("holding-price");
+  const sharesField = investEl("holding-shares");
+  const amount = investFieldNumber("holding-amount");
+  const price = investFieldNumber("holding-price");
+  let shares = investFieldNumber("holding-shares");
+  const hint = investEl("holding-calc-hint");
+  const tag = investEl("holding-shares-tag");
+
+  if (source === "reset") {
+    invest.sharesAuto = true;
+  } else if (source === "shares") {
+    // 手填份额 → 反推金额
+    invest.sharesAuto = false;
+    if (shares > 0 && price > 0 && amountField) {
+      const next = cents(shares * price);
+      amountField.value = next ? next.toFixed(2) : "";
     }
-  });
+  } else if (source === "amount" || source === "price") {
+    if (invest.sharesAuto !== false || source === "price") {
+      const next = investSharesFromAmount(amount, price);
+      if (Number.isFinite(next) && sharesField) {
+        sharesField.value = next ? String(next) : "";
+        shares = next;
+      }
+      invest.sharesAuto = true;
+    }
+  }
+
+  if (tag) {
+    tag.textContent = invest.sharesAuto === false ? "手填" : "自动";
+    tag.classList.toggle("is-manual", invest.sharesAuto === false);
+  }
+  if (hint) {
+    if (!(amount > 0)) {
+      hint.textContent = "先填投入金额，填了成本单价就会自动算出份额。";
+    } else if (!(price > 0)) {
+      hint.textContent = "再填一个成本单价，就能自动算出份额。";
+    } else if (invest.sharesAuto === false && shares > 0) {
+      hint.textContent =
+        "已按手填份额反推金额：份额 " +
+        shares +
+        " × 单价 " +
+        price.toFixed(4) +
+        " = ¥" +
+        cents(shares * price).toFixed(2);
+    } else {
+      hint.textContent =
+        "¥" +
+        amount.toFixed(2) +
+        " ÷ ¥" +
+        price.toFixed(4) +
+        " = " +
+        (Number.isFinite(shares) ? shares : 0) +
+        " 份（份额可手动覆盖）";
+    }
+  }
+}
+
+/* ---------- 定投：下次扣款日（跳过周末） ---------- */
+
+const INVEST_WEEK_LABELS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+/**
+ * 把某个日期往后顺延到工作日（周六 → 下周一，周日 → 下周一）。
+ * @param {Date} date 原始日期
+ * @returns {Date} 工作日
+ */
+function investToWorkday(date) {
+  const next = new Date(date.getTime());
+  const day = next.getDay();
+  if (day === 6) {
+    next.setDate(next.getDate() + 2);
+  } else if (day === 0) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next;
+}
+
+/**
+ * 按频率推算下一次扣款日：从今天往后推一个周期，再顺延到工作日。
+ *
+ * @param {string} frequency weekly / biweekly / monthly / quarterly
+ * @returns {string} YYYY-MM-DD
+ */
+function investNextDcaDate(frequency) {
+  const today = new Date();
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const next = new Date(base.getTime());
+  if (frequency === "weekly") {
+    next.setDate(next.getDate() + 7);
+  } else if (frequency === "biweekly") {
+    next.setDate(next.getDate() + 14);
+  } else if (frequency === "quarterly") {
+    next.setMonth(next.getMonth() + 3);
+  } else {
+    next.setMonth(next.getMonth() + 1);
+  }
+  return investDateInputValue(investToWorkday(next));
+}
+
+/** Date → YYYY-MM-DD（本地时区，不用 toISOString 以免时区偏移） */
+function investDateInputValue(date) {
+  const pad = function (num) {
+    return (num < 10 ? "0" : "") + num;
+  };
+  return (
+    date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate())
+  );
+}
+
+/**
+ * `2026-11-05 (周四)` 这种带星期的人话格式。
+ * @param {string} value YYYY-MM-DD
+ * @returns {string} 带星期的标签，解析失败时原样返回
+ */
+function investDateHumanLabel(value) {
+  const text = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return "";
+  }
+  const parts = text.split("-").map(Number);
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return text + " (" + INVEST_WEEK_LABELS[date.getDay()] + ")";
+}
+
+/** 把日期框的值同步成带星期的小字提示，周末会标注顺延 */
+function investSyncDcaDateLabel() {
+  const field = investEl("holding-dca-next");
+  const label = investEl("holding-dca-next-label");
+  if (!field || !label) {
+    return;
+  }
+  const value = String(field.value || "").trim();
+  if (!value) {
+    label.textContent = "留空则按频率自动推算，落在周末会顺延到周一。";
+    label.classList.remove("is-shifted");
+    return;
+  }
+  const parts = value.split("-").map(Number);
+  const date = new Date(parts[0], parts[1] - 1, parts[2]);
+  const human = investDateHumanLabel(value);
+  if (date.getDay() === 0 || date.getDay() === 6) {
+    label.textContent = human + " 是周末，实际会顺延到 " + investDateInputValue(investToWorkday(date));
+    label.classList.add("is-shifted");
+  } else {
+    label.textContent = human;
+    label.classList.remove("is-shifted");
+  }
 }
 
 function investApplyDca() {
@@ -1184,6 +1407,153 @@ function investApplyDca() {
   if (box) {
     box.classList.toggle("is-active", on);
   }
+  if (!on) {
+    return;
+  }
+  const field = investEl("holding-dca-next");
+  const frequencyField = investEl("holding-dca-frequency");
+  if (field && !String(field.value || "").trim()) {
+    field.value = investNextDcaDate((frequencyField && frequencyField.value) || "monthly");
+  }
+  investSyncDcaDateLabel();
+}
+
+/* ---------- 自定义下拉：深色模式下原生 select 的白底会刺眼 ---------- */
+
+/**
+ * 把 select[data-inv-select] 升级成按钮 + 面板的自定义下拉。
+ *
+ * 原生 <select> 在 Windows 深色模式下，展开的选项列表由系统绘制，
+ * CSS 改不动，白底会直接糊在深色弹窗上。这里保留原生 select 作为
+ * **唯一数据源**（所有既有代码读 .value 都不受影响），只是把它藏起来，
+ * 视觉层换成可以完全控制的按钮 + 面板。
+ *
+ * @param {Element} select 原生下拉
+ */
+function investEnhanceSelect(select) {
+  if (!select || select.dataset.invEnhanced === "1") {
+    if (select) {
+      investRefreshSelectLabel(select);
+    }
+    return;
+  }
+  select.dataset.invEnhanced = "1";
+  select.classList.add("inv-select-native");
+  select.setAttribute("tabindex", "-1");
+
+  const wrap = document.createElement("div");
+  wrap.className = "inv-select";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "inv-select-btn";
+  button.setAttribute("aria-haspopup", "listbox");
+  button.setAttribute("aria-expanded", "false");
+  button.innerHTML =
+    '<span class="inv-select-value"></span>' +
+    '<svg class="inv-select-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+    'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>';
+
+  const panel = document.createElement("div");
+  panel.className = "inv-select-panel";
+  panel.innerHTML = '<div class="inv-select-list" role="listbox"></div>';
+
+  wrap.appendChild(button);
+  wrap.appendChild(panel);
+  select.parentNode.insertBefore(wrap, select.nextSibling);
+
+  button.addEventListener("click", function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const open = !wrap.classList.contains("is-open");
+    investCloseSelects();
+    if (!open) {
+      return;
+    }
+    investRenderSelectPanel(select, wrap);
+    wrap.classList.add("is-open");
+    button.setAttribute("aria-expanded", "true");
+  });
+
+  panel.addEventListener("click", function (event) {
+    const option = event.target.closest("[data-inv-value]");
+    if (!option) {
+      return;
+    }
+    event.stopPropagation();
+    const value = option.getAttribute("data-inv-value");
+    if (select.value !== value) {
+      select.value = value;
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    investRefreshSelectLabel(select);
+    investCloseSelects();
+  });
+
+  investRefreshSelectLabel(select);
+}
+
+/** 用当前 select 的 options 重建面板内容 */
+function investRenderSelectPanel(select, wrap) {
+  const list = wrap.querySelector(".inv-select-list");
+  if (!list) {
+    return;
+  }
+  list.innerHTML = Array.prototype.map
+    .call(select.options, function (option) {
+      const active = option.value === select.value ? " is-active" : "";
+      return (
+        '<button type="button" class="inv-select-item' +
+        active +
+        '" role="option" aria-selected="' +
+        (option.value === select.value ? "true" : "false") +
+        '" data-inv-value="' +
+        investText(option.value) +
+        '">' +
+        investText(option.textContent) +
+        "</button>"
+      );
+    })
+    .join("");
+}
+
+/** 收起所有面板 */
+function investCloseSelects() {
+  document.querySelectorAll(".inv-select.is-open").forEach(function (wrap) {
+    wrap.classList.remove("is-open");
+    const btn = wrap.querySelector(".inv-select-btn");
+    if (btn) {
+      btn.setAttribute("aria-expanded", "false");
+    }
+  });
+}
+
+/** 把 select 当前选中项的文字同步到按钮上 */
+function investRefreshSelectLabel(select) {
+  if (!select || select.dataset.invEnhanced !== "1") {
+    return;
+  }
+  const wrap = select.nextElementSibling;
+  if (!wrap || !wrap.classList.contains("inv-select")) {
+    return;
+  }
+  const text = wrap.querySelector(".inv-select-value");
+  const option =
+    select.options[select.selectedIndex] || (select.options.length ? select.options[0] : null);
+  if (text) {
+    text.textContent = option ? String(option.textContent) : "";
+    text.classList.toggle("is-placeholder", !select.value);
+  }
+}
+
+function investEnhanceSelects(root) {
+  const scope = root || document;
+  scope.querySelectorAll("select[data-inv-select]").forEach(investEnhanceSelect);
+}
+
+function investRefreshSelectLabels() {
+  document.querySelectorAll("select[data-inv-select]").forEach(investRefreshSelectLabel);
 }
 
 /* ---------- 代码搜索：300ms 防抖 ---------- */
@@ -1290,9 +1660,13 @@ function investPickCandidate(index) {
   if (typeof clearFieldError === "function") {
     clearFieldError(name);
   }
-  const shares = investEl("holding-shares");
-  if (shares && !shares.disabled) {
-    shares.focus();
+  investRefreshSelectLabels();
+  // 选中候选就把「金额 ÷ 新单价」重算一遍，并把光标送到还没填的金额框
+  invest.sharesAuto = true;
+  investSyncAmounts("price");
+  const amountField = investEl("holding-amount");
+  if (amountField && !String(amountField.value || "").trim()) {
+    amountField.focus();
   }
 }
 
@@ -1322,10 +1696,15 @@ function investErrorField(message) {
   ) {
     return name;
   }
-  if (text.indexOf("可用资金不足") >= 0) {
-    // 钱不够是"合计金额超了"，指到用户正在录的那个金额口径上最直观
-    const byShares = !!(investEl("holding-mode-shares") || {}).checked;
-    return byShares ? investEl("holding-shares") : investEl("holding-amount");
+  if (text.indexOf("可用资金不足") >= 0 || text.indexOf("余额不足") >= 0) {
+    // 钱不够一律指到金额框（份额是自动算出来的，不该背这个锅）
+    return investEl("holding-amount");
+  }
+  if (text.indexOf("扣款来源") >= 0) {
+    return investEl("holding-source");
+  }
+  if (text.indexOf("工作") >= 0) {
+    return investEl("holding-dca-next");
   }
   if (text.indexOf("份额") >= 0) {
     return investEl("holding-shares");
@@ -1354,33 +1733,40 @@ function investCollectHoldingPayload() {
     issues.push({ field: nameField, message: "标的名称不能超过 40 个字" });
   }
 
-  const byShares = !!(investEl("holding-mode-shares") || {}).checked;
-  let shares = 0;
-  let price = 0;
-  let amount = 0;
+  // 金额优先：金额必填，份额可手填也可由 金额 ÷ 单价 算出来。
+  const amountField = investEl("holding-amount");
+  const priceField = investEl("holding-price");
+  const sharesField = investEl("holding-shares");
+  let amount = investFieldNumber("holding-amount");
+  let price = investFieldNumber("holding-price");
+  let shares = investFieldNumber("holding-shares");
 
-  if (byShares) {
-    const sharesField = investEl("holding-shares");
-    const priceField = investEl("holding-price");
-    shares = Number(String((sharesField && sharesField.value) || "").trim());
-    price = Number(String((priceField && priceField.value) || "").trim());
-    if (!Number.isFinite(shares) || shares <= 0) {
-      issues.push({ field: sharesField, message: "份额必须大于 0" });
-    }
-    if (!Number.isFinite(price) || price <= 0) {
-      issues.push({ field: priceField, message: "单价必须大于 0" });
-    }
-    amount = cents(shares * price);
-  } else {
-    const amountField = investEl("holding-amount");
-    amount = Number(String((amountField && amountField.value) || "").trim());
-    if (!Number.isFinite(amount) || amount <= 0) {
-      issues.push({ field: amountField, message: "投入金额必须大于 0" });
-    }
-    // D7：只给金额没给单价时，cost_price = 1.0000、shares = 金额
+  if (!Number.isFinite(amount) || amount <= 0) {
+    issues.push({ field: amountField, message: "投入金额必须大于 0" });
+  }
+  if (Number.isFinite(price) && price <= 0) {
+    price = NaN;
+  }
+  if (Number.isFinite(shares) && shares <= 0) {
+    shares = NaN;
+  }
+  // 单价留空：按 1.0000 记账（老口径 D7，只给金额也能保存）
+  if (!Number.isFinite(price)) {
     price = 1;
-    shares = cents(amount);
-    amount = cents(amount);
+  }
+  // 份额留空：金额 ÷ 单价
+  if (!Number.isFinite(shares)) {
+    shares = investSharesFromAmount(amount, price);
+    if (!Number.isFinite(shares) || shares <= 0) {
+      shares = amount;
+    }
+  }
+  if (Number.isFinite(amount) && Number.isFinite(shares) && Number.isFinite(price)) {
+    // 金额与 份额×单价 对齐，避免小数误差导致可用资金差几厘
+    const implied = cents(shares * price);
+    if (implied > 0) {
+      amount = implied;
+    }
   }
 
   let dca = null;
@@ -1396,9 +1782,19 @@ function investCollectHoldingPayload() {
       issues.push({ field: frequencyField, message: "定投频率不合法" });
     }
     const nextField = investEl("holding-dca-next");
-    const nextDate = String((nextField && nextField.value) || "").trim();
+    let nextDate = String((nextField && nextField.value) || "").trim();
     if (nextDate && !/^\d{4}-\d{2}-\d{2}$/.test(nextDate)) {
       issues.push({ field: nextField, message: "下次扣款日期须为 YYYY-MM-DD" });
+    }
+    if (!nextDate) {
+      nextDate = investNextDcaDate(frequency);
+    } else {
+      // 用户挑到周末就顺延到周一，前端先纠正一次，后端还会校验
+      const picked = nextDate.split("-").map(Number);
+      const pickedDate = new Date(picked[0], picked[1] - 1, picked[2]);
+      if (pickedDate.getDay() === 0 || pickedDate.getDay() === 6) {
+        nextDate = investDateInputValue(investToWorkday(pickedDate));
+      }
     }
     dca = { amount: cents(dcaAmount), frequency: frequency, next_date: nextDate };
   }
@@ -1411,6 +1807,7 @@ function investCollectHoldingPayload() {
   const platformId = Number((platformSelect && platformSelect.value) || 0);
   const tickerField = investEl("holding-ticker");
   const assetField = investEl("holding-asset-type");
+  const sourceSelect = investEl("holding-source");
 
   return {
     account: invest.accountName,
@@ -1421,6 +1818,7 @@ function investCollectHoldingPayload() {
     shares: shares,
     cost_price: price,
     amount: amount,
+    source_account: String((sourceSelect && sourceSelect.value) || "").trim(),
     dca: dca,
   };
 }
@@ -1492,7 +1890,7 @@ function investBindBoardEvents() {
       switchInvestTab(tab.getAttribute("data-invest-tab"));
       return;
     }
-    const addBtn = event.target.closest("#invest-add-btn");
+    const addBtn = event.target.closest("#invest-add-btn, [data-invest-empty-add]");
     if (addBtn) {
       openHoldingModal();
       return;
@@ -1559,6 +1957,13 @@ function investBindModalEvents() {
   if (!modal) {
     return;
   }
+  investEnhanceSelects(modal);
+  // 点面板外面把自定义下拉收起来（和分类浮层同样的坑：别在 handler 里重建 DOM）
+  document.addEventListener("click", function (event) {
+    if (event.target && !event.target.closest(".inv-select")) {
+      investCloseSelects();
+    }
+  });
 
   modal.addEventListener("click", function (event) {
     const candidate = event.target.closest("[data-candidate-index]");
@@ -1579,11 +1984,15 @@ function investBindModalEvents() {
     if (event.target && event.target.id === "holding-ticker") {
       scheduleTickerSearch(event.target.value);
     }
-    if (event.target && event.target.id === "holding-mode-shares") {
-      investApplyMode();
+    // 金额 / 单价 / 份额 三方联动：只认用户刚动的那一个当主输入
+    if (event.target && event.target.id === "holding-amount") {
+      investSyncAmounts("amount");
     }
-    if (event.target && event.target.id === "holding-mode-amount") {
-      investApplyMode();
+    if (event.target && event.target.id === "holding-price") {
+      investSyncAmounts("price");
+    }
+    if (event.target && event.target.id === "holding-shares") {
+      investSyncAmounts("shares");
     }
   });
 
@@ -1594,6 +2003,17 @@ function investBindModalEvents() {
     }
     if (event.target && event.target.id === "holding-dca-on") {
       investApplyDca();
+    }
+    if (event.target && event.target.id === "holding-dca-frequency") {
+      // 换频率就重算下次扣款日（用户手动改过的日期以用户为准，这里只在为空时补）
+      const field = investEl("holding-dca-next");
+      if (field && !String(field.value || "").trim()) {
+        field.value = investNextDcaDate(event.target.value);
+      }
+      investSyncDcaDateLabel();
+    }
+    if (event.target && event.target.id === "holding-dca-next") {
+      investSyncDcaDateLabel();
     }
   });
 
