@@ -11384,3 +11384,278 @@ select.inv-select-native {
     margin-bottom: 14px;
   }
 }
+
+/* ================= v0.13.6：品牌化、头像大图预览、Logo 主题 ================= */
+
+/* 1. 侧边栏品牌 Logo + 头像行 */
+.sidebar-brand .brand-logo {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  border-radius: 9px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.22);
+}
+.app.is-collapsed .sidebar-brand .brand-logo {
+  width: 32px;
+  height: 32px;
+  flex-basis: 32px;
+}
+/* 头像移到工具行：左侧头像 + 右侧折叠三行杠 */
+.sidebar-tools {
+  justify-content: space-between;
+  gap: 8px;
+}
+.sidebar-avatar-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  cursor: pointer;
+  border-radius: 50%;
+  line-height: 0;
+}
+.sidebar-avatar-btn:hover .brand-avatar,
+.sidebar-avatar-btn:hover .brand-avatar-img {
+  transform: scale(1.06);
+}
+.sidebar-avatar-btn:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+.brand-avatar-img {
+  transition: transform 0.15s ease;
+}
+
+/* 2. 头像大图预览（Lightbox） */
+.avatar-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.avatar-lightbox[hidden] {
+  display: none;
+}
+.avatar-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.avatar-lightbox-panel {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  max-width: min(92vw, 720px);
+  max-height: 92vh;
+  padding: 18px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+}
+.avatar-lightbox-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 200px;
+  min-height: 200px;
+  max-width: min(86vw, 660px);
+  max-height: 68vh;
+  overflow: hidden;
+  border-radius: 16px;
+}
+.avatar-lightbox-img {
+  display: block;
+  max-width: min(86vw, 660px);
+  max-height: 68vh;
+  width: auto;
+  height: auto;
+  border-radius: 16px;
+  object-fit: contain;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+}
+.avatar-lightbox-img[hidden] {
+  display: none;
+}
+.avatar-lightbox-letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #34d399, #059669);
+  color: #fff;
+  font-size: 72px;
+  font-weight: 700;
+  box-shadow: 0 12px 34px rgba(5, 150, 105, 0.45);
+}
+.avatar-lightbox-letter[hidden] {
+  display: none;
+}
+.avatar-lightbox-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.avatar-lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.26);
+  transform: scale(1.06);
+}
+.avatar-lightbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+.avatar-lightbox-save.is-disabled {
+  pointer-events: none;
+  opacity: 0.55;
+}
+.avatar-lightbox-hint {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 13px;
+}
+.avatar-lightbox-hint[hidden] {
+  display: none;
+}
+body.has-avatar-lightbox {
+  overflow: hidden;
+}
+
+/* 3. 品牌图标主题网格（4 列 × 2 行，48×48 缩略图） */
+.brand-logo-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 48px);
+  gap: 10px;
+  justify-content: start;
+}
+.brand-logo-option {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--surface-soft, rgba(148, 163, 184, 0.12));
+  cursor: pointer;
+  overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+}
+.brand-logo-option img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 9px;
+}
+.brand-logo-option:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.14);
+}
+.brand-logo-option.is-active {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+}
+.brand-logo-option.is-active::after {
+  content: "✓";
+  position: absolute;
+  right: 2px;
+  bottom: 1px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #22c55e;
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+}
+
+/* 4. 系统设置弹窗：主体最高 75vh + 自定义滚动条 */
+#settings-modal .modal-body {
+  max-height: 75vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong, #cbd5e1) transparent;
+}
+#settings-modal .modal-body::-webkit-scrollbar {
+  width: 10px;
+}
+#settings-modal .modal-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+#settings-modal .modal-body::-webkit-scrollbar-thumb {
+  background: var(--border-strong, #cbd5e1);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+#settings-modal .modal-body::-webkit-scrollbar-thumb:hover {
+  background: var(--muted, #94a3b8);
+  background-clip: content-box;
+}
+[data-theme="dark"] #settings-modal .modal-body {
+  scrollbar-color: rgba(148, 163, 184, 0.45) transparent;
+}
+[data-theme="dark"] #settings-modal .modal-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.45);
+  background-clip: content-box;
+}
+
+@media (max-width: 575px) {
+  .avatar-lightbox {
+    padding: 12px;
+  }
+  .avatar-lightbox-panel {
+    padding: 12px;
+    gap: 12px;
+  }
+  .avatar-lightbox-letter {
+    width: 140px;
+    height: 140px;
+    font-size: 56px;
+  }
+  .brand-logo-grid {
+    grid-template-columns: repeat(4, 44px);
+  }
+  .brand-logo-option {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* v0.13.6：登录页品牌 Logo（跟随「品牌图标主题」，与侧边栏同一张图） */
+.auth-brand .auth-logo-img {
+  display: block;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  object-fit: cover;
+  box-shadow: 0 10px 26px rgba(37, 99, 235, 0.28);
+}
+[data-theme="dark"] .auth-brand .auth-logo-img {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}

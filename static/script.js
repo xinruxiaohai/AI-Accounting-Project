@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * AI记账管家 · 前端逻辑（v0.06.3）
+ * 智汇账 · 前端逻辑（v0.06.3）
  *
  * v0.06.3 在 v0.06.2 的三栏看板上补上蓝图里欠的三件：
  *   1. ECharts 支出分类饼图 + 近 30 天折线（本地 vendor，Toolbox 可存图）
@@ -2164,6 +2164,10 @@ function saveSettings() {
 function resetSettings() {
   localStorage.removeItem(LS_CARDS);
   localStorage.removeItem(LS_THEME);
+  // v0.13.6：品牌图标主题一并回到默认 logo-main.png
+  if (window.ZHAccountBrandLogo) {
+    window.ZHAccountBrandLogo.set("logo-main.png");
+  }
   applyTheme("system");
   renderCardVisibility();
   applyCardVisibility();
@@ -3115,7 +3119,7 @@ function chartToolbox() {
     feature: {
       saveAsImage: {
         title: "保存为图片",
-        name: "AI记账管家-图表",
+        name: "智汇账-图表",
         pixelRatio: 2,
         backgroundColor: palette.surface,
       },
@@ -8388,6 +8392,11 @@ function bindEvents() {
   if ($("settings-modal")) {
     $("settings-modal").addEventListener("shown.bs.modal", function () {
       renderIconSettings();
+      // v0.13.6：品牌图标主题网格（4×2）+ 当前选中态
+      if (window.ZHAccountBrandLogo) {
+        window.ZHAccountBrandLogo.buildGrid();
+        window.ZHAccountBrandLogo.apply();
+      }
     });
   }
 
@@ -9252,7 +9261,7 @@ async function exportCsv(button) {
     const link = document.createElement("a");
     const stamp = new Date().toISOString().slice(0, 10);
     link.href = url;
-    link.download = "AI记账管家-账单-" + stamp + ".csv";
+    link.download = "智汇账-账单-" + stamp + ".csv";
     document.body.appendChild(link);
     link.click();
     link.remove();

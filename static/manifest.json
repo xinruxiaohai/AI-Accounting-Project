@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "AI记账管家",
-  "short_name": "记账管家",
-  "description": "多模态 AI 记账管家：一句话记账、预算看板与资产视图，数据全部存在本地。",
+  "name": "智汇账",
+  "short_name": "智汇账",
+  "description": "智汇账 · 您的 AI 资产管家：一句话记账、预算看板与资产视图，数据全部存在本地。",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/",

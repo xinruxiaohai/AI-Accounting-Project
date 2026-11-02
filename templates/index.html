@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI记账管家</title>
-  <meta name="description" content="多模态 AI 记账管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
+  <title>智汇账 - 您的 AI 资产管家</title>
+  <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
   <link rel="manifest" href="/manifest.json">
@@ -12,11 +12,11 @@
   <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="记账管家">
+  <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.13.5">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.6">
 </head>
 <body>
 
@@ -33,16 +33,21 @@
 
   <!-- ================= 左侧侧边栏 ================= -->
   <aside class="sidebar" id="sidebar">
-    <!-- v0.12.6：左上角换成用户头像，点击弹出个人中心 -->
-    <button class="sidebar-brand sidebar-brand-btn" type="button" id="sidebar-avatar"
-            aria-label="打开个人中心">
-      <span class="brand-avatar" id="sidebar-avatar-letter">A</span>
-      <img class="brand-avatar-img" id="sidebar-avatar-img" alt="" hidden>
-      <span class="brand-text" id="sidebar-brand-name">AI记账管家</span>
-    </button>
+    <!-- v0.13.6：左侧品牌 Logo（跟随「品牌图标主题」实时切换），右侧只显示用户昵称 -->
+    <div class="sidebar-brand" id="sidebar-brand">
+      <img class="brand-logo" id="sidebar-brand-logo" src="/static/images/logo-main.png"
+           alt="智汇账" draggable="false">
+      <!-- 防呆红线：这里只放 user.nickname（或邮箱前缀），品牌名绝不参与拼接，初值留空由 JS 填 -->
+      <span class="brand-text" id="sidebar-brand-name"></span>
+    </div>
 
-    <!-- 三行杠单独一行：放在 Logo 正下方、导航菜单上方 -->
+    <!-- 头像与三行杠单独一行：放在 Logo 正下方、导航菜单上方 -->
     <div class="sidebar-tools">
+      <button class="sidebar-avatar-btn" type="button" id="sidebar-avatar"
+              aria-label="查看我的头像" title="查看我的头像">
+        <span class="brand-avatar" id="sidebar-avatar-letter">A</span>
+        <img class="brand-avatar-img" id="sidebar-avatar-img" alt="用户头像" hidden>
+      </button>
       <button class="icon-btn sidebar-toggle" type="button" id="sidebar-toggle"
               data-bs-toggle="tooltip" data-bs-placement="right" title="折叠 / 展开侧栏"
               aria-label="折叠或展开侧栏">
@@ -103,7 +108,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.13.5-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.13.6-DEV</div>
     </div>
   </aside>
 
@@ -1248,6 +1253,11 @@
             </div>
           </div>
           <div class="settings-group">
+            <span class="settings-label">品牌图标主题</span>
+            <div class="brand-logo-grid" id="brand-logo-grid" role="radiogroup" aria-label="品牌图标主题"></div>
+            <p class="settings-hint">只影响本机侧边栏与登录页的品牌图标；浏览器标签页和 PWA 桌面图标固定使用默认 Logo。</p>
+          </div>
+          <div class="settings-group">
             <span class="settings-label">首页卡片显示</span>
             <div class="card-visibility" id="card-visibility"></div>
           </div>
@@ -1390,6 +1400,26 @@
   </div>
 </div>
 
+<!-- ================= v0.13.6：头像大图预览 Lightbox ================= -->
+<div class="avatar-lightbox" id="avatar-lightbox" hidden aria-hidden="true" role="dialog" aria-modal="true"
+     aria-label="头像大图预览">
+  <div class="avatar-lightbox-backdrop" data-avatar-lightbox-close></div>
+  <div class="avatar-lightbox-panel" role="document">
+    <button class="avatar-lightbox-close" type="button" id="avatar-lightbox-close" data-avatar-lightbox-close aria-label="关闭预览">×</button>
+    <div class="avatar-lightbox-stage" id="avatar-lightbox-stage">
+      <span class="avatar-lightbox-letter" id="avatar-lightbox-letter">A</span>
+      <img class="avatar-lightbox-img" id="avatar-lightbox-img" alt="我的头像" hidden>
+    </div>
+    <div class="avatar-lightbox-actions">
+      <a class="btn btn-primary avatar-lightbox-save" id="avatar-lightbox-save" href="#" role="button"
+         download="智汇账_我的头像.png">保存至本地</a>
+      <button class="btn btn-light" type="button" id="avatar-lightbox-change">更换头像</button>
+      <button class="btn btn-outline-secondary" type="button" id="avatar-lightbox-profile">个人中心</button>
+    </div>
+    <p class="avatar-lightbox-hint" id="avatar-lightbox-hint" hidden>还没有上传头像，先点「更换头像」挑一张图片吧</p>
+  </div>
+</div>
+
 <!-- ================= v0.12.7：个人中心大弹窗（点左上角头像打开） ================= -->
 <div class="modal fade" id="profile-modal" tabindex="-1" aria-labelledby="profile-title"
      aria-hidden="true" data-bs-keyboard="true">
@@ -1401,7 +1431,7 @@
       </div>
       <div class="modal-body">
         <div class="pc-hero">
-          <button class="pc-avatar-btn" type="button" id="profile-avatar-btn" title="点击更换头像">
+          <button class="pc-avatar-btn" type="button" id="profile-avatar-btn" title="点击查看头像大图">
             <span class="pc-avatar" id="profile-avatar">A</span>
             <img class="pc-avatar-img" id="profile-avatar-img" alt="用户头像" hidden>
             <span class="pc-avatar-cam" aria-hidden="true">
@@ -2027,13 +2057,13 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.13.5"></script>
-<script src="/static/access-guard.js?v=0.13.5"></script>
+<script src="/static/auth-v012.js?v=0.13.6"></script>
+<script src="/static/access-guard.js?v=0.13.6"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.13.5"></script>
-<script src="/static/charts-v013.js?v=0.13.5"></script>
+<script src="/static/script.js?v=0.13.6"></script>
+<script src="/static/charts-v013.js?v=0.13.6"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.13.5"></script>
+<script src="/static/invest-v0133.js?v=0.13.6"></script>
 
 </body>
 </html>

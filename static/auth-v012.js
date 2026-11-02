@@ -116,9 +116,9 @@
     gateElement.innerHTML =
       '<div class="auth-card">' +
         '<div class="auth-brand">' +
-          '<span class="auth-logo">¥</span>' +
-          "<h1>AI 记账</h1>" +
-          "<p>登录后，账本数据只属于你</p>" +
+          '<img class="auth-logo-img" id="auth-brand-logo" src="/static/images/logo-main.png" alt="智汇账">' +
+          "<h1>智汇账</h1>" +
+          "<p>您的 AI 资产管家 · 登录后账本只属于你</p>" +
         "</div>" +
         '<div class="auth-tabs">' +
           '<button type="button" data-auth-tab="login" class="is-active">登录</button>' +
@@ -163,6 +163,8 @@
         "</form>" +
       "</div>";
     document.body.appendChild(gateElement);
+    // 登录页的品牌图标同样跟随「品牌图标主题」
+    applyBrandLogo();
 
     gateElement.addEventListener("click", function (event) {
       var tab = event.target.closest("[data-auth-tab]");
@@ -979,11 +981,125 @@
     }
   }
 
+  /* ---------------- v0.13.6：品牌图标主题（侧边栏 + 登录页） ---------------- */
+
+  var BRAND_LOGO_KEY = "ai-accounting-brand-logo";
+  var BRAND_LOGO_FILES = [
+    "logo-main.png",
+    "logo-theme-1.png",
+    "logo-theme-2.png",
+    "logo-theme-3.png",
+    "logo-theme-4.png",
+    "logo-theme-5.png",
+    "logo-theme-6.png",
+    "logo-theme-7.png"
+  ];
+  var BRAND_LOGO_LABELS = [
+    "默认 Logo",
+    "主题 1",
+    "主题 2",
+    "主题 3",
+    "主题 4",
+    "主题 5",
+    "主题 6",
+    "主题 7"
+  ];
+
+  function brandLogoFile(file) {
+    return BRAND_LOGO_FILES.indexOf(file) >= 0 ? file : BRAND_LOGO_FILES[0];
+  }
+
+  function brandLogoSrc(file) {
+    return "/static/images/" + brandLogoFile(file);
+  }
+
+  function readBrandLogo() {
+    try {
+      return brandLogoFile(localStorage.getItem(BRAND_LOGO_KEY) || BRAND_LOGO_FILES[0]);
+    } catch (error) {
+      return BRAND_LOGO_FILES[0];
+    }
+  }
+
+  function syncBrandLogoSelection() {
+    var grid = document.getElementById("brand-logo-grid");
+    if (!grid) {
+      return;
+    }
+    var current = readBrandLogo();
+    Array.prototype.forEach.call(grid.querySelectorAll("[data-brand-logo]"), function (option) {
+      var active = option.getAttribute("data-brand-logo") === current;
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-checked", active ? "true" : "false");
+    });
+  }
+
+  /** 把选中的品牌图标同步到侧边栏与登录页；Favicon / PWA 图标固定 logo-main，不受影响 */
+  function applyBrandLogo() {
+    var src = brandLogoSrc(readBrandLogo());
+    ["sidebar-brand-logo", "auth-brand-logo"].forEach(function (id) {
+      var element = document.getElementById(id);
+      if (element && element.getAttribute("src") !== src) {
+        element.setAttribute("src", src);
+      }
+    });
+    syncBrandLogoSelection();
+  }
+
+  function setBrandLogo(file) {
+    try {
+      localStorage.setItem(BRAND_LOGO_KEY, brandLogoFile(file));
+    } catch (error) {
+      /* 隐私模式下写不进去就只影响本次会话 */
+    }
+    applyBrandLogo();
+  }
+
+  /** 4 列 × 2 行网格；只在第一次打开设置时渲染，之后只切选中态 */
+  function buildBrandLogoGrid() {
+    var grid = document.getElementById("brand-logo-grid");
+    if (!grid || grid.getAttribute("data-ready") === "1") {
+      return;
+    }
+    grid.setAttribute("data-ready", "1");
+    grid.innerHTML = BRAND_LOGO_FILES.map(function (file, index) {
+      return (
+        '<button type="button" class="brand-logo-option" data-brand-logo="' + file + '" ' +
+        'role="radio" aria-checked="false" title="' + BRAND_LOGO_LABELS[index] + '" ' +
+        'aria-label="' + BRAND_LOGO_LABELS[index] + '">' +
+        '<img src="' + brandLogoSrc(file) + '" alt="' + BRAND_LOGO_LABELS[index] + '" loading="lazy">' +
+        "</button>"
+      );
+    }).join("");
+    grid.addEventListener("click", function (event) {
+      var option = event.target.closest("[data-brand-logo]");
+      if (!option) {
+        return;
+      }
+      setBrandLogo(option.getAttribute("data-brand-logo"));
+      if (typeof toast === "function") {
+        toast("品牌图标已切换，侧边栏与登录页立即生效", "success");
+      }
+    });
+    syncBrandLogoSelection();
+  }
+
+  window.ZHAccountBrandLogo = {
+    files: BRAND_LOGO_FILES,
+    labels: BRAND_LOGO_LABELS,
+    read: readBrandLogo,
+    apply: applyBrandLogo,
+    set: setBrandLogo,
+    src: brandLogoSrc,
+    buildGrid: buildBrandLogoGrid
+  };
+
   /* ---------------- v0.12.2：侧栏昵称 ---------------- */
 
   function displayName(user) {
     var name = (user && user.nickname) || ((user && user.email) ? String(user.email).split("@")[0] : "");
-    return name || "AI记账管家";
+    // v0.13.6 防呆红线：昵称/邮箱前缀之外绝不再拼品牌名，只在两者都没有时兜底显示品牌
+    return name || "智汇账";
   }
 
   function avatarLetter(user) {
@@ -1216,15 +1332,129 @@
       });
   }
 
+  /* ---------------- v0.13.6：头像大图预览（Lightbox） ---------------- */
+
+  function avatarLightboxEl() {
+    return document.getElementById("avatar-lightbox");
+  }
+
+  function openAvatarLightbox() {
+    var box = avatarLightboxEl();
+    if (!box) {
+      return;
+    }
+    var user = getUser() || {};
+    var url = avatarUrlOf(user);
+    var img = document.getElementById("avatar-lightbox-img");
+    var letter = document.getElementById("avatar-lightbox-letter");
+    var save = document.getElementById("avatar-lightbox-save");
+    var hint = document.getElementById("avatar-lightbox-hint");
+    if (letter) {
+      letter.textContent = avatarLetter(user);
+    }
+    if (img) {
+      if (url) {
+        img.setAttribute("src", url);
+        img.hidden = false;
+        if (letter) {
+          letter.hidden = true;
+        }
+      } else {
+        img.removeAttribute("src");
+        img.hidden = true;
+        if (letter) {
+          letter.hidden = false;
+        }
+      }
+    }
+    if (save) {
+      if (url) {
+        // 走 <a download>：同源图片浏览器直接落盘，文件名固定「智汇账_我的头像.png」
+        save.setAttribute("href", url);
+        save.classList.remove("is-disabled");
+        save.removeAttribute("aria-disabled");
+      } else {
+        save.removeAttribute("href");
+        save.classList.add("is-disabled");
+        save.setAttribute("aria-disabled", "true");
+      }
+    }
+    if (hint) {
+      hint.hidden = !!url;
+    }
+    box.hidden = false;
+    box.setAttribute("aria-hidden", "false");
+    document.body.classList.add("has-avatar-lightbox");
+    var closeButton = document.getElementById("avatar-lightbox-close");
+    if (closeButton) {
+      closeButton.focus();
+    }
+  }
+
+  function closeAvatarLightbox() {
+    var box = avatarLightboxEl();
+    if (!box || box.hidden) {
+      return;
+    }
+    box.hidden = true;
+    box.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("has-avatar-lightbox");
+  }
+
+  function openProfileModal() {
+    var profileEl = document.getElementById("profile-modal");
+    if (!profileEl || !window.bootstrap) {
+      return;
+    }
+    fillProfileModal(getUser() || {});
+    window.bootstrap.Modal.getOrCreateInstance(profileEl).show();
+    refreshProfileFromServer();
+  }
+
+  function bindAvatarLightbox() {
+    var box = avatarLightboxEl();
+    if (!box || box.getAttribute("data-bound") === "1") {
+      return;
+    }
+    box.setAttribute("data-bound", "1");
+    box.addEventListener("click", function (event) {
+      if (event.target.closest("[data-avatar-lightbox-close]")) {
+        closeAvatarLightbox();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape" && !box.hidden) {
+        closeAvatarLightbox();
+      }
+    });
+    var changeButton = document.getElementById("avatar-lightbox-change");
+    if (changeButton) {
+      changeButton.addEventListener("click", function () {
+        closeAvatarLightbox();
+        var input = document.getElementById("profile-avatar-input");
+        if (input) {
+          input.click();
+        }
+      });
+    }
+    var profileButton = document.getElementById("avatar-lightbox-profile");
+    if (profileButton) {
+      profileButton.addEventListener("click", function () {
+        closeAvatarLightbox();
+        openProfileModal();
+      });
+    }
+  }
+
   function bindProfileUi() {
     var avatarBtn = document.getElementById("sidebar-avatar");
     var profileEl = document.getElementById("profile-modal");
-    if (avatarBtn && profileEl && window.bootstrap) {
-      avatarBtn.addEventListener("click", function () {
-        fillProfileModal(getUser() || {});
-        window.bootstrap.Modal.getOrCreateInstance(profileEl).show();
-        refreshProfileFromServer();
-      });
+    bindAvatarLightbox();
+    if (avatarBtn) {
+      // v0.13.6：头像不再直接开个人中心，而是先弹大图预览；个人中心入口放在 Lightbox 里
+      avatarBtn.addEventListener("click", openAvatarLightbox);
+    }
+    if (profileEl && window.bootstrap) {
       profileEl.addEventListener("shown.bs.modal", function () {
         fillProfileModal(getUser() || {});
       });
@@ -1238,9 +1468,7 @@
     var avatarPick = document.getElementById("profile-avatar-btn");
     var avatarInput = document.getElementById("profile-avatar-input");
     if (avatarPick && avatarInput) {
-      avatarPick.addEventListener("click", function () {
-        avatarInput.click();
-      });
+      avatarPick.addEventListener("click", openAvatarLightbox);
       avatarInput.addEventListener("change", function () {
         var file = avatarInput.files && avatarInput.files[0];
         avatarInput.value = "";
@@ -1781,6 +2009,8 @@
   }
 
   function boot() {
+    // v0.13.6：先套品牌图标，避免侧边栏/登录页在首屏闪一下默认 Logo
+    applyBrandLogo();
     verifySession();
     initImportUi();
     updateSidebarUser();

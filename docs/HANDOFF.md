@@ -1,4 +1,4 @@
-AI 记账管家 项目交接文档
+智汇账 项目交接文档
 
 【最高红线规则 · 未经用户明确指令禁止修改本段】
 1. 字数控制：本文件内容超过 10000 字时，AI 必须自动执行精简；超过 7000 字时，AI 应当主动执行精简。
@@ -15,10 +15,10 @@ AI 记账管家 项目交接文档
 二、当前环境 / 技术栈
 - 系统 Windows；Python venv 在项目内：.\venv\Scripts\python.exe app.py。
 - Flask + sqlite3（records.db）+ 原生 JS/CSS + Bootstrap 5 + ECharts + PyJWT + pandas/openpyxl。
-- 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
-- 当前版本：v0.13.5-DEV（注册安全校验与登录页美化：密码强度校验**只作用于注册**——`submitGate()` 拆成「非空共同前置 + 注册专属校验」，后端 `_register_password_error()`（≥8 位含字母数字）只挂 `/api/auth/register`，登录接口无任何强度判断，老账号纯数字 `123456` 照常登录；注册新增「确认密码」与滑块闸门 `syncRegisterLock()`（未解锁时「发送验证码」「注册并进入」置灰，用 `data-counting` 标记与 60 秒倒计时解耦）；登录卡片改磨砂玻璃 `rgba(255,255,255,0.7)` + `backdrop-filter: blur(18px)`，深色 `rgba(19,28,43,0.66)`，输入框 10px 圆角 + 聚焦发光，主按钮渐变蓝 + hover 提亮，小屏内部滚动不贴边）。静态资源版本串为 `0.13.5`、两处 SW 缓存名为 `ai-accounting-v0.13.5-r1`（每次发版必须同步 bump，否则 stale-while-revalidate 会让用户刷新一次仍吃旧 JS）。v0.13.1~v0.13.4 的全部能力均含在内。
+- 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩 + 品牌图标主题 + 头像 Lightbox）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
+- 当前版本：v0.13.6-DEV（品牌化「智汇账」+ 头像大图预览 + Logo 多主题：全站标题/邮件/manifest 统一品牌；**渲染防呆红线**——侧边栏与个人中心只读 `user.nickname`（空则邮箱前缀），`displayName()` 绝不拼品牌名，品牌 Logo 单独一格；头像点击弹全屏磨砂 Lightbox，`<a download>` 固定文件名「智汇账_我的头像.png」；系统设置「品牌图标主题」4×2 网格读取 `static/images/logo-main.png` + `logo-theme-1..7.png`，选择存 `ai-accounting-brand-logo` 并即时同步侧边栏与登录页，Favicon/PWA 固定默认图标；设置弹窗 `.modal-body` 75vh + 自定义滚动条）。静态资源版本串为 `0.13.6`、两处 SW 缓存名为 `ai-accounting-v0.13.6-r1`（每次发版必须同步 bump，否则 stale-while-revalidate 会让用户刷新一次仍吃旧 JS）。v0.13.1~v0.13.5 的全部能力均含在内。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV。
-- 已知坑：东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；SW 静态资源是 stale-while-revalidate，发版后第一次刷新必然先命中旧缓存——必须同步 bump 模板 `?v=` 与 `CACHE_NAME` 才能一次刷新生效；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
+- 已知坑：**Flask 用 `--no-reload` 启动时 Jinja 模板会被缓存，改完 templates/*.html 必须重启进程**（否则 CDP 测试会拿到旧 DOM，本次「X 按钮点了不关」就是被旧模板骗了）；东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；SW 静态资源是 stale-while-revalidate，发版后第一次刷新必然先命中旧缓存——必须同步 bump 模板 `?v=` 与 `CACHE_NAME` 才能一次刷新生效；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
 
 三、核心数据模型
 - users：id, email UNIQUE, password_hash, phone, nickname, avatar, created_at。管理员 id=1（1937097795@qq.com / 123456），1-9 预留，普通注册从 10 起。
@@ -42,6 +42,7 @@ AI 记账管家 项目交接文档
 - v0.13.3 已完成：投资账户体系（`accounts.type`、三张新表、12 条 `/api/invest/*`、Mock 行情）、投资看板双视图（双 Tab 默认持仓、ticker 小字灰、当日盈亏骨架、平台折叠、防抖搜索、账户类型下拉）、AI `invest_buy` 意图（SSE 与非流式双路发 `need_confirm`，AI 只提示不写库）、**金额规范化同构**（`amount` 主导，堵住"卡片 1000 实际扣 500"）；封版前再补：**交易日顺延**（DCA 扣款日落在周末顺延到下一工作日）、黄金独立资产类型（下拉新增「黄金」）、扣款来源账户（`dca_plans.source_account`，可指定微信/现金扣款）、前端金额三数联动与自绘下拉（深色模式原生 `<select>` 白底刺眼）。
 - v0.13.4 已完成：邮箱验证码后端（表 + 双接口 + 防刷/限次/哈希/过期，SMTP_SSL 465 HTML 邮件）、投资标的搜索接入东财 search-api（≥1 秒最小间隔、失败/超时降级本地 Mock、前端 500ms 防抖与三字段自动回填）；搜索**固定走 API**（删掉前端 `investMockEnabled()` 分支，残留调试标记不再能把中文名搜索拽回本地字典），降级时接口回 `fallback/notice`、候选框明示「已回退本地字典」；顺手修 `openHoldingModal()` 把 bootstrap 实例当 DOM 传给 `investEnhanceSelects()` 的既有 Bug。
 - v0.13.5 已完成：注册校验与登录解耦（注册 ≥8 位含字母数字、确认密码一致性、滑块未解锁双按钮置灰；登录只校验非空，`123456` 老账号实测可登录）、登录/注册卡片 Glassmorphism 重做（磨砂、柔和阴影、输入框聚焦发光、渐变主按钮、深色自适应、小屏不贴边）。
+- v0.13.6 已完成：全局品牌化「智汇账」（首页/后台/404/manifest/PWA/邮件发件人与标题前缀），侧边栏与个人中心只渲染昵称（空则邮箱前缀，绝不拼品牌名）；头像 Lightbox（磨砂遮罩、92vw/92vh 限幅、Esc/X/空白处关闭、下载文件名固定）；系统设置品牌图标 8 选 1 主题（localStorage 持久化、侧边栏与登录页同步、Favicon/PWA 固定默认）；设置弹窗 75vh 滚动修复。
 - v0.13.4 遗留：`.env` 缺 `MAIL_*`，真实投递验收未做（补齐后跑 `D:\Project\temp\test_v0134_send_real.py`）；`ai_service._invest_lookup` 仍用本地字典（避免流式多等 5 秒，可后续按需切东财）。
 - 已知遗留（v0.14 待办）：
   - **投资**：`parsed.platform` 被忽略，说「用天天基金买 1000」会落到「默认」平台（**v0.14 按方案 B 做**：命中就用、没命中回落默认；**不要改成自动建**——该字段源头是 LLM，会造出删不掉的脏分组）；`holdings.record_id` 恒 NULL 是死列，将来做「删账目联动清仓」或 CSV 回溯前必须先决定删列还是真正写入；`GET /api/invest/dca-plans` 列表路由未做（数据层已就绪，看板里 holdings 已带 `dca_plans`）；AI 确认卡不支持换标的（后端已返 `candidates`）；加仓后不自动展开对应平台；弹窗内无行内错误红字

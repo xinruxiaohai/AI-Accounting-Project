@@ -28,6 +28,7 @@ from flask import (
 )
 from dotenv import load_dotenv
 from email.message import EmailMessage
+from email.utils import formataddr
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai_service
@@ -303,6 +304,9 @@ MAIL_PASSWORD = (os.getenv("MAIL_PASSWORD") or "").strip()
 # 是否真正配置了发信账号：决定「未配置→控制台兜底」还是「配置了却发不出去→报错」
 MAIL_CONFIGURED = bool(MAIL_USER and MAIL_PASSWORD)
 
+# v0.13.6：全局品牌名（邮件发件人显示名与标题前缀；页面文案在模板/前端里）
+APP_BRAND_NAME = "智汇账"
+
 # 验证码哈希加盐（pepper）：即使 DB 泄漏，也反推不出 6 位明文码
 _EMAIL_HASH_PEPPER = JWT_SECRET
 
@@ -321,20 +325,21 @@ def _build_verification_email(email, code, purpose="register"):
     """
     action = "注册" if purpose == "register" else "找回密码"
     msg = EmailMessage()
-    msg["Subject"] = "【AI记账】%s验证码" % action
-    msg["From"] = MAIL_USER
+    msg["Subject"] = "【%s】%s验证码" % (APP_BRAND_NAME, action)
+    # 发件人显示名走 formataddr，否则中文显示名会被邮件客户端显示成乱码或整串丢弃
+    msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = email
     msg.set_content(
-        "您的%s验证码是 %s，%d 分钟内有效，请勿泄露给他人。"
-        % (action, code, EMAIL_CODE_TTL_SECONDS // 60)
+        "%s：您的%s验证码是 %s，%d 分钟内有效，请勿泄露给他人。"
+        % (APP_BRAND_NAME, action, code, EMAIL_CODE_TTL_SECONDS // 60)
     )
     msg.add_alternative(
         '<div style="font-family:sans-serif;max-width:480px;margin:0 auto">'
-        "<h2>AI 记账 · %s验证码</h2>"
+        "<h2>%s · %s验证码</h2>"
         "<p>您的验证码是：</p>"
         '<p style="font-size:28px;font-weight:bold;letter-spacing:6px">%s</p>'
         "<p>%d 分钟内有效，请勿泄露给他人。若非本人操作请忽略本邮件。</p></div>"
-        % (action, code, EMAIL_CODE_TTL_SECONDS // 60),
+        % (APP_BRAND_NAME, action, code, EMAIL_CODE_TTL_SECONDS // 60),
         subtype="html",
     )
     return msg
@@ -3605,7 +3610,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.5-DEV"
+APP_VERSION_FALLBACK = "v0.13.6-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
