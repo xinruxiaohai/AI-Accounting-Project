@@ -291,6 +291,9 @@ const invest = {
   searchTimer: null,
   searchSeq: 0,
   candidates: [],
+  // 这次候选是不是「东财不可用 → 本地字典兜底」来的，兜底时要在下拉里说清楚
+  searchFallback: false,
+  searchNotice: "",
   // 弹窗里已选中的平台
   modalPlatformId: 0,
   // 份额是不是"自动算的"：true=跟着金额/单价走，false=用户手填过
@@ -463,14 +466,27 @@ async function investFetchLedger() {
   return data.records || [];
 }
 
+/**
+ * 标的研究索：**永远走后端联网查东财**。
+ *
+ * v0.13.4：搜索不再读本地字典——本地字典收录不全，只留作后端断网时的兜底，
+ * 以后单独做成「自动补全标的资料」的功能。所以这里连 `investMockEnabled()`
+ * 的分支都去掉了：曾经开着 `?investMock=1` 调试标志的浏览器会一直只搜字典，
+ * 表现出来就是「输入中文名搜不到」。
+ *
+ * @returns {Promise<{items: Array, fallback: boolean, notice: string}>}
+ */
 async function investSearchSecurities(keyword) {
-  if (investMockEnabled()) {
-    return investMockSearch(keyword);
-  }
   const data = await api(
     "/api/invest/search?keyword=" + encodeURIComponent(keyword) + "&limit=" + INVEST_MAX_CANDIDATES
   );
-  return data.items || [];
+  return {
+    items: data.items || [],
+    fallback: data.fallback === true || (data.items || []).some(function (item) {
+      return item && item.source === "mock";
+    }),
+    notice: data.notice || "",
+  };
 }
 
 /* ==================== 骨架与渲染 ==================== */
@@ -1583,30 +1599,52 @@ function scheduleTickerSearch(keyword) {
 async function runTickerSearch(keyword) {
   const seq = invest.searchSeq + 1;
   invest.searchSeq = seq;
+  invest.searchFallback = false;
+  invest.searchNotice = "";
   try {
-    const items = await investSearchSecurities(keyword);
+    const result = await investSearchSecurities(keyword);
     if (seq !== invest.searchSeq) {
       return; // 已有更新的搜索发起
     }
-    invest.candidates = items.slice(0, INVEST_MAX_CANDIDATES);
+    invest.candidates = result.items.slice(0, INVEST_MAX_CANDIDATES);
+    invest.searchFallback = result.fallback;
+    invest.searchNotice = result.notice;
     investRenderCandidates(invest.candidates);
   } catch (error) {
+    if (seq !== invest.searchSeq) {
+      return;
+    }
+    // 以前是静默隐藏候选框，用户只看到「打了字没反应」；现在把失败原因摆出来
     invest.candidates = [];
-    investHideCandidates();
+    investRenderCandidates([], "搜索失败，请检查网络后重试");
   }
 }
 
-function investRenderCandidates(items) {
+/**
+ * 渲染候选下拉。
+ * @param {Array} items 候选标的
+ * @param {string} [emptyHint] 空结果 / 失败时的提示文案
+ */
+function investRenderCandidates(items, emptyHint) {
   const box = investEl("holding-candidates");
   if (!box) {
     return;
   }
   if (!items.length) {
-    box.innerHTML = '<div class="invest-candidate is-empty">没有匹配的标的，可直接手填名称</div>';
+    box.innerHTML =
+      '<div class="invest-candidate is-empty">' +
+      investText(emptyHint || "没有匹配的标的，可直接手填名称") +
+      "</div>";
     box.classList.add("show");
     return;
   }
-  box.innerHTML = items
+  const noteHtml =
+    invest.searchFallback && invest.searchNotice
+      ? '<div class="invest-candidate is-empty">' + investText(invest.searchNotice) + "</div>"
+      : "";
+  box.innerHTML =
+    noteHtml +
+    items
     .map(function (item, index) {
       return (
         '<div class="invest-candidate" role="button" tabindex="0" data-candidate-index="' +

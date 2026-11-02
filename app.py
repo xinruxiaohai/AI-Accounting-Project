@@ -2861,7 +2861,9 @@ def invest_search():
     if limit <= 0 or limit > 50:
         limit = 10
 
-    items = invest_eastmoney.search_or_fallback(keyword, limit)
+    items, fallback, reason = invest_eastmoney.search_with_fallback_info(keyword, limit)
+    if fallback:
+        app.logger.warning("[v0.13.4][投资搜索][东财不可用，回退本地字典] %s: %s", keyword, reason)
     # 两种字段名一起下发：code/name/category/type 是新契约，
     # ticker/asset_type/price 是 v0.13.3 前端已在用的旧字段，改契约要同时改前端，没到那一步。
     out = [
@@ -2877,7 +2879,11 @@ def invest_search():
         }
         for it in items
     ]
-    return jsonify(total=len(out), items=out)
+    resp = {"total": len(out), "items": out, "fallback": fallback}
+    if fallback:
+        # 降级时必须让前端说清楚，别让用户以为「本地字典就是全部市场」
+        resp["notice"] = "东方财富接口暂时不可用，已回退本地字典，结果可能不全"
+    return jsonify(**resp)
 
 
 @app.route("/api/invest/board", methods=["GET"])

@@ -148,13 +148,25 @@ def search_eastmoney(keyword, limit=EASTMONEY_MAX_RESULTS):
     return result
 
 
-def search_or_fallback(keyword, limit=EASTMONEY_MAX_RESULTS):
-    """先试东财，失败 / 超时 / 断网时自动降级回退到 invest_mock 本地字典。
+def search_with_fallback_info(keyword, limit=EASTMONEY_MAX_RESULTS):
+    """先试东财，失败 / 超时 / 断网时回退本地字典，并告诉调用方「是否降级、为什么」。
 
-    降级只发生在**网络层异常**（失败、超时、断网）。东财正常返回空列表表示「全市场确无此标的」，
+    返回 `(items, fallback, reason)`：
+      - 东财正常应答（含空结果）→ `fallback=False`，`reason=""`；
+      - 网络层异常（连不上、超时、断网）→ `fallback=True`，`reason` 是异常文本，items 来自本地字典。
+
+    降级只发生在**网络层异常**。东财正常返回空列表表示「全市场确无此标的」，
     此时**不回退**（否则会把本地字典里已过时的标的一股脑塞给用户，反而失真）。
+    搜索的主链路永远是东财 API，本地字典只在断网时兜底（v0.13.4 需求：搜索不靠字典，
+    字典以后只承担「自动补全标的资料」的职责）。
     """
     try:
-        return search_eastmoney(keyword, limit)
-    except Exception:  # noqa: BLE001 - 网络层异常一律兜底，绝不让搜索功能瘫痪
-        return invest_mock.search_securities(keyword, limit)
+        return search_eastmoney(keyword, limit), False, ""
+    except Exception as exc:  # noqa: BLE001 - 网络层异常一律兜底，绝不让搜索功能瘫痪
+        return invest_mock.search_securities(keyword, limit), True, "%s: %s" % (type(exc).__name__, exc)
+
+
+def search_or_fallback(keyword, limit=EASTMONEY_MAX_RESULTS):
+    """兼容旧调用方的薄封装：只要结果列表，不要降级标记。"""
+    items, _fallback, _reason = search_with_fallback_info(keyword, limit)
+    return items

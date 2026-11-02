@@ -54,3 +54,15 @@ if not delivered and MAIL_CONFIGURED:      # 配了却发不出：作废 + 502
   否则测的还是旧文件。
 - `.env` 实测没有 `MAIL_*`，真实投递无法验收：接口层 502/429/哈希/过期全部可测，但"真的收到邮件"
   只能等凭据补齐后跑 `D:\Project\temp\test_v0134_send_real.py`。
+
+---
+
+## 补丁（v0.13.4-DEV，用户反馈「只输入名字搜不到」之后）
+
+> 用户原话（m00564）：「搜索时只输入标的名字还是无法自动关联查询结果，需要修改一下。搜索不能依靠字典，而是使用api联网查找。字典留到以后设置一个自动补充的功能」
+
+- **根因**：`investSearchSecurities()` 第一行是 `if (investMockEnabled()) return investMockSearch(...)`。浏览器 localStorage 里只要留着 v0.13.3 调试时写入的 `ai-accounting-invest-dev-mock="1"`，搜索就永远只读本地字典——那份字典收录不全，中文名自然搜不到。
+- **定案**：搜索链路删掉 mock 分支，**永远**走 `/api/invest/search`；本地字典只做后端断网兜底，将来单独做「自动补全标的资料」。
+- **降级可见**：`search_with_fallback_info()` 返回 `(items, fallback, reason)`；接口降级时回 `fallback:true` + `notice`，前端渲染在候选框顶部；搜索异常不再静默隐藏，改为「搜索失败，请检查网络后重试」。
+- **缓存坑**：SW 静态资源是 stale-while-revalidate，发版后第一次刷新吃旧 JS。模板 `?v=0.13.4.1` + `CACHE_NAME=ai-accounting-v0.13.4-r2` 双 bump，URL 变了缓存键就失效。
+- **验证**：搜索 21/21、真实 Chrome CDP 37/37（含「贵州茅台」「广发道琼斯」按名称搜索、`investMock=1` 残留标记回归、断网实例降级提示、console 0 error）。

@@ -16,9 +16,9 @@ AI 记账管家 项目交接文档
 - 系统 Windows；Python venv 在项目内：.\venv\Scripts\python.exe app.py。
 - Flask + sqlite3（records.db）+ 原生 JS/CSS + Bootstrap 5 + ECharts + PyJWT + pandas/openpyxl。
 - 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
-- 当前版本：v0.13.4-DEV（邮箱验证码后端：`email_verifications` 表 + `/api/auth/send-code`、`/api/auth/verify-code`，6 位码只存 sha256、5 分钟、5 次上限、1 分钟防刷、SMTP_SSL 465 发 HTML 邮件；投资搜索改为后端代理东财 `searchapi.eastmoney.com`，进程级 ≥1 秒最小间隔，异常/超时自动回退本地 Mock，前端 500ms 防抖 + 候选自动回填）。静态资源版本串与两处 SW 缓存名统一为 `0.13.4`。v0.13.1~v0.13.3 的全部能力均含在内。
+- 当前版本：v0.13.4-DEV（邮箱验证码后端：`email_verifications` 表 + `/api/auth/send-code`、`/api/auth/verify-code`，6 位码只存 sha256、5 分钟、5 次上限、1 分钟防刷、SMTP_SSL 465 发 HTML 邮件；投资搜索改为后端代理东财 `searchapi.eastmoney.com`，进程级 ≥1 秒最小间隔，异常/超时自动回退本地 Mock，前端 500ms 防抖 + 候选自动回填）。搜索主链路固定走后端东财代理，本地字典只在断网时兜底并在候选框明确提示；静态资源版本串为 `0.13.4.1`、两处 SW 缓存名为 `ai-accounting-v0.13.4-r2`（每次发版必须同步 bump，否则 stale-while-revalidate 会让用户刷新一次仍吃旧 JS）。v0.13.1~v0.13.3 的全部能力均含在内。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV。
-- 已知坑：东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
+- 已知坑：东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；SW 静态资源是 stale-while-revalidate，发版后第一次刷新必然先命中旧缓存——必须同步 bump 模板 `?v=` 与 `CACHE_NAME` 才能一次刷新生效；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层。
 
 三、核心数据模型
 - users：id, email UNIQUE, password_hash, phone, nickname, avatar, created_at。管理员 id=1（1937097795@qq.com / 123456），1-9 预留，普通注册从 10 起。
@@ -40,8 +40,8 @@ AI 记账管家 项目交接文档
 五、下一步计划
 - v0.13.1 已完成：全局语义色令牌（支出红/收入绿/结余灰）与 `window.__chartColors()` 单一色源，图表/列表/看板 100% 同步且切主题免刷新；设置弹窗精修（文案精简、图标网格化、下拉等宽、Checkbox 3 列、按钮像素对齐、单层滚动）；分类按 `user_id` 完全隔离 + 停用/合并 + 「已停用」管理区；T05 静默改分类用「双清单」修复；顺带修图表页数据陈旧、月份翻页 31 号失效、深色下图标选中态被同权重覆盖、1×1 退化图被放大成色块。
 - v0.13.3 已完成：投资账户体系（`accounts.type`、三张新表、12 条 `/api/invest/*`、Mock 行情）、投资看板双视图（双 Tab 默认持仓、ticker 小字灰、当日盈亏骨架、平台折叠、防抖搜索、账户类型下拉）、AI `invest_buy` 意图（SSE 与非流式双路发 `need_confirm`，AI 只提示不写库）、**金额规范化同构**（`amount` 主导，堵住"卡片 1000 实际扣 500"）；封版前再补：**交易日顺延**（DCA 扣款日落在周末顺延到下一工作日）、黄金独立资产类型（下拉新增「黄金」）、扣款来源账户（`dca_plans.source_account`，可指定微信/现金扣款）、前端金额三数联动与自绘下拉（深色模式原生 `<select>` 白底刺眼）。
-- v0.13.4 已完成：邮箱验证码后端（表 + 双接口 + 防刷/限次/哈希/过期，SMTP_SSL 465 HTML 邮件）、投资标的搜索接入东财 search-api（≥1 秒最小间隔、失败/超时降级本地 Mock、前端 500ms 防抖与三字段自动回填）；顺手修 `openHoldingModal()` 把 bootstrap 实例当 DOM 传给 `investEnhanceSelects()` 的既有 Bug。
-- v0.13.4 遗留：`.env` 缺 `MAIL_*`，真实投递验收未做（补齐后跑 `D:\Project	emp	est_v0134_send_real.py`）；`ai_service._invest_lookup` 仍用本地字典（避免流式多等 5 秒，可后续按需切东财）。
+- v0.13.4 已完成：邮箱验证码后端（表 + 双接口 + 防刷/限次/哈希/过期，SMTP_SSL 465 HTML 邮件）、投资标的搜索接入东财 search-api（≥1 秒最小间隔、失败/超时降级本地 Mock、前端 500ms 防抖与三字段自动回填）；搜索**固定走 API**（删掉前端 `investMockEnabled()` 分支，残留调试标记不再能把中文名搜索拽回本地字典），降级时接口回 `fallback/notice`、候选框明示「已回退本地字典」；顺手修 `openHoldingModal()` 把 bootstrap 实例当 DOM 传给 `investEnhanceSelects()` 的既有 Bug。
+- v0.13.4 遗留：`.env` 缺 `MAIL_*`，真实投递验收未做（补齐后跑 `D:\Project\temp\test_v0134_send_real.py`）；`ai_service._invest_lookup` 仍用本地字典（避免流式多等 5 秒，可后续按需切东财）。
 - 已知遗留（v0.14 待办）：
   - **投资**：`parsed.platform` 被忽略，说「用天天基金买 1000」会落到「默认」平台（**v0.14 按方案 B 做**：命中就用、没命中回落默认；**不要改成自动建**——该字段源头是 LLM，会造出删不掉的脏分组）；`holdings.record_id` 恒 NULL 是死列，将来做「删账目联动清仓」或 CSV 回溯前必须先决定删列还是真正写入；`GET /api/invest/dca-plans` 列表路由未做（数据层已就绪，看板里 holdings 已带 `dca_plans`）；AI 确认卡不支持换标的（后端已返 `candidates`）；加仓后不自动展开对应平台；弹窗内无行内错误红字
   - **既有**：季度翻页真正翻错的是 7-31 / 12-31（已用 365 天枚举证明修复完整）；`max == min` 时 markLine 两标签重叠；`entityIconHtml()` 对 1×1 退化图仍显示色块；Bootstrap 徽标色与 `--color-expense` 的极轻微差异

@@ -530,3 +530,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **顺手修的既有 Bug**：`openHoldingModal()` 把 bootstrap `Modal` 实例当 DOM 传给 `investEnhanceSelects()`，`scope.querySelectorAll is not a function` 被 `await` 吞成 unhandled rejection，平台下拉从未被增强、平台列表也不会加载；改为传 `investHoldingModalEl()`。
 - **自测**：邮箱逻辑 28/28（含邮件结构、哈希、防刷、超次、502 作废）、搜索 17/17（真实东财 006679/600519/拼音 gzmt、≥0.95s 间隔、断网降级、401/400）、真实 Chrome CDP 浏览器 20/20（500ms 防抖实测 510~514ms、两只标的候选与回填、5002 断网实例 3.2s 降级 Mock、console 0 error）；`py_compile` 4/4、`node --check` 3/3。真实库零污染（基线 分类 32 / 账目 18 / 账户 11 / 余额 −4665.8 不变）。
 - **遗留**：`.env` 里没有 `MAIL_SERVER/MAIL_PORT/MAIL_USER/MAIL_PASSWORD`（实测只有 `ZHIPU_API_KEY`、`CLOUD_STORAGE_TYPE`），真实投递与「收信 + 1 分钟内二次发送被拦截」的活体验收未完成；补齐凭据后跑 `D:\Project\temp\test_v0134_send_real.py` 即自动补验。006679 本地 Mock 字典查不到，离线兜底用例改用 600519。
+
+## v0.13.4-DEV 补丁（搜索固定走 API + 静态资源版本串 0.13.4.1）
+
+- **用户反馈**：只输入标的中文名时搜不到（`m00564`）。排查后确认服务端与东财接口按名称搜索都正常（`贵州茅台`→600519、`广发道琼斯`→6 条基金、拼音 `gzmt`→600519），问题出在**前端可能仍被本地字典劫持**：`investSearchSecurities()` 开头就是 `if (investMockEnabled())`，只要浏览器 localStorage 里残留 `ai-accounting-invest-dev-mock="1"`（v0.13.3 调试时留下的），搜索就只读那份收录不全的字典，表现正是「打中文名没反应」。
+- **改法（按用户要求：搜索不靠字典）**：`investSearchSecurities()` 删掉 mock 分支，**永远**请求 `/api/invest/search`；本地字典只保留在后端断网兜底，以后单独做「自动补全标的资料」。`investMockSearch()` 保留但不再参与搜索链路。
+- **降级要说清楚**：`invest_eastmoney.search_with_fallback_info()` 返回 `(items, fallback, reason)`；路由在降级时回 `fallback:true` + `notice`，并记 `[v0.13.4][投资搜索][东财不可用，回退本地字典]` 警告；前端把 notice 渲染在候选框顶部（复用 `.invest-candidate.is-empty` 样式）。搜索异常不再静默隐藏候选框，改为显示「搜索失败，请检查网络后重试」。
+- **顺手修好的「刷新一次还是旧代码」**：SW 静态资源是 stale-while-revalidate，部署后第一次刷新必然先吃旧缓存。模板里的 `?v=` 全部 bump 到 `0.13.4.1`、两处 SW `CACHE_NAME` 改为 `ai-accounting-v0.13.4-r2`，URL 变了缓存键就失效，一次刷新即可拿到新 JS。
+- **自测**：搜索 21/21（新增 `fallback/notice` 断言）、真实 Chrome CDP **37/37**——新增「贵州茅台」「广发道琼斯」按名称搜索、候选命中；新增 `localStorage` 残留 `investMock=1` 时仍走 API 的回归用例；5002 断网实例候选框明确显示「已回退本地字典」；console 0 error。
+- **遗留不变**：`.env` 仍缺 `MAIL_*`（91 字节，只有 `ZHIPU_API_KEY`/`CLOUD_STORAGE_TYPE`），真实收信验收依旧 BLOCKED；QQ SMTP 465 连通性已单独验证（TLS 握手 1.35s），缺的只是凭据。
