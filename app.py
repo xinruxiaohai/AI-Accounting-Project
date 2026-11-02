@@ -274,6 +274,19 @@ def _password_strength_error(password):
     return None
 
 
+def _register_password_error(password):
+    """v0.13.5 注册专用强校验：至少 8 位，且必须同时含字母和数字（纯数字直接拒绝）。
+
+    刻意与 _password_strength_error 分开：改密 / 找回密码沿用旧规则，
+    登录侧完全不校验强度，保证老账号（如 123456）能正常登录。
+    """
+    if not isinstance(password, str) or len(password) < 8:
+        return "注册密码至少 8 位"
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"[0-9]", password):
+        return "注册密码不能是纯数字，需同时包含字母和数字"
+    return None
+
+
 # ---------------- v0.13.4：注册邮箱验证码（真实 SMTP + 数据库哈希） ----------------
 
 EMAIL_CODE_TTL_SECONDS = 300          # 验证码 5 分钟过期
@@ -433,7 +446,7 @@ def auth_register():
 
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return jsonify(error="请输入正确的邮箱"), 400
-    strength_error = _password_strength_error(password)
+    strength_error = _register_password_error(password)
     if strength_error is not None:
         return jsonify(error=strength_error), 400
     if len(phone) > 30:
@@ -3592,7 +3605,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.4-DEV"
+APP_VERSION_FALLBACK = "v0.13.5-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

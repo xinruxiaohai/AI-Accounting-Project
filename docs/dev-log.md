@@ -539,3 +539,14 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **顺手修好的「刷新一次还是旧代码」**：SW 静态资源是 stale-while-revalidate，部署后第一次刷新必然先吃旧缓存。模板里的 `?v=` 全部 bump 到 `0.13.4.1`、两处 SW `CACHE_NAME` 改为 `ai-accounting-v0.13.4-r2`，URL 变了缓存键就失效，一次刷新即可拿到新 JS。
 - **自测**：搜索 21/21（新增 `fallback/notice` 断言）、真实 Chrome CDP **37/37**——新增「贵州茅台」「广发道琼斯」按名称搜索、候选命中；新增 `localStorage` 残留 `investMock=1` 时仍走 API 的回归用例；5002 断网实例候选框明确显示「已回退本地字典」；console 0 error。
 - **遗留不变**：`.env` 仍缺 `MAIL_*`（91 字节，只有 `ZHIPU_API_KEY`/`CLOUD_STORAGE_TYPE`），真实收信验收依旧 BLOCKED；QQ SMTP 465 连通性已单独验证（TLS 握手 1.35s），缺的只是凭据。
+
+## v0.13.5-DEV（注册安全校验与登录页美化）
+
+- **校验隔离（本轮死线）**：登录与注册共用同一张卡片、同一个 `submitGate()`，v0.12.3 起密码强度是在提交前统一拦的——**只要加上注册规则，老账号（纯数字 `123456`）就会被一起拒掉**。做法是把强度校验从提交主链路里拆出去：`submitGate()` 只剩「账号密码非空」这一条共同前置，注册才额外跑 `validateRegisterFields()` + 滑块闸门，登录分支只 `clearFieldErrors()`。后端同样拆成两个函数：`_register_password_error()`（≥8 位且含字母和数字）只服务 `/api/auth/register`，`_password_strength_error()`（6 位 + 两类字符）继续供改密与找回密码——登录接口**从头到尾没有强度判断**。
+- **注册强校验**：密码正则 `registerPasswordError()` 分三档提示（空 / 不足 8 位 / 缺字母或缺数字），文案「密码不能是纯数字，需同时包含字母和数字」直接点出纯数字场景；输入时实时校验、`is-invalid` 红框 + 字段下方红字，一次只提示一条，避免三行红字糊在脸上。
+- **确认密码**：`#auth-confirm-password` 放在密码正下方，`.auth-confirm` 默认 `hidden`，只在注册视图显示；切到登录会**清空**它（否则下次切回注册会带着上一个人的残留值）。两次不一致时红字「两次输入的密码不一致」并 `preventDefault` 阻止提交。
+- **滑块闸门**：解锁状态是 `sliderUnlocked`，此前只管视觉。新增 `syncRegisterLock()` 统一收口——注册且未解锁时给「发送验证码」「注册并进入」都加 `is-locked` + `disabled=true`，滑块下常驻提示「滑动解锁后，才能发送验证码和提交注册」，解锁即恢复。**踩坑**：发送验证码按钮有 60 秒倒计时，倒计时逻辑自己会写 `button.disabled=false`，直接和闸门抢同一个属性会把锁冲出个洞；改用 `data-counting` 标记倒计时态，disabled 的最终值只由 `syncRegisterLock()` 算（发送成功 / 发送失败 / 倒计时结束三处都改成先改标记再同步）。`sendEmailCode()` 入口另加一道保险，未解锁直接弹 Toast 不发请求。
+- **UI 深度美化（Glassmorphism）**：`.auth-card` 从纯白改为 `rgba(255,255,255,0.7)` + `backdrop-filter: blur(18px) saturate(180%)` + 20px 圆角 + 三层柔和外阴影（近距离描边 + 中距离扩散 + 远距离投影），深色模式对应 `rgba(19,28,43,0.66)`，靠 `[data-theme="dark"]` 覆盖而不用媒体查询，跟随应用内主题切换。输入框圆角 10px、聚焦时 `box-shadow` 三层发光（内圈 3px 蓝雾 + 外圈 16px 柔光）并配 `transition`，`.is-invalid` 换成红框红雾。滑块 46px 高、轨道弱化灰底、已滑部分渐变蓝、圆钮渐变 + hover 提亮。主按钮「注册并进入」`linear-gradient(135deg,#4f8cff,#2563eb,#1d4ed8)`，hover `brightness(1.09)` + 上移 1px，`disabled`/`is-locked` 统一灰化降饱和。小屏 `@media (max-width:430px)` 卡片 `max-height: calc(100vh - 28px)` + `overflow-y:auto`，保证不贴边、内容多时内部滚动而不是把按钮顶出屏幕。
+- **文案**：昵称 placeholder 改「请输入您的昵称（选填）」；密码 placeholder 按模式切换（登录「请输入密码」/注册「至少 8 位，需含字母和数字」），让规则在输入前就可见，而不是提交后才红。
+- **自测**：后端逻辑 11/11（8 位纯数字、纯字母、7 位均 400；`abc12345` 201 且响应不含 `password_hash`；老账号 `123456` 登录 200；改密 `abc123` 仍 200 证明旧规则未被误伤；空密码登录 401 且报错文案里没有强度字样）；真实 Chrome CDP **36/36**——登录 Tab 提交按钮默认可用且 `123456` 能进应用、注册 Tab 两按钮置灰、未解锁点发送实发 0 请求、纯数字/不一致各自红字且 0 请求、滑块解锁后恢复、解锁且合规后注册请求真实发出 1 次、深色卡片 alpha<1 且正文浅色可读、console 0 error；`py_compile` / `node --check` 全过。真实库零污染（验收用户建在临时库，浏览器测试用户结束时删除）。
+- **缓存**：`?v=0.13.4.1` → `?v=0.13.5`（index 6 处、admin 3 处），两处 SW `CACHE_NAME` → `ai-accounting-v0.13.5-r1`，`APP_VERSION_FALLBACK` → `v0.13.5-DEV`。

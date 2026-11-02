@@ -131,13 +131,19 @@
           '<label class="auth-label">密码' +
             '<input id="auth-password" class="form-control" type="password" autocomplete="current-password" placeholder="至少 6 位">' +
           "</label>" +
+          '<p class="auth-field-error" id="auth-password-error" hidden></p>' +
+          // v0.13.5：确认密码只在注册视图出现，登录不渲染这一段（避免影响老用户登录）
+          '<label class="auth-label auth-confirm" hidden>确认密码' +
+            '<input id="auth-confirm-password" class="form-control" type="password" autocomplete="new-password" placeholder="再输入一次密码">' +
+          "</label>" +
+          '<p class="auth-field-error" id="auth-confirm-error" hidden></p>' +
           '<div class="auth-forgot"><button type="button" id="auth-forgot-btn">忘记密码？</button></div>' +
           '<label class="auth-label auth-phone" hidden>手机号（可选）' +
             '<input id="auth-phone" class="form-control" type="tel" autocomplete="tel" placeholder="用于以后找回密码">' +
           "</label>" +
           '<div class="auth-register-extra" hidden>' +
             '<label class="auth-label">昵称' +
-              '<input id="auth-nickname" class="form-control" type="text" maxlength="20" placeholder="侧边栏显示的名字（不填就用邮箱前缀）">' +
+              '<input id="auth-nickname" class="form-control" type="text" maxlength="20" placeholder="请输入您的昵称（选填）">' +
             "</label>" +
             '<label class="auth-label">邮箱验证码' +
               '<span class="auth-code-row">' +
@@ -150,6 +156,7 @@
               '<span class="auth-slider-text" id="auth-slider-text">按住滑块，拖到最右侧解锁</span>' +
               '<span class="auth-slider-knob" id="auth-slider-knob" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">→</span>' +
             "</div>" +
+            '<p class="auth-lock-hint" id="auth-lock-hint">滑动解锁后，才能发送验证码和提交注册</p>' +
           "</div>" +
           '<p class="auth-error" id="auth-error" hidden></p>' +
           '<button class="btn btn-primary w-100 auth-submit" type="submit" id="auth-submit">登录</button>' +
@@ -171,6 +178,30 @@
       sendCodeButton.addEventListener("click", sendEmailCode);
     }
     setupSlider();
+    // v0.13.5：注册视图的实时反馈——密码强度/二次确认不一致即时变红
+    var passwordField = gateElement.querySelector("#auth-password");
+    if (passwordField) {
+      passwordField.addEventListener("input", function () {
+        if (gateMode !== "register") {
+          return;
+        }
+        var message = this.value ? registerPasswordError(this.value) : "";
+        setFieldError(this, gateElement.querySelector("#auth-password-error"), message);
+        syncConfirmHint();
+      });
+    }
+    var confirmField = gateElement.querySelector("#auth-confirm-password");
+    if (confirmField) {
+      confirmField.addEventListener("input", function () {
+        if (gateMode !== "register") {
+          return;
+        }
+        var passwordValue = gateElement.querySelector("#auth-password").value;
+        var message = this.value && this.value !== passwordValue ? "两次输入的密码不一致" : "";
+        setFieldError(this, gateElement.querySelector("#auth-confirm-error"), message);
+      });
+    }
+    syncRegisterLock();
     var forgotButton = gateElement.querySelector("#auth-forgot-btn");
     if (forgotButton) {
       forgotButton.addEventListener("click", openForgotModal);
@@ -191,7 +222,22 @@
     if (extra) {
       extra.hidden = gateMode !== "register";
     }
+    // v0.13.5：确认密码只在注册视图显示；切回登录时清空，绝不参与登录校验
+    var confirmLabel = gateElement.querySelector(".auth-confirm");
+    if (confirmLabel) {
+      confirmLabel.hidden = gateMode !== "register";
+    }
+    var confirmInput = gateElement.querySelector("#auth-confirm-password");
+    if (confirmInput && gateMode !== "register") {
+      confirmInput.value = "";
+    }
+    clearFieldErrors();
     resetSlider();
+    var passwordInput = gateElement.querySelector("#auth-password");
+    if (passwordInput) {
+      passwordInput.placeholder = gateMode === "register" ? "至少 8 位，需含字母和数字" : "请输入密码";
+    }
+    syncRegisterLock();
     var forgotBox = gateElement.querySelector(".auth-forgot");
     if (forgotBox) {
       forgotBox.hidden = gateMode !== "login";
@@ -215,6 +261,111 @@
     errorElement.hidden = !message;
   }
 
+  /* ---------------- v0.13.5：注册专属校验（登录一律不碰） ---------------- */
+
+  // 注册密码规则：至少 8 位，且必须同时含字母和数字（纯数字直接拒绝）。
+  function registerPasswordError(password) {
+    if (!password) {
+      return "请设置密码";
+    }
+    if (password.length < 8) {
+      return "密码至少 8 位";
+    }
+    if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+      return "密码不能是纯数字，需同时包含字母和数字";
+    }
+    return "";
+  }
+
+  function setFieldError(input, errorElement, message) {
+    if (input) {
+      input.classList.toggle("is-invalid", Boolean(message));
+    }
+    if (errorElement) {
+      errorElement.textContent = message || "";
+      errorElement.hidden = !message;
+    }
+  }
+
+  function clearFieldErrors() {
+    if (!gateElement) {
+      return;
+    }
+    setFieldError(gateElement.querySelector("#auth-password"), gateElement.querySelector("#auth-password-error"), "");
+    setFieldError(
+      gateElement.querySelector("#auth-confirm-password"),
+      gateElement.querySelector("#auth-confirm-error"),
+      ""
+    );
+  }
+
+  // 滑块未解锁 → 发送验证码 / 注册并进入 都置灰并拦截（仅注册视图生效）。
+  function syncRegisterLock() {
+    if (!gateElement) {
+      return;
+    }
+    var locked = gateMode === "register" && !sliderUnlocked;
+    var sendButton = gateElement.querySelector("#auth-send-code");
+    var submitButton = gateElement.querySelector("#auth-submit");
+    var hint = gateElement.querySelector("#auth-lock-hint");
+    if (sendButton) {
+      var counting = sendButton.getAttribute("data-counting") === "1";
+      sendButton.classList.toggle("is-locked", locked);
+      sendButton.disabled = locked || counting;
+      sendButton.setAttribute("aria-disabled", locked ? "true" : "false");
+    }
+    if (submitButton) {
+      submitButton.classList.toggle("is-locked", locked);
+      submitButton.disabled = locked;
+      submitButton.setAttribute("aria-disabled", locked ? "true" : "false");
+    }
+    if (hint) {
+      hint.hidden = !locked;
+    }
+  }
+
+  // 密码改动后同步刷新「确认密码」的红字（只在用户已经填过时提示）
+  function syncConfirmHint() {
+    if (!gateElement) {
+      return;
+    }
+    var confirmInput = gateElement.querySelector("#auth-confirm-password");
+    if (!confirmInput) {
+      return;
+    }
+    var passwordValue = gateElement.querySelector("#auth-password").value;
+    var message = confirmInput.value && confirmInput.value !== passwordValue ? "两次输入的密码不一致" : "";
+    setFieldError(confirmInput, gateElement.querySelector("#auth-confirm-error"), message);
+  }
+
+  function validateRegisterFields() {
+    if (!gateElement) {
+      return true;
+    }
+    var passwordInput = gateElement.querySelector("#auth-password");
+    var confirmInput = gateElement.querySelector("#auth-confirm-password");
+    var password = passwordInput ? passwordInput.value : "";
+    var confirm = confirmInput ? confirmInput.value : "";
+    var passwordError = registerPasswordError(password);
+    setFieldError(passwordInput, gateElement.querySelector("#auth-password-error"), passwordError);
+    var confirmError = "";
+    if (!confirm) {
+      confirmError = "请再输入一次密码";
+    } else if (confirm !== password) {
+      confirmError = "两次输入的密码不一致";
+    }
+    setFieldError(confirmInput, gateElement.querySelector("#auth-confirm-error"), confirmError);
+    if (passwordError) {
+      gateError(passwordError);
+      return false;
+    }
+    if (confirmError) {
+      gateError(confirmError);
+      return false;
+    }
+    return true;
+  }
+
   async function submitGate(event) {
     event.preventDefault();
     if (!gateElement) {
@@ -231,29 +382,22 @@
       gateError("邮箱和密码都要填");
       return;
     }
-    // v0.12.3：强密码只在注册/改密时校验；登录必须放行管理员这类历史短密码，
-    // 否则管理员初始密码会被前端直接拦死（后端登录也不做强度校验）
+    // v0.13.5：强密码 + 二次确认 + 滑块只看注册视图。
+    // 切到【登录】时这段完全不执行——老账号（如 123456）只要非空就能发请求。
     if (gateMode === "register") {
-      if (password.length < 6) {
-        gateError("密码至少 6 位");
+      if (!validateRegisterFields()) {
         return;
       }
-      var kinds = 0;
-      if (/[0-9]/.test(password)) { kinds += 1; }
-      if (/[A-Za-z]/.test(password)) { kinds += 1; }
-      if (/[^0-9A-Za-z]/.test(password)) { kinds += 1; }
-      if (kinds < 2) {
-        gateError("密码需包含数字、字母、标点中的至少两种");
-        return;
-      }
-    }
-
-    var code = "";
-    if (gateMode === "register") {
       if (!sliderUnlocked) {
         gateError("请先按住滑块拖到最右侧完成人机校验");
         return;
       }
+    } else {
+      clearFieldErrors();
+    }
+
+    var code = "";
+    if (gateMode === "register") {
       var codeInput = gateElement.querySelector("#auth-code");
       code = codeInput ? codeInput.value.trim() : "";
       if (!/^\d{6}$/.test(code)) {
@@ -291,8 +435,8 @@
     } catch (error) {
       gateError((error && error.message) || "网络异常，请重试");
     } finally {
-      button.disabled = false;
       button.textContent = gateMode === "register" ? "注册并进入" : "登录";
+      syncRegisterLock();
     }
   }
 
@@ -361,6 +505,7 @@
           text.classList.add("is-done");
         }
         track.classList.add("is-unlocked");
+        syncRegisterLock();
       } else {
         resetSlider();
       }
@@ -420,6 +565,7 @@
     if (fill) { fill.style.width = "0%"; }
     if (text) { text.textContent = "按住滑块，拖到最右侧解锁"; text.classList.remove("is-done"); }
     if (track) { track.classList.remove("is-unlocked", "is-dragging"); }
+    syncRegisterLock();
   }
 
   async function sendEmailCode() {
@@ -432,6 +578,12 @@
       gateError("先填邮箱再获取验证码");
       return;
     }
+    // v0.13.5：注册视图必须先解锁滑块，才允许发送验证码
+    if (gateMode === "register" && !sliderUnlocked) {
+      gateError("请先按住滑块拖到最右侧完成人机校验");
+      return;
+    }
+    button.setAttribute("data-counting", "1");
     button.disabled = true;
     button.textContent = "发送中…";
     gateError("");
@@ -446,8 +598,9 @@
       });
       if (!response.ok) {
         gateError(data.error || "验证码发送失败");
-        button.disabled = false;
+        button.setAttribute("data-counting", "0");
         button.textContent = "获取验证码";
+        syncRegisterLock();
         return;
       }
       // 真实发信（已配置 SMTP）或降级控制台（未配置），统一倒计时 60 秒
@@ -457,8 +610,9 @@
         seconds -= 1;
         if (seconds <= 0) {
           window.clearInterval(timer);
-          button.disabled = false;
+          button.setAttribute("data-counting", "0");
           button.textContent = "获取验证码";
+          syncRegisterLock();
         } else {
           button.textContent = seconds + "s 后重发";
         }
@@ -471,8 +625,9 @@
       );
     } catch (error) {
       gateError("网络异常，验证码没发出去");
-      button.disabled = false;
+      button.setAttribute("data-counting", "0");
       button.textContent = "获取验证码";
+      syncRegisterLock();
     }
   }
 
