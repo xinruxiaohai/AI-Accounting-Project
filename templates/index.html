@@ -16,7 +16,7 @@
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.13.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.4">
 </head>
 <body>
 
@@ -103,7 +103,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.13.3-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.13.4-DEV</div>
     </div>
   </aside>
 
@@ -1565,7 +1565,7 @@
           <div class="mb-3 invest-search-wrap">
             <label class="form-label" for="holding-ticker">标的代码</label>
             <input id="holding-ticker" class="form-control" type="text" maxlength="20"
-                   placeholder="输入代码或名称，停手 300ms 自动搜索" autocomplete="off">
+                   placeholder="输入代码或名称，停手 0.5 秒自动搜索" autocomplete="off">
             <!-- 候选下拉：只加 .show 类，不重建外层 DOM -->
             <div class="invest-candidates" id="holding-candidates" role="listbox" aria-label="标的候选"></div>
           </div>
@@ -2027,13 +2027,13 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.13.3"></script>
-<script src="/static/access-guard.js?v=0.13.3"></script>
+<script src="/static/auth-v012.js?v=0.13.4"></script>
+<script src="/static/access-guard.js?v=0.13.4"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.13.3"></script>
-<script src="/static/charts-v013.js?v=0.13.3"></script>
+<script src="/static/script.js?v=0.13.4"></script>
+<script src="/static/charts-v013.js?v=0.13.4"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.13.3"></script>
+<script src="/static/invest-v0133.js?v=0.13.4"></script>
 
 </body>
 </html>

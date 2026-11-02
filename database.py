@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import sqlite3
+import time
 from pathlib import Path
 
 # 数据库文件固定在 database.py 同目录下，这样不管从哪个目录启动 app.py 都找得到
@@ -1265,6 +1266,120 @@ def _migrate_investment_schema(conn, accounts_need_type=False):
     print("[v0.13.3] 投资体系迁移完成：platforms=%d" % platform_count, flush=True)
 
 
+# ---------------- 邮箱验证码（v0.13.4） ----------------
+
+EMAIL_CODE_MAX_ATTEMPTS = 5
+
+
+def _migrate_email_verification(conn):
+    """v0.13.4 邮箱验证码迁移（幂等）：建 email_verifications 表 + 索引。
+
+    验证码**只存哈希**（永不存明文，加盐哈希在 app.py 侧计算）、5 分钟过期、
+    5 次尝试上限。expires_at / created_at 存 epoch 秒（REAL），便于与 time.time() 直接比较。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_verifications (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            email      TEXT    NOT NULL,
+            code_hash  TEXT    NOT NULL,
+            purpose    TEXT    NOT NULL DEFAULT 'register',
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            expires_at REAL    NOT NULL,
+            created_at REAL    NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_email_verifications_email_purpose "
+        "ON email_verifications(email, purpose)"
+    )
+
+
+def save_email_code(email, code_hash, purpose, ttl_seconds):
+    """写 / 覆盖一条验证码（同一 email+purpose 只保留最新一条），返回 created_at（epoch 秒）。"""
+    now = time.time()
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM email_verifications WHERE email = ? AND purpose = ?",
+                (email, purpose),
+            )
+            conn.execute(
+                "INSERT INTO email_verifications "
+                "(email, code_hash, purpose, attempts, expires_at, created_at) "
+                "VALUES (?, ?, ?, 0, ?, ?)",
+                (email, code_hash, purpose, now + ttl_seconds, now),
+            )
+    finally:
+        conn.close()
+    return now
+
+
+def get_email_code(email, purpose):
+    """取该 email+purpose 的最新验证码记录，无则 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, email, code_hash, purpose, attempts, expires_at, created_at "
+            "  FROM email_verifications WHERE email = ? AND purpose = ? "
+            " ORDER BY id DESC LIMIT 1",
+            (email, purpose),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def email_code_recent(email, purpose, interval_seconds):
+    """最近 interval_seconds 秒内是否已发过验证码（防刷）。"""
+    row = get_email_code(email, purpose)
+    if row is None:
+        return False
+    return (time.time() - row["created_at"]) < interval_seconds
+
+
+def register_email_code_attempt(email, purpose):
+    """验证失败时记一次尝试；达到上限则删除记录（作废，须重新发码）。返回本次累计次数。"""
+    conn = get_conn()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT id, attempts FROM email_verifications "
+                " WHERE email = ? AND purpose = ? ORDER BY id DESC LIMIT 1",
+                (email, purpose),
+            ).fetchone()
+            if row is None:
+                return 0
+            attempts = row["attempts"] + 1
+            if attempts >= EMAIL_CODE_MAX_ATTEMPTS:
+                conn.execute(
+                    "DELETE FROM email_verifications WHERE id = ?", (row["id"],)
+                )
+            else:
+                conn.execute(
+                    "UPDATE email_verifications SET attempts = ? WHERE id = ?",
+                    (attempts, row["id"]),
+                )
+            return attempts
+    finally:
+        conn.close()
+
+
+def consume_email_code(email, purpose):
+    """验证成功 / 作废时删除记录（标记失效）。"""
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM email_verifications WHERE email = ? AND purpose = ?",
+                (email, purpose),
+            )
+    finally:
+        conn.close()
+
+
 def init_db():
     """建表 + 兼容旧库升级。反复启动不会报错，旧库也不会丢数据。"""
     conn = get_conn()
@@ -1628,6 +1743,10 @@ def init_db():
         # 同样独占一个 with conn: 块（SQLite DDL 隐式提交）。
         with conn:
             _migrate_investment_schema(conn, accounts_need_type=accounts_need_type)
+
+        # v0.13.4：邮箱验证码表（幂等）。挂在投资迁移之后、第二段 DML 之前。
+        with conn:
+            _migrate_email_verification(conn)
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动

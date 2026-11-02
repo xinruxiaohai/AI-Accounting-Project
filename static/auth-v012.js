@@ -450,7 +450,7 @@
         button.textContent = "获取验证码";
         return;
       }
-      // Mock 模式：验证码打印在后端控制台，这里只给提示，倒计时 60 秒
+      // 真实发信（已配置 SMTP）或降级控制台（未配置），统一倒计时 60 秒
       var seconds = 60;
       button.textContent = seconds + "s 后重发";
       var timer = window.setInterval(function () {
@@ -464,7 +464,11 @@
         }
       }, 1000);
       gateError("");
-      showFunnyToast("验证码已发送：当前是 Mock 模式，请在后端控制台查看 6 位数字");
+      showFunnyToast(
+        data && data.delivered
+          ? "验证码已发送到邮箱，5 分钟内有效"
+          : "验证码已生成：邮箱服务未配置，请在后端控制台查看 6 位数字"
+      );
     } catch (error) {
       gateError("网络异常，验证码没发出去");
       button.disabled = false;
@@ -1559,7 +1563,12 @@
           button.textContent = remain + "s 后重发";
         }
       }, 1000);
-      forgotMessage("验证码已生成（Mock：请看后端控制台）", true);
+      forgotMessage(
+        data && data.delivered
+          ? "验证码已发送到邮箱，5 分钟内有效"
+          : "验证码已生成：邮箱服务未配置，请在后端控制台查看",
+        true
+      );
     } catch (error) {
       forgotMessage((error && error.message) || "网络异常，请重试");
       button.disabled = false;

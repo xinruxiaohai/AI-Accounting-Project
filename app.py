@@ -2,11 +2,15 @@ import base64
 import datetime
 import difflib
 import functools
+import hashlib
+import hmac
 import io
 import json
 import os
 import random
 import re
+import secrets
+import smtplib
 import subprocess
 import time
 import uuid
@@ -22,10 +26,13 @@ from flask import (
     send_from_directory,
     stream_with_context,
 )
+from dotenv import load_dotenv
+from email.message import EmailMessage
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import ai_service
 import database
+import invest_eastmoney
 import invest_mock
 
 app = Flask(__name__)
@@ -42,6 +49,10 @@ ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(AVATAR_DIR, exist_ok=True)
+
+# .env 必须在这里显式加载：MAIL_* 等配置要在读取前就位，
+# 不依赖 ai_service 导入时的副作用（否则调整 import 顺序就会静默变回未配置）
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
 
 # 启动就建表 / 升级表结构。表已存在时 CREATE TABLE 会跳过，缺列时自动补列
 database.init_db()
@@ -140,6 +151,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/auth/register",
     "/api/auth/sms-login",
     "/api/auth/send-code",
+    "/api/auth/verify-code",
     "/api/auth/reset-password",
     "/api/access/config",
     "/api/access/verify",
@@ -262,40 +274,107 @@ def _password_strength_error(password):
     return None
 
 
-# ---------------- v0.12.1：注册邮箱验证码（Mock 模式） ----------------
+# ---------------- v0.13.4：注册邮箱验证码（真实 SMTP + 数据库哈希） ----------------
 
-# 验证码只存在进程内存里：5 分钟过期、用完即删；重启后全部失效（Mock 模式足够）
-EMAIL_CODE_TTL_SECONDS = 300
-_EMAIL_CODES = {}
+EMAIL_CODE_TTL_SECONDS = 300          # 验证码 5 分钟过期
+EMAIL_SEND_INTERVAL_SECONDS = 60      # 同一邮箱同一用途 1 分钟只能发一次（防刷）
+EMAIL_CODE_MAX_ATTEMPTS = 5           # 尝试上限，超了作废须重新发
+
+MAIL_SERVER = (os.getenv("MAIL_SERVER") or "smtp.qq.com").strip()
+try:
+    MAIL_PORT = int(os.getenv("MAIL_PORT") or 465)
+except ValueError:
+    MAIL_PORT = 465
+MAIL_USER = (os.getenv("MAIL_USER") or "").strip()
+MAIL_PASSWORD = (os.getenv("MAIL_PASSWORD") or "").strip()
+# 是否真正配置了发信账号：决定「未配置→控制台兜底」还是「配置了却发不出去→报错」
+MAIL_CONFIGURED = bool(MAIL_USER and MAIL_PASSWORD)
+
+# 验证码哈希加盐（pepper）：即使 DB 泄漏，也反推不出 6 位明文码
+_EMAIL_HASH_PEPPER = JWT_SECRET
+
+
+def _hash_email_code(code):
+    """验证码只存哈希，永不存明文。"""
+    return hashlib.sha256(
+        ("%s:%s" % (_EMAIL_HASH_PEPPER, code)).encode("utf-8")
+    ).hexdigest()
+
+
+def _build_verification_email(email, code, purpose="register"):
+    """拼装验证码邮件：纯文本 + HTML 双版本（HTML 用于邮件客户端渲染）。
+
+    单独抽出来是为了不发信也能自测邮件结构（真实发信依赖 SMTP 凭据）。
+    """
+    action = "注册" if purpose == "register" else "找回密码"
+    msg = EmailMessage()
+    msg["Subject"] = "【AI记账】%s验证码" % action
+    msg["From"] = MAIL_USER
+    msg["To"] = email
+    msg.set_content(
+        "您的%s验证码是 %s，%d 分钟内有效，请勿泄露给他人。"
+        % (action, code, EMAIL_CODE_TTL_SECONDS // 60)
+    )
+    msg.add_alternative(
+        '<div style="font-family:sans-serif;max-width:480px;margin:0 auto">'
+        "<h2>AI 记账 · %s验证码</h2>"
+        "<p>您的验证码是：</p>"
+        '<p style="font-size:28px;font-weight:bold;letter-spacing:6px">%s</p>'
+        "<p>%d 分钟内有效，请勿泄露给他人。若非本人操作请忽略本邮件。</p></div>"
+        % (action, code, EMAIL_CODE_TTL_SECONDS // 60),
+        subtype="html",
+    )
+    return msg
+
+
+def _send_verification_email(email, code, purpose):
+    """用 QQ 邮箱 SMTP(465, SSL) 发 HTML 验证码邮件。返回 (是否发出, 错误信息)。
+
+    MAIL_USER / MAIL_PASSWORD 未配置时降级为控制台打印（便于开发期自测），前端不回传明文。
+    """
+    if not MAIL_CONFIGURED:
+        print(
+            "[v0.13.4][邮箱验证码][未配置SMTP，仅控制台] %s -> %s（%d 秒内有效，用途=%s）"
+            % (email, code, EMAIL_CODE_TTL_SECONDS, purpose),
+            flush=True,
+        )
+        return False, "邮箱服务未配置（缺 MAIL_USER/MAIL_PASSWORD）"
+    try:
+        msg = _build_verification_email(email, code, purpose)
+        with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            server.login(MAIL_USER, MAIL_PASSWORD)
+            server.send_message(msg)
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - 由调用方决定如何处置（已配置却失败会作废验证码并回 502）
+        return False, str(exc)
 
 
 def _verify_email_code(email, code, purpose="register"):
     """校验邮箱验证码并一次性消费，返回 (是否通过, 错误信息)。
 
+    v0.13.4：改为数据库存储（哈希值），校验过期 / 次数超限 / 哈希匹配，成功即失效。
     v0.12.2：验证码带用途（register 注册 / reset 找回密码），拿注册码去改密会被拒绝。
     """
-    entry = _EMAIL_CODES.get(email)
-    now_ts = time.time()
-    if not entry:
+    row = database.get_email_code(email, purpose)
+    if row is None:
         return False, "请先获取邮箱验证码"
-    saved_code, expires_at, saved_purpose = entry
-    if saved_purpose != purpose:
-        return False, "验证码用途不匹配，请重新获取"
-    if now_ts > expires_at:
-        _EMAIL_CODES.pop(email, None)
+    if time.time() > row["expires_at"]:
+        database.consume_email_code(email, purpose)
         return False, "验证码已过期，请重新获取"
-    if not code or code != saved_code:
+    if not code or not isinstance(code, str):
         return False, "验证码不正确"
-    _EMAIL_CODES.pop(email, None)
+    if not hmac.compare_digest(_hash_email_code(code.strip()), row["code_hash"]):
+        attempts = database.register_email_code_attempt(email, purpose)
+        if attempts >= EMAIL_CODE_MAX_ATTEMPTS:
+            return False, "验证码错误次数过多，请重新获取"
+        return False, "验证码不正确"
+    database.consume_email_code(email, purpose)
     return True, None
 
 
 @app.route("/api/auth/send-code", methods=["POST"])
 def auth_send_code():
-    """注册验证码（Mock）：6 位数字只打印到后端控制台，前端不返回明文。
-
-    真实发件逻辑留在这里扩展：接邮件服务商后把 print 换成发送即可。
-    """
+    """发送邮箱验证码（真实 SMTP）：6 位随机码，存哈希，5 分钟有效，1 分钟防刷。"""
     data = request.get_json(silent=True) or {}
     email = _normalize_email(data.get("email"))
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
@@ -307,16 +386,41 @@ def auth_send_code():
     if purpose == "reset" and not exists:
         return jsonify(error="该邮箱还没有注册"), 404
 
-    code = "%06d" % random.SystemRandom().randint(0, 999999)
-    purpose = "reset" if (data.get("purpose") or "").strip() == "reset" else "register"
-    _EMAIL_CODES[email] = (code, time.time() + EMAIL_CODE_TTL_SECONDS, purpose)
-    # Mock 发件：当前只打印控制台；接真实邮件服务后这里替换成发送逻辑
-    print(
-        "[v0.12.1][邮箱验证码] %s -> %s（%d 秒内有效）"
-        % (email, code, EMAIL_CODE_TTL_SECONDS),
-        flush=True,
+    # 防刷：同一邮箱同一用途 1 分钟内只能发一次
+    if database.email_code_recent(email, purpose, EMAIL_SEND_INTERVAL_SECONDS):
+        return jsonify(error="发送太频繁，请 1 分钟后再试"), 429
+
+    code = "%06d" % secrets.randbelow(1000000)
+    database.save_email_code(email, _hash_email_code(code), purpose, EMAIL_CODE_TTL_SECONDS)
+    delivered, send_error = _send_verification_email(email, code, purpose)
+    if not delivered and MAIL_CONFIGURED:
+        # 配了 SMTP 却发不出去：别留一条用户永远收不到的码，先作废再如实报错
+        database.consume_email_code(email, purpose)
+        app.logger.warning("[v0.13.4][邮箱验证码][发送失败] %s: %s", email, send_error)
+        return jsonify(error="验证码邮件发送失败，请稍后重试"), 502
+    return jsonify(
+        ok=True,
+        expires_in=EMAIL_CODE_TTL_SECONDS,
+        delivered=delivered,
+        purpose=purpose,
     )
-    return jsonify(ok=True, expires_in=EMAIL_CODE_TTL_SECONDS, mock=True, purpose=purpose)
+
+
+@app.route("/api/auth/verify-code", methods=["POST"])
+def auth_verify_code():
+    """校验邮箱验证码：过期 / 次数超限 / 哈希匹配，成功即失效（一次性）。"""
+    data = request.get_json(silent=True) or {}
+    email = _normalize_email(data.get("email"))
+    code = (data.get("code") or "").strip() if isinstance(data.get("code"), str) else ""
+    purpose = "reset" if (data.get("purpose") or "").strip() == "reset" else "register"
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        return jsonify(error="请输入正确的邮箱"), 400
+    if not code:
+        return jsonify(error="请输入验证码"), 400
+    code_ok, code_error = _verify_email_code(email, code, purpose)
+    if not code_ok:
+        return jsonify(error=code_error), 400
+    return jsonify(ok=True, message="验证码校验通过")
 
 
 @app.route("/api/auth/register", methods=["POST"])
@@ -1244,7 +1348,7 @@ def create_record_by_ai():
                 msg="请确认建仓信息",
                 message="请确认建仓信息",
                 parsed=parsed,
-                candidates=invest_mock.search_securities(
+                candidates=invest_eastmoney.search_or_fallback(
                     parsed.get("invest_name") or "", 4
                 ),
             ),
@@ -1343,7 +1447,7 @@ def create_record_by_ai_stream():
                     "msg": "请确认建仓信息",
                     "message": "请确认建仓信息",
                     "parsed": parsed,
-                    "candidates": invest_mock.search_securities(
+                    "candidates": invest_eastmoney.search_or_fallback(
                         parsed.get("invest_name") or "", 4
                     ),
                 })
@@ -2733,10 +2837,14 @@ def _to_number(value, default=0.0):
         return default
 
 
+# 资产类型 -> 中文品类：投资页选中标的时的展示文案（股票 / 基金 / 黄金）
+_INVEST_CATEGORY_LABELS = {"stock": "股票", "fund": "基金", "gold": "黄金", "bond": "债券"}
+
+
 @app.route("/api/invest/search", methods=["GET"])
 @login_required
 def invest_search():
-    """标的代码 / 名称搜索（Mock 行情）。
+    """标的代码 / 名称 / 拼音搜索（东方财富全市场，失败自动降级本地 Mock）。
 
     `?keyword=005827&limit=10` → 200 {total, items:[{ticker,name,asset_type,price,source}]}
     未命中返回 {total: 0, items: []}（**不是 404**），前端据此显示「没有找到匹配的标的」。
@@ -2753,8 +2861,23 @@ def invest_search():
     if limit <= 0 or limit > 50:
         limit = 10
 
-    items = invest_mock.search_securities(keyword, limit)
-    return jsonify(total=len(items), items=items)
+    items = invest_eastmoney.search_or_fallback(keyword, limit)
+    # 两种字段名一起下发：code/name/category/type 是新契约，
+    # ticker/asset_type/price 是 v0.13.3 前端已在用的旧字段，改契约要同时改前端，没到那一步。
+    out = [
+        {
+            "code": it.get("ticker"),
+            "name": it.get("name"),
+            "category": _INVEST_CATEGORY_LABELS.get(it.get("asset_type"), "其他"),
+            "type": it.get("asset_type"),
+            "ticker": it.get("ticker"),
+            "asset_type": it.get("asset_type"),
+            "price": it.get("price", 0),
+            "source": it.get("source"),
+        }
+        for it in items
+    ]
+    return jsonify(total=len(out), items=out)
 
 
 @app.route("/api/invest/board", methods=["GET"])
@@ -3463,7 +3586,7 @@ def serve_favicon():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.3-DEV"
+APP_VERSION_FALLBACK = "v0.13.4-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

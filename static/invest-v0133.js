@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * AI记账管家 · 投资看板（v0.13.3-DEV）
+ * AI记账管家 · 投资看板（v0.13.4-DEV）
  *
  * 为什么独立成文件：script.js 已经 1.1 万行，投资看板是一块完整的子模块，
  * 沿用 charts-v013.js 的先例（按功能独立文件 + window.* 暴露入口）。
@@ -23,7 +23,7 @@
 /* ==================== 常量 ==================== */
 
 // 代码搜索防抖时长（与 script.js 的 SEARCH_DEBOUNCE_MS 风格一致）
-const INVEST_SEARCH_DEBOUNCE_MS = 300;
+const INVEST_SEARCH_DEBOUNCE_MS = 500;
 // 少于 1 个字不触发搜索
 const INVEST_SEARCH_MIN_LEN = 1;
 // 候选下拉最多 8 条（HANDOFF 交互纪律）
@@ -1101,7 +1101,8 @@ async function openHoldingModal() {
   investFillSourceSelect();
   modal.show();
   investFillPlatformSelect([]);
-  investEnhanceSelects(modal);
+  // 这里必须传 DOM 元素：modal 是 bootstrap 实例，没有 querySelectorAll。
+  investEnhanceSelects(investHoldingModalEl());
   try {
     const platforms = await investFetchPlatforms();
     invest.platforms = platforms;
@@ -1556,10 +1557,10 @@ function investRefreshSelectLabels() {
   document.querySelectorAll("select[data-inv-select]").forEach(investRefreshSelectLabel);
 }
 
-/* ---------- 代码搜索：300ms 防抖 ---------- */
+/* ---------- 代码搜索：500ms 防抖 ---------- */
 
 /**
- * 输入防抖：连续输入只在最后一次停手 300ms 后发一次请求。
+ * 输入防抖：连续输入只在最后一次停手 500ms 后发一次请求。
  * @param {string} keyword 当前输入框内容
  */
 function scheduleTickerSearch(keyword) {
