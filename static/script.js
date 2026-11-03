@@ -6223,6 +6223,10 @@ function switchPage(page) {
   document.querySelectorAll(".nav-item").forEach(function (item) {
     item.classList.toggle("active", item.getAttribute("data-page") === target);
   });
+  // v0.13.7 终极补丁：移动端底栏的高亮跟着同一份页面状态走
+  document.querySelectorAll(".mtab-item").forEach(function (item) {
+    item.classList.toggle("active", item.getAttribute("data-page") === target);
+  });
   document.querySelectorAll(".page").forEach(function (section) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
@@ -7376,6 +7380,65 @@ async function refresh() {
   }
 }
 
+/* ==================== v0.13.7 终极补丁：云同步 ==================== */
+
+/**
+ * 云同步按钮的真实语义：**强制刷新云端数据、覆盖本地显示**。
+ *
+ * 为什么不需要「上传」：
+ *   这套 Web 架构的写操作（记一笔 / 改账户 / 换分类）在提交那一刻就已经落库到服务端，
+ *   所以本地从来没有一份「等着推上去」的脏数据。这个按钮要解决的是反方向的问题：
+ *   另一台设备（或多开一个窗口）改了账本，当前页面还停在旧快照上。
+ *
+ * 流程：图标旋转 → 重取分类 → 重取全部业务数据并重绘 → 重绘当前激活页 → Toast。
+ */
+let cloudSyncing = false;
+
+function setSyncButtonsBusy(busy) {
+  document.querySelectorAll("[data-sync-trigger]").forEach(function (button) {
+    button.classList.toggle("is-syncing", busy);
+    if (busy) {
+      button.setAttribute("aria-busy", "true");
+      button.setAttribute("disabled", "disabled");
+    } else {
+      button.removeAttribute("aria-busy");
+      button.removeAttribute("disabled");
+    }
+  });
+}
+
+async function forceCloudSync() {
+  if (cloudSyncing) {
+    return; // 连点只发一轮请求，避免叠着刷同一份数据
+  }
+  cloudSyncing = true;
+  setSyncButtonsBusy(true);
+  try {
+    // 分类 / 账户名可能被别的端改过，先重取分类再拉账单，重绘时标签才是新的
+    await loadCategories();
+    await refresh();
+
+    // 当前停在图表页时单独重绘一次：图表有独立缓存，refresh() 不管它
+    if ($("page-charts") && $("page-charts").classList.contains("active")) {
+      if (typeof window.reloadChartsPage === "function") {
+        window.reloadChartsPage();
+      } else if (typeof window.renderChartsPage === "function") {
+        window.renderChartsPage(true);
+      }
+    }
+
+    // 通知属于「云端最新」，失败也不该让同步整体报错
+    loadNotifications().catch(function () {});
+
+    toast("云端数据已强制刷新并覆盖本地显示。", "success");
+  } catch (error) {
+    toast((error && error.message) || "云同步失败，请检查网络后重试", "error");
+  } finally {
+    cloudSyncing = false;
+    setSyncButtonsBusy(false);
+  }
+}
+
 /* ==================== 事件绑定 ==================== */
 
 function bindDebtModalButtons() {
@@ -7795,6 +7858,21 @@ function bindEvents() {
         hideNavTooltips();
       }
       switchPage(item.getAttribute("data-page"));
+    });
+  });
+
+  // v0.13.7 终极补丁：移动端底部 Tab Bar，和侧边栏共用 switchPage()，不维护第二套页面状态
+  document.querySelectorAll(".mtab-item").forEach(function (item) {
+    item.addEventListener("click", function (event) {
+      event.preventDefault();
+      const page = item.getAttribute("data-page");
+      switchPage(page);
+      // 切页后回到顶部：手机端整页自然滚动，留在上一页的滚动位置会看见半截内容
+      const content = document.querySelector(".content");
+      if (content) {
+        content.scrollTop = 0;
+      }
+      window.scrollTo(0, 0);
     });
   });
 
@@ -8362,12 +8440,14 @@ function bindEvents() {
     $("notification-backdrop").addEventListener("click", closeNotifications);
   }
 
-  // 侧栏底部两个占位图标
-  if ($("sync-btn")) {
-    $("sync-btn").addEventListener("click", function () {
-      notifyComingSoon("云同步");
+  // v0.13.7 终极补丁：云同步不再弹「开发中」，改成强制刷新云端数据。
+  // 桌面在侧边栏底部、手机在顶栏，两个入口共用一个 data-sync-trigger 选择器。
+  document.querySelectorAll("[data-sync-trigger]").forEach(function (button) {
+    button.addEventListener("click", function (event) {
+      event.preventDefault();
+      forceCloudSync();
     });
-  }
+  });
   if ($("settings-btn")) {
     $("settings-btn").addEventListener("click", function () {
       // v0.13：点击设置图标先来一个 180° 旋转微动效

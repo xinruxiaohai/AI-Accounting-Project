@@ -11789,3 +11789,418 @@ body.has-avatar-lightbox {
     padding: 6px 0 4px;
   }
 }
+
+/* ==================================================================
+ * v0.13.7-DEV 终极补丁：云同步按钮的加载态
+ * 点击「云同步」→ 图标持续旋转（0.9s/圈），按钮禁用并降透明度；
+ * 用 animation 而不是 transition：请求耗时不定，转圈必须能一直转下去。
+ * ================================================================== */
+[data-sync-trigger].is-syncing {
+  pointer-events: none;
+  opacity: 0.72;
+}
+[data-sync-trigger].is-syncing svg {
+  animation: zh-sync-spin 0.9s linear infinite;
+  transform-origin: 50% 50%;
+}
+@keyframes zh-sync-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 顶栏的云同步入口只在手机端出现（桌面端用侧边栏底部那个） */
+.topbar-sync {
+  display: none;
+}
+
+/* 手机端底栏高度常量：FAB / 内容区留白都按它算，改一处即可 */
+:root {
+  --mtab-h: 58px;
+}
+
+/* 底部 Tab Bar 默认完全不参与布局；只有 ≤768px 的媒体查询里才 display: grid */
+.mobile-tabbar {
+  display: none;
+}
+
+/* 顶栏云同步入口默认隐藏，只有 ≤768px 才露出（桌面端用侧边栏底部那个） */
+.topbar-sync {
+  display: none;
+}
+
+/* ==================================================================
+ * v0.13.7-DEV 终极补丁：移动端全局响应式（≤768px）
+ *
+ * 为什么单独成段而不是散落改旧断点：
+ *   旧断点按「窄屏 → 侧栏缩到 72px」的思路写的，手机端根本没地方放侧栏；
+ *   这里统一按「App 格局」重排：底部 Tab Bar + 单列内容 + 满宽图表。
+ * 优先级说明：整段放在文件末尾，同特异性下必然覆盖前面的旧规则，
+ *   所以不需要给每条都挂 !important。
+ * ================================================================== */
+@media (max-width: 768px) {
+  /* 防横向滚动条：任何元素溢出都在自己容器里滚，整页永不左右晃 */
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* 手机浏览器的 100vh 包含地址栏高度，会顶出一截滚动；dvh 才是可视高度 */
+  .app {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  /* 侧边栏整体隐藏，导航交给底部 Tab Bar */
+  .sidebar {
+    display: none !important;
+  }
+
+  .main {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* 底部留出 Tab Bar 的高度 + iOS 安全区，最后一张卡片不会被挡住 */
+  .content {
+    padding: 14px 12px calc(var(--mtab-h) + 20px + env(safe-area-inset-bottom));
+  }
+
+  /* ---------- 顶栏：标题 + 动作一行，搜索框独占第二行 ---------- */
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title actions"
+      "search search";
+    gap: 8px 10px;
+    height: auto;
+    min-height: 0;
+    padding: 10px 12px;
+  }
+
+  .topbar-title {
+    grid-area: title;
+    font-size: 16px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar-search {
+    grid-area: search;
+    width: 100%;
+  }
+
+  .topbar-actions {
+    grid-area: actions;
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+
+  .topbar-actions .icon-btn {
+    width: 34px;
+    height: 34px;
+  }
+
+  /* 侧边栏隐藏后，云同步入口改由顶栏承担 */
+  .topbar-sync {
+    display: inline-grid;
+  }
+
+  /* AI 快记只留图标：文字去掉后才放得下 6 个动作，且不挤压 */
+  .ai-entry-btn {
+    padding: 0;
+    width: 34px;
+    height: 34px;
+    justify-content: center;
+    border-radius: 10px;
+  }
+
+  .ai-entry-btn span {
+    display: none;
+  }
+
+  .btn-add {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  /* 手机端不弹 Tooltip：手指点一下就会残留浮窗盖住按钮 */
+  .tooltip {
+    display: none !important;
+  }
+
+  /* ---------- 栅格一律降级为单列垂直堆叠 ---------- */
+  .dash-grid,
+  .charts-grid,
+  .assets-split,
+  .bills-layout,
+  .chart-shell,
+  .profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 首页原来靠左右两栏各自内部滚动铺满一屏；单列后改成整页自然滚动 */
+  #page-home.active {
+    display: block;
+    overflow: visible;
+  }
+
+  #page-home .dash-center,
+  #page-home .dash-rail {
+    overflow: visible;
+    padding-right: 0;
+    padding-bottom: 0;
+    scrollbar-gutter: auto;
+  }
+
+  /* 资产页同理：左右两栏改成上下堆叠 */
+  #page-assets.active {
+    display: block;
+    overflow: visible;
+  }
+
+  #page-assets .assets-left,
+  #page-assets .assets-right {
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+  }
+
+  #page-assets .assets-right .bill-feed-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  /* 账单页：筛选器 + 表格按自然高度滚，不再锁一屏 */
+  #page-bills {
+    padding: 12px;
+  }
+
+  #page-bills.active {
+    overflow: visible;
+  }
+
+  .bills-layout {
+    height: auto;
+  }
+
+  .bills-tree-panel {
+    max-height: 220px;
+  }
+
+  .bills-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* ---------- 图表页：侧边子菜单改成顶部横向标签 ---------- */
+  #page-charts {
+    padding: 12px;
+  }
+
+  .chart-shell {
+    gap: 12px;
+  }
+
+  .chart-subnav {
+    position: static;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+
+  .chart-subnav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chart-subnav-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--surface-3);
+  }
+
+  /* 横排后左侧竖条会顶在圆角外，换成无竖条的高亮 */
+  .chart-subnav-item.active::before {
+    display: none;
+  }
+
+  .chart-main {
+    gap: 12px;
+  }
+
+  /* ECharts 容器满宽 + 降高：手机竖屏要的是「一屏看到形状」，不是像素级细节 */
+  .chart-canvas {
+    width: 100%;
+    height: 232px;
+  }
+
+  .chart-overview {
+    padding: 14px 6px;
+  }
+
+  .chart-metric {
+    padding: 2px 4px;
+  }
+
+  .chart-metric-value {
+    font-size: 20px;
+  }
+
+  .chart-period-btn {
+    padding: 6px 12px;
+  }
+
+  .chart-period-label {
+    min-width: 90px;
+  }
+
+  /* 「极值趋势」卡片头：标题与指标切换上下排，避免挤成两行字 */
+  .chart-card-head {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  /* ---------- 按钮防挤压（截图 Bug 的根因） ---------- */
+  /* 文字永不换行：宁可整组换行，也不许把「新增账户」拆成「新增账 / 户」 */
+  .btn {
+    white-space: nowrap;
+  }
+
+  .panel-head {
+    padding: 14px 14px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .panel-tools,
+  .export-actions,
+  .profile-actions,
+  .settings-actions,
+  .hero-actions,
+  .modal-footer {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .panel-tools .form-select {
+    width: 120px;
+  }
+
+  /* 表格横向滚动交给自己的容器，绝不传染给 body */
+  .table-responsive {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* 弹窗在手机上留 10px 边距，别贴着屏幕边 */
+  .modal-dialog {
+    margin: 10px auto;
+    max-width: calc(100% - 20px);
+  }
+
+  /* ---------- FAB：抬高到底栏之上，不压住导航与内容 ----------
+     注意：基础样式里 .fab.fab-menu / ≤575.98px 的 .fab.fab-menu 都是两段类名，
+     单写 .fab 会因特异性不足被它们盖掉（实测仍停在 bottom:18px），必须同权重覆盖。 */
+  .fab,
+  .fab.fab-menu {
+    right: 14px;
+    bottom: calc(var(--mtab-h) + 16px + env(safe-area-inset-bottom));
+  }
+
+  .fab-ball,
+  .fab-menu .fab-ball {
+    width: 50px;
+    height: 50px;
+  }
+
+  /* ---------- 底部 Tab Bar ---------- */
+  .mobile-tabbar {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1040;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    box-shadow: 0 -6px 20px rgba(15, 23, 42, 0.08);
+  }
+
+  .mtab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 5px 2px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+
+  .mtab-item svg {
+    width: 22px;
+    height: 22px;
+  }
+
+  .mtab-item.active {
+    color: var(--brand-blue);
+    background: rgba(37, 99, 235, 0.08);
+    font-weight: 600;
+  }
+
+  .mtab-item:active {
+    background: var(--surface-3);
+  }
+}
+
+/* 桌面端（>768px）底栏彻底不参与布局 */
+@media (min-width: 768.02px) {
+  .mobile-tabbar {
+    display: none;
+  }
+}
+
+/* ==================================================================
+ * v0.13.7-DEV 终极补丁：PWA 独立窗口（standalone）模式
+ * 加到主屏后没有浏览器地址栏 / 标签栏，这些「浏览器里才有意义」的元素
+ * 在 App 模式下就是纯噪音，直接收掉。
+ * ================================================================== */
+@media (display-mode: standalone) {
+  /* 版本号只在浏览器调试时有用，App 里不展示 */
+  .sidebar-version {
+    display: none;
+  }
+
+  /* 卡片里的操作提示（快捷键 / 导入须知）在沉浸模式下显得啰嗦 */
+  .profile-tips,
+  .export-hint {
+    display: none;
+  }
+
+  /* 底栏与内容区再补一层安全区，全面屏机型不留白边也不被手势条压住 */
+  .mobile-tabbar {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  }
+
+  /* App 模式禁用页面回弹，滑动更像原生 */
+  body {
+    overscroll-behavior-y: none;
+  }
+}

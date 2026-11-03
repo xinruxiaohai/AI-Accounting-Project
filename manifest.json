@@ -2,7 +2,7 @@
   "id": "/",
   "name": "智汇账",
   "short_name": "智汇账",
-  "description": "智汇账 · 您的 AI 资产管家：一句话记账、预算看板与资产视图，数据全部存在本地。",
+  "description": "智汇账 · 您的 AI 资产管家：一句话记账、预算看板与资产视图，数据安全同步云端、多端随时访问。",
   "lang": "zh-CN",
   "dir": "ltr",
   "start_url": "/",
@@ -49,5 +49,6 @@
         }
       ]
     }
-  ]
+  ],
+  "orientation": "portrait"
 }
