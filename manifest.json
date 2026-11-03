@@ -8,7 +8,11 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
   "background_color": "#f4f6fb",
   "theme_color": "#2563eb",
   "icons": [
@@ -29,6 +33,12 @@
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
+    },
+    {
+      "src": "/static/images/logo-main.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
     }
   ],
   "shortcuts": [
@@ -37,7 +47,12 @@
       "short_name": "记一笔",
       "description": "打开记账弹窗",
       "url": "/?action=new",
-      "icons": [{ "src": "/static/icons/icon-192.png", "sizes": "192x192" }]
+      "icons": [
+        {
+          "src": "/static/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

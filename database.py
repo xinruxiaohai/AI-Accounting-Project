@@ -270,13 +270,26 @@ def seed_default_accounts_for(user_id):
 
 
 def list_users():
-    """后台用户列表（不含密码）。"""
+    """后台用户列表（不含密码）。
+
+    v0.13.7：多带一个 `uid` 字段（就是 users.id 本身）与记录数，
+    后台「用户管理」直接用 uid 定位用户，避免把昵称/邮箱当成主键看。
+    """
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, email, phone, nickname, avatar, created_at FROM users ORDER BY id"
+            "SELECT u.id, u.email, u.phone, u.nickname, u.avatar, u.created_at, "
+            "       (SELECT COUNT(*) FROM records r "
+            "         WHERE r.user_id = u.id AND r.deleted_at IS NULL) AS record_count "
+            "  FROM users u ORDER BY u.id"
         ).fetchall()
-        return [_row_to_user(row) for row in rows]
+        users = []
+        for row in rows:
+            user = _row_to_user(row)
+            user["uid"] = row["id"]
+            user["record_count"] = row["record_count"]
+            users.append(user)
+        return users
     finally:
         conn.close()
 
@@ -4001,10 +4014,13 @@ def purge_record(record_id):
 
 
 def get_statistics():
-    """总览：总收入、总支出、总余额。
+    """总览：总收入、总支出、总余额、待报销 / 已报销。
 
     - 总收入 / 总支出：按 type 分别求和，COALESCE 保证没有记录时是 0 而不是 NULL
     - 总余额：直接 SUM(accounts.balance)，账户表才是余额的唯一真相
+    - 待报销 / 已报销：**必须带 user_id 过滤**（v0.13.7 越权修复）。原来这里只按
+      type / is_reimbursable / deleted_at 过滤，等于把全库所有用户的报销金额加在一起，
+      新账号会看到老用户的钱、点开明细又是空的（口径对不上）。
     """
     conn = get_conn()
     try:
@@ -4027,7 +4043,9 @@ def get_statistics():
             "  COALESCE(SUM(MAX(total_reimbursement - reimbursed_amount, 0)), 0) AS pending, "
             "  COALESCE(SUM(reimbursed_amount), 0) AS done "
             "FROM records "
-            "WHERE type = 'expense' AND is_reimbursable = 1 AND deleted_at IS NULL"
+            "WHERE user_id = ? AND type = 'expense' AND is_reimbursable = 1 "
+            "  AND deleted_at IS NULL",
+            (_uid(),),
         ).fetchone()
     finally:
         conn.close()

@@ -9,14 +9,16 @@
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/png" href="/static/icons/favicon.png">
-  <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
+  <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放） -->
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.13.6">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.7">
 </head>
 <body>
 
@@ -33,21 +35,26 @@
 
   <!-- ================= 左侧侧边栏 ================= -->
   <aside class="sidebar" id="sidebar">
-    <!-- v0.13.6：左侧品牌 Logo（跟随「品牌图标主题」实时切换），右侧只显示用户昵称 -->
+    <!-- v0.13.7：品牌区独立——只放 Logo 与固定的「智汇账」，不再掺用户信息 -->
     <div class="sidebar-brand" id="sidebar-brand">
       <img class="brand-logo" id="sidebar-brand-logo" src="/static/images/logo-main.png"
            alt="智汇账" draggable="false">
-      <!-- 防呆红线：这里只放 user.nickname（或邮箱前缀），品牌名绝不参与拼接，初值留空由 JS 填 -->
-      <span class="brand-text" id="sidebar-brand-name"></span>
+      <span class="brand-text" id="sidebar-brand-title">智汇账</span>
     </div>
 
-    <!-- 头像与三行杠单独一行：放在 Logo 正下方、导航菜单上方 -->
-    <div class="sidebar-tools">
+    <!-- v0.13.7：用户信息区——头像与昵称横向排列；昵称宽了换行、极长走省略号 -->
+    <div class="sidebar-user" id="sidebar-user">
       <button class="sidebar-avatar-btn" type="button" id="sidebar-avatar"
-              aria-label="查看我的头像" title="查看我的头像">
+              aria-label="打开个人中心" title="个人中心">
         <span class="brand-avatar" id="sidebar-avatar-letter">A</span>
         <img class="brand-avatar-img" id="sidebar-avatar-img" alt="用户头像" hidden>
       </button>
+      <!-- 防呆红线：这里只放 user.nickname（或邮箱前缀），品牌名绝不参与拼接，初值留空由 JS 填 -->
+      <span class="sidebar-user-name" id="sidebar-brand-name"></span>
+    </div>
+
+    <!-- v0.13.7：折叠三行杠单独一行、居中，落在用户区下方 -->
+    <div class="sidebar-tools">
       <button class="icon-btn sidebar-toggle" type="button" id="sidebar-toggle"
               data-bs-toggle="tooltip" data-bs-placement="right" title="折叠 / 展开侧栏"
               aria-label="折叠或展开侧栏">
@@ -108,7 +115,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.13.6-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.13.7-DEV</div>
     </div>
   </aside>
 
@@ -1410,11 +1417,25 @@
       <span class="avatar-lightbox-letter" id="avatar-lightbox-letter">A</span>
       <img class="avatar-lightbox-img" id="avatar-lightbox-img" alt="我的头像" hidden>
     </div>
+    <!-- v0.13.7：只留「保存至本地」与「更换头像」，居中均匀排列 -->
     <div class="avatar-lightbox-actions">
-      <a class="btn btn-primary avatar-lightbox-save" id="avatar-lightbox-save" href="#" role="button"
-         download="智汇账_我的头像.png">保存至本地</a>
-      <button class="btn btn-light" type="button" id="avatar-lightbox-change">更换头像</button>
-      <button class="btn btn-outline-secondary" type="button" id="avatar-lightbox-profile">个人中心</button>
+      <a class="btn avatar-lightbox-save" id="avatar-lightbox-save" href="#" role="button"
+         download="智汇账_我的头像.png">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 4v10"></path><path d="M8 10.5 12 14.5 16 10.5"></path>
+          <path d="M4.5 17.5v1.2a1.8 1.8 0 0 0 1.8 1.8h11.4a1.8 1.8 0 0 0 1.8-1.8v-1.2"></path>
+        </svg>
+        <span>保存至本地</span>
+      </a>
+      <button class="btn avatar-lightbox-change" type="button" id="avatar-lightbox-change">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.2l1-1.6h6.6l1 1.6h1.2A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"></path>
+          <circle cx="12" cy="12.3" r="3.2"></circle>
+        </svg>
+        <span>更换头像</span>
+      </button>
     </div>
     <p class="avatar-lightbox-hint" id="avatar-lightbox-hint" hidden>还没有上传头像，先点「更换头像」挑一张图片吧</p>
   </div>
@@ -2057,13 +2078,13 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.13.6"></script>
-<script src="/static/access-guard.js?v=0.13.6"></script>
+<script src="/static/auth-v012.js?v=0.13.7"></script>
+<script src="/static/access-guard.js?v=0.13.7"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.13.6"></script>
-<script src="/static/charts-v013.js?v=0.13.6"></script>
+<script src="/static/script.js?v=0.13.7"></script>
+<script src="/static/charts-v013.js?v=0.13.7"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.13.6"></script>
+<script src="/static/invest-v0133.js?v=0.13.7"></script>
 
 </body>
 </html>

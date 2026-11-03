@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>通知发布台 · 智汇账</title>
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.13.6">
+  <link rel="stylesheet" href="/static/style.css?v=0.13.7">
   <style>
     /* v0.12.7：后台单独解除全局滚动锁定，长表单也能滑到底 */
     html,
@@ -282,6 +282,46 @@
     }
     .feedback-table tr:last-child td { border-bottom: 0; }
     .feedback-table tbody tr:hover { background: var(--surface-2); }
+
+    /* v0.13.7：用户管理表（UID 放第一列并高亮） */
+    .user-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-1);
+    }
+    .user-table {
+      width: 100%;
+      margin: 0;
+      font-size: 13px;
+      border-collapse: collapse;
+      white-space: nowrap;
+    }
+    .user-table th {
+      padding: 9px 12px;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-align: left;
+    }
+    .user-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      color: var(--text-main);
+    }
+    .user-table tr:last-child td { border-bottom: 0; }
+    .user-table tbody tr:hover { background: var(--surface-2); }
+    .user-uid {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.12);
+      color: #2563eb;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
     .feedback-raw {
       font-weight: 600;
       color: var(--text-strong);
@@ -630,6 +670,9 @@
       <!-- v0.12.3：图标素材库（系统内置 + 用户上传） -->
       <button type="button" class="admin-tab" role="tab" data-tab="icons"
               aria-selected="false">图标素材库</button>
+      <!-- v0.13.7：用户管理，主键是 users.id（UID） -->
+      <button type="button" class="admin-tab" role="tab" data-tab="users"
+              aria-selected="false">用户管理</button>
     </div>
 
     <section id="pane-notices">
@@ -847,6 +890,20 @@
         </section>
       </div>
     </section>
+
+    <!-- v0.13.7：用户管理（只读）——后台需要 UID 才能快速定位某个用户 -->
+    <section id="pane-users" hidden>
+      <div class="admin-card">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <h2 class="admin-card-title mb-0">用户管理 <span class="badge text-bg-secondary" id="user-total">0</span></h2>
+          <button class="btn btn-sm btn-outline-secondary" type="button" id="user-refresh">刷新</button>
+        </div>
+        <p class="admin-hint">UID 就是 <code>users.id</code>，全局唯一、不随昵称或邮箱变化，报障时直接报 UID 最快。</p>
+        <div class="user-table-wrap" id="user-list">
+          <div class="admin-empty">正在加载…</div>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
@@ -928,8 +985,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.13.6"></script>
-<script src="/static/access-guard.js?v=0.13.6"></script>
+  <script src="/static/auth-v012.js?v=0.13.7"></script>
+<script src="/static/access-guard.js?v=0.13.7"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1847,11 +1904,13 @@
         $("pane-memory").hidden = name !== "memory";
         $("pane-center").hidden = name !== "center";
         $("pane-icons").hidden = name !== "icons";
+        $("pane-users").hidden = name !== "users";
         // 第一次进反馈 / 记忆 Tab 才拉数据，避免每次进 /admin 都多打一个请求
         if (name === "feedback" && !state.loaded) { loadFeedback(); }
         if (name === "memory" && !memoryState.loaded) { loadMemory(); }
         if (name === "center" && !centerState.loaded) { loadCenter(); }
         if (name === "icons" && !iconsState.loaded) { loadIcons(); }
+        if (name === "users" && !usersState.loaded) { loadUsers(); }
       }
 
       tabs.forEach(function (tab) {
@@ -2227,6 +2286,59 @@
       $("icon-refresh").addEventListener("click", function () {
         iconsState.loaded = false;
         loadIcons().then(function () { toast("素材库已刷新"); });
+      });
+
+      /* ---------- 用户管理（v0.13.7）：只读，重点是 UID ---------- */
+
+      var usersState = { items: [], loaded: false, loading: false };
+
+      function renderUsers() {
+        var box = $("user-list");
+        $("user-total").textContent = String(usersState.items.length);
+        if (!usersState.items.length) {
+          box.innerHTML = '<div class="admin-empty">还没有注册用户。</div>';
+          return;
+        }
+        box.innerHTML =
+          '<table class="user-table">' +
+            "<thead><tr>" +
+              "<th>UID</th><th>昵称</th><th>邮箱</th><th>手机号</th>" +
+              "<th>账目数</th><th>注册时间</th>" +
+            "</tr></thead><tbody>" +
+            usersState.items.map(function (user) {
+              var nickname = user.nickname || "（未设置）";
+              return (
+                "<tr>" +
+                  '<td><span class="user-uid">#' + escapeHtml(String(user.uid)) + "</span></td>" +
+                  "<td>" + escapeHtml(nickname) + "</td>" +
+                  "<td>" + escapeHtml(user.email || "—") + "</td>" +
+                  "<td>" + escapeHtml(user.phone || "—") + "</td>" +
+                  "<td>" + escapeHtml(String(user.record_count == null ? 0 : user.record_count)) + "</td>" +
+                  "<td>" + escapeHtml(String(user.created_at || "—").slice(0, 19)) + "</td>" +
+                "</tr>"
+              );
+            }).join("") +
+          "</tbody></table>";
+      }
+
+      function loadUsers() {
+        if (usersState.loading) { return Promise.resolve(); }
+        usersState.loading = true;
+        return request("/api/admin/users")
+          .then(function (data) {
+            usersState.items = data.users || [];
+            usersState.loaded = true;
+            renderUsers();
+          })
+          .catch(function (error) {
+            $("user-list").innerHTML = '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () { usersState.loading = false; });
+      }
+
+      $("user-refresh").addEventListener("click", function () {
+        usersState.loaded = false;
+        loadUsers().then(function () { toast("用户列表已刷新"); });
       });
 
       $("icon-upload-btn").addEventListener("click", function () {

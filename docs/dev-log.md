@@ -561,3 +561,13 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **静态资源**：`?v=0.13.5`→`0.13.6`（index 6 处、admin 3 处），两处 SW `CACHE_NAME`→`ai-accounting-v0.13.6-r1`，`APP_VERSION_FALLBACK`→`v0.13.6-DEV`，侧边栏版本号同步。
 - **自测**：逻辑 33/33（标题/manifest/8 张图/邮件主题与发件人/displayName 防呆标记/75vh 与绿色边框）；真实 Chrome CDP **30/30**——侧边栏只显示「昵称小汇」且不含品牌名、标题正确；Lightbox 全屏磨砂 + 92% 限幅 + 下载文件名 + 锁滚动、X/空白处都能关；个人中心头像同样弹出且姓名只显示昵称；网格 8 项 4 列 48px、默认选中唯一、点主题 3 写 localStorage 且侧边栏即时切换、选中绿框；`modal-body` 75vh + auto + 可滚动；刷新后主题与昵称都不丢、登录页 Logo 跟随主题；昵称为空的用户降级成邮箱前缀；console 0 error。真实库零污染（两个浏览器测试用户结束时删除，库里仍是 2 个真实账号）。
 - **踩坑**：`--no-reload` 启动的 Flask 会缓存 Jinja 模板，改完 HTML 不重启就测，CDP 拿到的是旧 DOM（本次「X 关不掉」一半是这个原因）。另：`database.create_user()` 第二参是**已哈希**的密码，直接传明文会让登录一直 401。
+
+## v0.13.7-DEV（数据越权修复 + 侧边栏重构 + PWA 图标）
+
+- **越权红线（最高优先级）**：新注册账号的「待报销」卡片显示老用户 ¥20.00 却能点开空明细，根因是 `database.get_statistics()` 里两个报销聚合的 WHERE 只写了 `type='expense' AND is_reimbursable=1`，**漏了 `user_id`**，把全库报销单算成了同一个数字；明细走 `list_records()` 本身按用户过滤，于是出现「有金额、无明细」。补齐 `WHERE user_id = ? ... AND deleted_at IS NULL` 后二者口径一致；借入/借出两卡走 `list_debts` 本就带 `d.user_id`，全库 SQL 复核确认只有这一处泄漏。
+- **侧边栏重构**：`#sidebar-brand` 拆成「Logo + 固定文案「智汇账」」两件，昵称整体下移到新的 `.sidebar-user` 横排（头像在左、昵称在右，`-webkit-line-clamp:2` + `overflow-wrap:anywhere` 处理超长昵称）；`#sidebar-toggle` 从品牌行挪进独立的 `.sidebar-tools` 并 `justify-content:center`，DOM 顺序落在用户区之后，与下方导航图标垂直对齐。
+- **头像交互降级**：侧边栏头像的点击从「开大图」改为「开个人中心」（`bindProfileUi()` 里换成 `openProfileModal`），个人中心弹窗内的 `#profile-avatar-btn` 才是 Lightbox 入口；Lightbox 底部删掉「个人中心」按钮，只留「保存至本地」（主色渐变 + 下载图标）与「更换头像」（次级描边），容器 flex 居中。
+- **后台 UID**：`database.list_users()` 补 `u.id` 与 `record_count` 子查询，新增只读接口 `GET /api/admin/users`（访问密码 + JWT 双层鉴权）；admin.html 新增「用户管理」Tab，表格首列 `.user-uid` 渲染 `#<id>`，并展示昵称/邮箱/手机号/账目数/注册时间。
+- **PWA 图标**：用 Chrome CDP + canvas 把 `logo-main.png` 缩放出 `icon-192 / icon-512 / apple-touch-icon(180) / favicon(64) / icon-maskable-512`，两份 manifest 追加 1024×1024 真实 Logo 条目，`index.html` head 补 `apple-touch-icon`，两处 SW `CACHE_NAME` 升 `ai-accounting-v0.13.7-r1` 并把 Logo 加入预缓存；模板 `?v=0.13.6` → `0.13.7`。
+- **自测**：逻辑 `temp/test_v0137_logic.py` **51/51**（A 用户待报销 60/已报销 100、B 用户四卡全 0 且 `list_records()==[]`、`/api/admin/users` 401/200 与 uid、manifest 与 5 张 PNG 尺寸解析、SW 缓存名、侧边栏与 Lightbox 结构）；真实 Chrome CDP `temp/cdp_v0137_test.mjs` **37/37**（新账号四卡全 0 + 待报销空明细、品牌区只显示「智汇账」、用户区横排与两行省略、汉堡按钮在用户区下方居中、点侧边栏头像只开个人中心、个人中心内点头像才开大图、Lightbox 仅两按钮、manifest/apple-touch-icon/SW 缓存、后台输密码解锁后用户管理显示 UID、console 0 error）。
+- **踩坑**：headless Chrome 默认 800×600，侧边栏在该宽度会折叠隐藏昵称，验收必须先 `Emulation.setDeviceMetricsOverride` 到 1440×900；`compareDocumentPosition` 不能拿 DOMRect 调用；后台接口单测要同时带 JWT（`_identity_guard`）而不只是访问密码。

@@ -3608,9 +3608,22 @@ def serve_favicon():
     )
 
 
+@app.route("/api/admin/users", methods=["GET"])
+def admin_users():
+    """后台「用户管理」：只读列表，带 UID（users.id）与账目数。
+
+    v0.13.7：后台要能一眼拿到用户的专属 UID 方便定位。
+    设了访问密码时要求带有效的 X-Access-Token（access-guard.js 会自动加）。
+    """
+    config = database.get_access_config()
+    if config["protected"] and not database.check_access_session(_request_access_token()):
+        return jsonify(error="请先验证访问密码", code="access_denied"), 401
+    return jsonify(users=database.list_users())
+
+
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.6-DEV"
+APP_VERSION_FALLBACK = "v0.13.7-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 

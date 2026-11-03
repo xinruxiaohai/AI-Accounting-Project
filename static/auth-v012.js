@@ -1439,6 +1439,7 @@
     }
     var profileButton = document.getElementById("avatar-lightbox-profile");
     if (profileButton) {
+      // v0.13.7：Lightbox 里已去掉「个人中心」按钮，这里保留兼容旧缓存的兜底
       profileButton.addEventListener("click", function () {
         closeAvatarLightbox();
         openProfileModal();
@@ -1451,8 +1452,8 @@
     var profileEl = document.getElementById("profile-modal");
     bindAvatarLightbox();
     if (avatarBtn) {
-      // v0.13.6：头像不再直接开个人中心，而是先弹大图预览；个人中心入口放在 Lightbox 里
-      avatarBtn.addEventListener("click", openAvatarLightbox);
+      // v0.13.7：交互降级——侧边栏头像只开个人中心，大图预览要进个人中心再点头像
+      avatarBtn.addEventListener("click", openProfileModal);
     }
     if (profileEl && window.bootstrap) {
       profileEl.addEventListener("shown.bs.modal", function () {
