@@ -268,7 +268,9 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* v0.13.9：主滚动容器改为 .main，使 .topbar 能 sticky 吸顶、内容从其下方滚动穿透 */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* 顶部导航栏：左标题 / 中搜索 / 右图标，搜索框永远居中 */
@@ -303,7 +305,8 @@ body {
 /* 内容滚动区：只有这里滚动，侧边栏和顶栏固定 */
 .content {
   flex: 1;
-  overflow-y: auto;
+  /* v0.13.9：滚动上移到 .main，这里不再各自滚动 */
+  overflow: visible;
   padding: 24px;
 }
 
@@ -12473,4 +12476,110 @@ body.has-avatar-lightbox {
 .skeleton.sk-line-md {
   height: 12px;
   width: 72%;
+}
+
+/* =====================================================================
+   v0.13.9 强化：吸顶真正生效 / 卡片发光 / 悬浮上浮 / 骨架高对比 / 数字发光 / 图表融合
+   （以下规则覆盖 v0.13.8 同名规则，置于文件末尾以确保优先级）
+   ===================================================================== */
+
+/* ---- 顶部工具栏：磨砂吸顶真正生效（主滚动容器已改为 .main）---- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.75);
+}
+[data-theme="dark"] .topbar {
+  background: rgba(19, 28, 43, 0.75);
+}
+
+/* ---- 卡片悬浮：明显上浮 -4px + 背景高亮 + 0.25s ease-out ---- */
+.feed-row,
+.account-card,
+.clickable {
+  transition: transform 0.25s ease-out, box-shadow 0.25s ease-out, background 0.25s ease-out, border-color 0.25s ease-out;
+  cursor: pointer;
+}
+.feed-row:hover {
+  transform: translateY(-4px);
+  background: rgba(37, 99, 235, 0.06);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+}
+.account-card:hover {
+  transform: translateY(-4px);
+  background: rgba(37, 99, 235, 0.05);
+  border-color: #93c5fd;
+}
+.clickable:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+}
+[data-theme="dark"] .feed-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+[data-theme="dark"] .account-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(59, 130, 246, 0.45);
+}
+
+/* ---- 深色模式：卡片更明显的边框内发光 ---- */
+[data-theme="dark"] .panel,
+[data-theme="dark"] .stat-card,
+[data-theme="dark"] .account-card {
+  border: 1px solid rgba(59, 130, 246, 0.15);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* ---- 骨架屏：提高底色与微光对比度 ---- */
+.skeleton {
+  background: linear-gradient(90deg, #dbe2ea 25%, #c3ccd9 37%, #dbe2ea 63%);
+  animation: shimmer 1.1s ease-in-out infinite;
+}
+.sk-line {
+  background: linear-gradient(90deg, #dbe2ea 25%, #c3ccd9 37%, #dbe2ea 63%);
+}
+[data-theme="dark"] .skeleton,
+[data-theme="dark"] .sk-line {
+  background: linear-gradient(90deg, #243042 25%, #34465f 37%, #243042 63%);
+}
+
+/* ---- 页面级骨架屏：切换页面时的半透明磨砂遮罩（≥500ms 清晰可见微光）---- */
+.page {
+  position: relative;
+}
+.page-skeleton {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.86);
+}
+[data-theme="dark"] .page-skeleton {
+  background: rgba(19, 28, 43, 0.86);
+}
+.page-skeleton.is-fading {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* ---- 核心资产大数字：深色模式微弱文字发光，第一眼跳出来 ---- */
+[data-theme="dark"] .hero-number,
+[data-theme="dark"] .assets-hero-value,
+[data-theme="dark"] .stat-number {
+  text-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+}
+
+/* ---- 图表无界融合：去掉生硬边框 / 背景，背景完全透明 ---- */
+.chart-box {
+  border: none;
+  background: transparent;
+}
+.chart-canvas {
+  background: transparent;
 }

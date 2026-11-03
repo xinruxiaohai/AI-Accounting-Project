@@ -6219,13 +6219,9 @@ function playPageEnterAnimation(pageName) {
   );
 }
 
-/* v0.13.8：首次进入某页时先展示页面级骨架屏，数据/组件骨架就位后淡出 */
+/* v0.13.9：每次切换页面都展示半透明磨砂骨架遮罩，至少维持 500ms，确保微光动画清晰可见 */
 var pageSkeletonPrimed = {};
 function showPageSkeleton(page) {
-  if (pageSkeletonPrimed[page]) {
-    return;
-  }
-  pageSkeletonPrimed[page] = true;
   var section = document.getElementById("page-" + page);
   if (!section) {
     return;
@@ -6234,18 +6230,17 @@ function showPageSkeleton(page) {
   if (!sk) {
     return;
   }
-  section.classList.add("is-loading");
   sk.hidden = false;
+  sk.classList.remove("is-fading");
   var reduce = window.matchMedia &&
     window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var hold = reduce ? 0 : 550;
+  var hold = reduce ? 0 : 500;
   window.setTimeout(function () {
     sk.classList.add("is-fading");
     window.setTimeout(function () {
       sk.hidden = true;
       sk.classList.remove("is-fading");
-      section.classList.remove("is-loading");
-    }, reduce ? 0 : 320);
+    }, reduce ? 0 : 300);
   }, hold);
 }
 
@@ -6264,8 +6259,16 @@ function switchPage(page) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
 
-  // v0.13.8：首次进入该页展示骨架屏（已加载过则跳过，避免重复闪烁）
+  // v0.13.9：切换页面时展示半透明磨砂骨架屏，并把主滚动区（.main）滚动到顶部
   showPageSkeleton(target);
+  var mainScroll = document.querySelector(".main");
+  if (mainScroll) {
+    mainScroll.scrollTop = 0;
+  }
+  var contentScroll = document.querySelector(".content");
+  if (contentScroll) {
+    contentScroll.scrollTop = 0;
+  }
 
   // v0.13.2：目标页做一次 fadeSlideUp 切入（250ms、ease-out）。
   // 连续点同一个导航项也要能重放：先移除类 → 强制重排 → 再加回。
@@ -7904,6 +7907,10 @@ function bindEvents() {
       const page = item.getAttribute("data-page");
       switchPage(page);
       // 切页后回到顶部：手机端整页自然滚动，留在上一页的滚动位置会看见半截内容
+      const mainScroll = document.querySelector(".main");
+      if (mainScroll) {
+        mainScroll.scrollTop = 0;
+      }
       const content = document.querySelector(".content");
       if (content) {
         content.scrollTop = 0;
