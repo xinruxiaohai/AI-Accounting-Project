@@ -5650,7 +5650,8 @@ function findRecordById(recordId) {
   const pools = [state.allRecords, state.detailRecords, state.calendarRecords];
   for (let i = 0; i < pools.length; i += 1) {
     const found = pools[i].find(function (item) {
-      return item.id === recordId;
+      // v0.13.8：data-* 里取出来的是字符串，接口返回的 id 是数字，统一按字符串比对
+      return String(item.id) === String(recordId);
     });
     if (found) {
       return found;
@@ -8013,6 +8014,18 @@ function bindEvents() {
   }
   if ($("stat-detail-list")) {
     $("stat-detail-list").addEventListener("click", function (event) {
+      // v0.13.8：明细卡片优先处理业务按钮（还款 / 报销 / 编辑 / 删除）
+      const action = event.target.closest("[data-stat-action]");
+      if (action) {
+        event.stopPropagation();
+        onStatDetailAction(
+          action.getAttribute("data-stat-action"),
+          action.getAttribute("data-id")
+        ).catch(function (error) {
+          toast(error.message || "操作失败", "error");
+        });
+        return;
+      }
       const row = event.target.closest("[data-record-id]");
       if (!row) {
         return;
@@ -8023,6 +8036,17 @@ function bindEvents() {
         openRecordDetail(record);
       }
     });
+  }
+
+  // v0.13.8：三个业务弹窗的确认按钮
+  if ($("repay-confirm")) {
+    $("repay-confirm").addEventListener("click", submitRepay);
+  }
+  if ($("reimburse-confirm")) {
+    $("reimburse-confirm").addEventListener("click", submitReimburse);
+  }
+  if ($("debt-edit-confirm")) {
+    $("debt-edit-confirm").addEventListener("click", submitDebtEdit);
   }
 
   // 全局快捷键（N 记一笔、Ctrl + K 搜索）
@@ -8839,7 +8863,12 @@ async function loadDebtSummary() {
     let borrow = 0;
     let lend = 0;
     (data.debts || []).forEach(function (debt) {
-      const amount = Number(debt.amount || 0);
+      // v0.13.8：部分还款后，卡片上应该显示剩余未还/未收，而不是原始本金
+      const amount = Number(
+        debt.remaining === undefined || debt.remaining === null
+          ? debt.amount || 0
+          : debt.remaining
+      );
       if (debt.type === "borrow") {
         borrow += amount;
       } else {
@@ -8983,26 +9012,425 @@ const STAT_DETAIL_TITLES = {
   done: "已报销明细",
 };
 
-function statDetailRowHtml(title, sub, amount, recordId) {
-  const clickable = recordId
-    ? ' data-record-id="' + recordId + '" tabindex="0" role="button"'
-    : "";
-  return (
-    '<div class="stat-detail-row"' +
-    clickable +
-    ">" +
-    '<span class="stat-detail-main">' +
-    '<span class="stat-detail-title">' +
-    escapeHtml(title) +
-    "</span>" +
-    '<span class="stat-detail-sub">' +
-    escapeHtml(sub) +
-    "</span>" +
-    "</span>" +
-    '<span class="stat-detail-amount">' +
-    amount +
-    "</span></div>"
+/* v0.13.8：借入/借出/报销明细改为业务卡片，卡片上直接完成还款、报销、编辑、删除 */
+
+function statStatusBadge(label, cls) {
+  return '<span class="stat-status ' + cls + '">' + escapeHtml(label) + "</span>";
+}
+
+function statCardActionsHtml(buttons) {
+  let html = "";
+  buttons.forEach(function (item) {
+    html +=
+      '<button type="button" class="btn btn-sm ' +
+      item.cls +
+      '" data-stat-action="' +
+      item.action +
+      '" data-id="' +
+      item.id +
+      '">' +
+      escapeHtml(item.label) +
+      "</button>";
+  });
+  return '<div class="stat-card-actions">' + html + "</div>";
+}
+
+function debtStatCardHtml(debt) {
+  const lend = debt.type === "lend";
+  const paid = debt.status === "paid";
+  const remaining = Number(
+    debt.remaining === undefined || debt.remaining === null
+      ? debt.amount
+      : debt.remaining
   );
+  const repaid = Number(debt.repaid || 0);
+  const overdue =
+    !paid &&
+    !!debt.due_date &&
+    String(debt.due_date).slice(0, 10) < todayText();
+  const badge = paid
+    ? statStatusBadge("已结清", "is-paid")
+    : overdue
+    ? statStatusBadge("已逾期", "is-overdue")
+    : statStatusBadge("未结清", "is-unpaid");
+  const buttons = [];
+  if (!paid) {
+    buttons.push({
+      action: "repay",
+      id: debt.id,
+      label: lend ? "收款结清" : "还款结清",
+      cls: "btn-primary",
+    });
+  }
+  buttons.push({
+    action: "edit-debt",
+    id: debt.id,
+    label: "编辑",
+    cls: "btn-outline-secondary",
+  });
+  buttons.push({
+    action: "delete-debt",
+    id: debt.id,
+    label: "删除",
+    cls: "btn-outline-danger",
+  });
+  return (
+    '<div class="stat-card' +
+    (paid ? " is-settled" : "") +
+    '">' +
+    '<div class="stat-card-head">' +
+    '<span class="stat-card-title">' +
+    escapeHtml(debt.contact_name || "未命名联系人") +
+    "</span>" +
+    badge +
+    "</div>" +
+    '<div class="stat-card-meta">' +
+    "<span>" +
+    escapeHtml(String(debt.date || "").slice(0, 10) || "未记日期") +
+    "</span>" +
+    "<span>本金 " +
+    money(debt.amount) +
+    "</span>" +
+    "<span>账户 " +
+    escapeHtml(debt.account || "—") +
+    "</span>" +
+    "</div>" +
+    '<div class="stat-card-money">' +
+    '<span class="stat-card-remain">剩余 ' +
+    money(cents(remaining)) +
+    "</span>" +
+    (repaid > 0
+      ? '<span class="stat-card-repaid">已还 ' + money(repaid) + "</span>"
+      : "") +
+    "</div>" +
+    statCardActionsHtml(buttons) +
+    "</div>"
+  );
+}
+
+function reimburseStatCardHtml(record, kind) {
+  const total = Number(record.total_reimbursement || 0);
+  const paid = Number(record.reimbursed_amount || 0);
+  const remaining = Math.max(total - paid, 0);
+  const done = kind === "done" || remaining <= 0;
+  const badge = done
+    ? statStatusBadge("已报销", "is-paid")
+    : statStatusBadge("待报销", "is-unpaid");
+  const buttons = [];
+  if (!done) {
+    buttons.push({
+      action: "reimburse",
+      id: record.id,
+      label: "标记为已报销",
+      cls: "btn-primary",
+    });
+  }
+  buttons.push({
+    action: "edit-record",
+    id: record.id,
+    label: "编辑",
+    cls: "btn-outline-secondary",
+  });
+  buttons.push({
+    action: "delete-record",
+    id: record.id,
+    label: "删除",
+    cls: "btn-outline-danger",
+  });
+  return (
+    '<div class="stat-card' +
+    (done ? " is-settled" : "") +
+    '">' +
+    '<div class="stat-card-head">' +
+    '<span class="stat-card-title">' +
+    escapeHtml(record.note || record.category || "支出") +
+    "</span>" +
+    badge +
+    "</div>" +
+    '<div class="stat-card-meta">' +
+    "<span>" +
+    escapeHtml(String(record.date || "").slice(0, 10) || "未记日期") +
+    "</span>" +
+    "<span>报销人 " +
+    escapeHtml(record.reimbursement_contact_name || "未填写") +
+    "</span>" +
+    "<span>总额 " +
+    money(total) +
+    "</span>" +
+    "</div>" +
+    '<div class="stat-card-money">' +
+    '<span class="stat-card-remain">' +
+    (done ? "已报销 " : "待报销 ") +
+    money(cents(done ? paid : remaining)) +
+    "</span>" +
+    (done && total > paid
+      ? '<span class="stat-card-repaid">未报 ' + money(cents(total - paid)) + "</span>"
+      : "") +
+    "</div>" +
+    statCardActionsHtml(buttons) +
+    "</div>"
+  );
+}
+
+let statDetailKind = "borrow";
+let repayTarget = null;
+let reimburseTarget = null;
+let debtEditTarget = null;
+let repayModalInstance = null;
+let reimburseModalInstance = null;
+let debtEditModalInstance = null;
+
+function fillAccountSelect(select, selected) {
+  if (!select) {
+    return;
+  }
+  const accounts = state.accounts || [];
+  let html = "";
+  accounts.forEach(function (account) {
+    html +=
+      '<option value="' +
+      escapeHtml(account.name) +
+      '"' +
+      (account.name === selected ? " selected" : "") +
+      ">" +
+      escapeHtml(account.name) +
+      "</option>";
+  });
+  select.innerHTML = html || '<option value="">无可用账户</option>';
+}
+
+function openRepayModal(debt) {
+  if (!debt) {
+    return;
+  }
+  repayTarget = debt;
+  const lend = debt.type === "lend";
+  $("debt-repay-title").textContent = lend ? "收款结清" : "还款结清";
+  $("repay-summary").innerHTML =
+    escapeHtml(debt.contact_name || "未命名联系人") +
+    " · 剩余待" +
+    (lend ? "收 " : "还 ") +
+    "<strong>" +
+    money(cents(debt.remaining)) +
+    "</strong>";
+  $("repay-amount").value = cents(debt.remaining).toFixed(2);
+  $("repay-date").value = todayText();
+  fillAccountSelect($("repay-account"), debt.account);
+  $("repay-hint").textContent = lend
+    ? "确认后账户余额增加，并生成一条「借出收款」收入流水。"
+    : "确认后账户余额扣减，并生成一条「借入还款」支出流水。";
+  $("repay-confirm").textContent = lend ? "确认收款" : "确认还款";
+  if (!repayModalInstance) {
+    repayModalInstance = new window.bootstrap.Modal($("debt-repay-modal"));
+  }
+  repayModalInstance.show();
+}
+
+async function submitRepay() {
+  if (!repayTarget) {
+    return;
+  }
+  const amount = Number($("repay-amount").value);
+  if (!(amount > 0)) {
+    toast("请输入大于 0 的金额", "error");
+    return;
+  }
+  const button = $("repay-confirm");
+  setButtonBusy(button, true, "处理中…");
+  try {
+    const data = await api(
+      "/api/debts/" + repayTarget.id + "/repay",
+      jsonOptions("POST", {
+        amount: amount,
+        account: $("repay-account").value,
+        date: $("repay-date").value,
+      })
+    );
+    toast(data.message || "已处理", "success");
+    if (repayModalInstance) {
+      repayModalInstance.hide();
+    }
+    repayTarget = null;
+    await refresh();
+    await reopenStatDetail();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function openReimburseModal(record) {
+  if (!record) {
+    return;
+  }
+  reimburseTarget = record;
+  const total = Number(record.total_reimbursement || 0);
+  const paid = Number(record.reimbursed_amount || 0);
+  const remaining = Math.max(total - paid, 0);
+  $("reimburse-summary").innerHTML =
+    escapeHtml(record.note || record.category || "支出") +
+    " · 待报销 <strong>" +
+    money(cents(remaining)) +
+    "</strong>";
+  $("reimburse-amount").value = cents(remaining).toFixed(2);
+  $("reimburse-date").value = todayText();
+  fillAccountSelect($("reimburse-account"), "");
+  if (!reimburseModalInstance) {
+    reimburseModalInstance = new window.bootstrap.Modal($("reimburse-modal"));
+  }
+  reimburseModalInstance.show();
+}
+
+async function submitReimburse() {
+  if (!reimburseTarget) {
+    return;
+  }
+  const amount = Number($("reimburse-amount").value);
+  const account = $("reimburse-account").value;
+  if (!(amount > 0)) {
+    toast("请输入大于 0 的金额", "error");
+    return;
+  }
+  if (!account) {
+    toast("请选择入账账户", "error");
+    return;
+  }
+  const button = $("reimburse-confirm");
+  setButtonBusy(button, true, "处理中…");
+  try {
+    const data = await api(
+      "/api/records/" + reimburseTarget.id + "/reimburse",
+      jsonOptions("POST", {
+        amount: amount,
+        account: account,
+        date: $("reimburse-date").value,
+      })
+    );
+    toast(data.message || "已标记报销", "success");
+    if (reimburseModalInstance) {
+      reimburseModalInstance.hide();
+    }
+    reimburseTarget = null;
+    await refresh();
+    await reopenStatDetail();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+function openDebtEditModal(debt) {
+  if (!debt) {
+    return;
+  }
+  debtEditTarget = debt;
+  $("debt-edit-amount").value = cents(debt.amount).toFixed(2);
+  $("debt-edit-due").value = debt.due_date ? String(debt.due_date).slice(0, 10) : "";
+  fillAccountSelect($("debt-edit-account"), debt.account);
+  if (!debtEditModalInstance) {
+    debtEditModalInstance = new window.bootstrap.Modal($("debt-edit-modal"));
+  }
+  debtEditModalInstance.show();
+}
+
+async function submitDebtEdit() {
+  if (!debtEditTarget) {
+    return;
+  }
+  const amount = Number($("debt-edit-amount").value);
+  if (!(amount > 0)) {
+    toast("本金必须大于 0", "error");
+    return;
+  }
+  const button = $("debt-edit-confirm");
+  setButtonBusy(button, true, "保存中…");
+  try {
+    await api(
+      "/api/debts/" + debtEditTarget.id,
+      jsonOptions("PUT", {
+        amount: amount,
+        account: $("debt-edit-account").value,
+        due_date: $("debt-edit-due").value,
+      })
+    );
+    toast("借贷已更新，余额已同步", "success");
+    if (debtEditModalInstance) {
+      debtEditModalInstance.hide();
+    }
+    debtEditTarget = null;
+    await refresh();
+    await reopenStatDetail();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    setButtonBusy(button, false);
+  }
+}
+
+async function reopenStatDetail() {
+  if (!statDetailModal || !$("stat-detail-modal").classList.contains("show")) {
+    return;
+  }
+  await openStatDetail(statDetailKind);
+}
+
+async function onStatDetailAction(action, id) {
+  if (action === "repay" || action === "edit-debt") {
+    const data = await api("/api/debts");
+    const debt = (data.debts || []).find(function (item) {
+      return Number(item.id) === Number(id);
+    });
+    if (!debt) {
+      toast("借贷记录不存在", "error");
+      return;
+    }
+    if (action === "repay") {
+      openRepayModal(debt);
+    } else {
+      openDebtEditModal(debt);
+    }
+    return;
+  }
+  if (action === "delete-debt") {
+    if (!askConfirm("stat-debt-" + id, "删除这条借贷？账户余额会一起回退")) {
+      return;
+    }
+    try {
+      await api("/api/debts/" + id, { method: "DELETE" });
+      toast("借贷记录已删除，余额已回滚", "success");
+      await refresh();
+      await reopenStatDetail();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+    return;
+  }
+  const record = findRecordById(id);
+  if (action === "reimburse") {
+    openReimburseModal(record);
+    return;
+  }
+  if (action === "edit-record") {
+    if (record) {
+      hideModalSafe(statDetailModal, $("stat-detail-modal"));
+      openRecordModal({ record: record });
+    }
+    return;
+  }
+  if (action === "delete-record") {
+    if (!askConfirm("stat-record-" + id, "删除这条账目？会移入回收站并回滚余额")) {
+      return;
+    }
+    try {
+      await removeRecord(id);
+      await refresh();
+      await reopenStatDetail();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
 }
 
 async function openStatDetail(kind) {
@@ -9011,68 +9439,47 @@ async function openStatDetail(kind) {
   if (!modalEl || !list) {
     return;
   }
+  statDetailKind = kind;
   $("stat-detail-title").textContent = STAT_DETAIL_TITLES[kind] || "明细";
-  list.innerHTML = '<div class="sk-feed-row"><span class="sk-line" style="width:60%"></span></div>';
+  list.innerHTML =
+    '<div class="sk-feed-row"><span class="sk-line" style="width:60%"></span></div>';
 
   let html = "";
   if (kind === "borrow" || kind === "lend") {
     try {
-      const data = await api("/api/debts?status=unpaid");
-      (data.debts || [])
-        .filter(function (debt) {
-          return debt.type === kind;
-        })
-        .forEach(function (debt) {
-          const when = debt.date ? String(debt.date).slice(0, 10) : "未记日期";
-          html += statDetailRowHtml(
-            debt.contact_name || "未命名联系人",
-            when + " · " + (kind === "borrow" ? "我欠对方" : "对方欠我"),
-            money(debt.amount),
-            null
-          );
-        });
+      const data = await api("/api/debts");
+      (data.debts || []).forEach(function (debt) {
+        if (debt.type === kind) {
+          html += debtStatCardHtml(debt);
+        }
+      });
     } catch (error) {
       html = "";
     }
     if (!html) {
-      html = emptyBlockHtml(kind === "borrow" ? "没有未结清的借入" : "没有未结清的借出");
+      html = emptyBlockHtml(
+        kind === "borrow" ? "还没有借入记录，记一笔就会出现在这里" : "还没有借出记录，记一笔就会出现在这里"
+      );
     }
   } else {
-    (state.allRecords || [])
-      .filter(function (record) {
-        return record.type === "expense" && record.is_reimbursable;
-      })
-      .forEach(function (record) {
-        const total = Number(record.total_reimbursement || 0);
-        const paid = Number(record.reimbursed_amount || 0);
-        if (kind === "pending") {
-          if (total <= paid) {
-            return;
-          }
-          html += statDetailRowHtml(
-            record.note || record.category || "支出",
-            (record.date ? String(record.date).slice(0, 10) : "") +
-              " · " +
-              (record.reimbursement_contact_name || "未填报销人"),
-            money(cents(total - paid)),
-            record.id
-          );
-        } else {
-          if (paid <= 0) {
-            return;
-          }
-          html += statDetailRowHtml(
-            record.note || record.category || "支出",
-            (record.date ? String(record.date).slice(0, 10) : "") +
-              " · " +
-              (record.reimbursement_contact_name || "未填报销人"),
-            money(cents(paid)),
-            record.id
-          );
-        }
-      });
+    (state.allRecords || []).forEach(function (record) {
+      if (record.type !== "expense" || !record.is_reimbursable) {
+        return;
+      }
+      const total = Number(record.total_reimbursement || 0);
+      const paid = Number(record.reimbursed_amount || 0);
+      if (kind === "pending" && total <= paid) {
+        return;
+      }
+      if (kind === "done" && paid <= 0) {
+        return;
+      }
+      html += reimburseStatCardHtml(record, kind);
+    });
     if (!html) {
-      html = emptyBlockHtml(kind === "pending" ? "没有待报销的账目" : "还没有已报销的账目");
+      html = emptyBlockHtml(
+        kind === "pending" ? "没有待报销的账目，垫付后记得打开报销开关" : "还没有已报销的账目"
+      );
     }
   }
 

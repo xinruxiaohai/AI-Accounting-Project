@@ -12204,3 +12204,152 @@ body.has-avatar-lightbox {
     overscroll-behavior-y: none;
   }
 }
+
+/* ==================== v0.13.8：移动端真实设备兜底 ==================== */
+@media (max-width: 768px) {
+  /* iOS Safari 聚焦 input 时若字号 <16px 会自动放大整页，强制 16px 从根上避免 */
+  input,
+  textarea,
+  select,
+  .form-control,
+  .form-select {
+    font-size: 16px !important;
+  }
+  /* 底部 Tab Bar 必须避开 iPhone 小白条；再叠一层 env() 保证任何入口都生效 */
+  .mobile-tabbar {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom)) !important;
+  }
+  /* 侧边栏在真实手机上绝对隐藏，避免旧版折叠态残留占位 */
+  .sidebar {
+    display: none !important;
+  }
+  /* 内容区底部留白跟随安全区，最后一条数据不被底栏遮挡 */
+  .content {
+    padding-bottom: calc(var(--mtab-h) + 20px + env(safe-area-inset-bottom));
+  }
+}
+
+/* 独立 App 模式下系统状态栏会盖住顶栏，补一段安全区上边距 */
+@media (display-mode: standalone) {
+  .topbar {
+    padding-top: calc(10px + env(safe-area-inset-top));
+  }
+}
+
+/* ==================== v0.13.8：借贷 / 报销明细卡片 ==================== */
+.stat-detail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stat-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: var(--surface);
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+.stat-card:hover {
+  border-color: var(--brand-blue);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, .07);
+}
+.stat-card.is-settled {
+  opacity: .62;
+  background: var(--surface-2, #f6f7fb);
+}
+.stat-card.is-settled .stat-card-title {
+  text-decoration: line-through;
+  text-decoration-color: rgba(15, 23, 42, .35);
+}
+.stat-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.stat-card-title {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stat-status {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-weight: 600;
+}
+.stat-status.is-unpaid {
+  color: #b45309;
+  background: rgba(245, 158, 11, .14);
+}
+.stat-status.is-overdue {
+  color: #b91c1c;
+  background: rgba(239, 68, 68, .14);
+}
+.stat-status.is-paid {
+  color: #047857;
+  background: rgba(16, 185, 129, .14);
+}
+.stat-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.stat-card-money {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
+.stat-card-remain {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stat-card-repaid {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.stat-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.stat-card-actions .btn {
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 9px;
+}
+.stat-empty {
+  padding: 26px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.repay-summary {
+  font-size: 13px;
+  color: var(--text-muted);
+  background: var(--surface-2, #f6f7fb);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+}
+.repay-summary strong {
+  color: var(--text);
+  font-size: 15px;
+}
+@media (max-width: 768px) {
+  .stat-card-actions .btn {
+    flex: 1 1 auto;
+    min-width: 84px;
+  }
+}

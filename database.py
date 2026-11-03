@@ -895,6 +895,9 @@ def _ensure_user_schema(conn):
             conn.execute("ALTER TABLE debts ADD COLUMN interest REAL NOT NULL DEFAULT 0")
         if "image_path" not in debt_columns:
             conn.execute("ALTER TABLE debts ADD COLUMN image_path TEXT NOT NULL DEFAULT ''")
+        # v0.13.8：已还金额，支持部分还款；remaining = amount - repaid
+        if "repaid" not in debt_columns:
+            conn.execute("ALTER TABLE debts ADD COLUMN repaid REAL NOT NULL DEFAULT 0")
 
     # 图标素材库（v0.12.3）：系统图标 user_id=0，用户上传挂自己的 id
     conn.execute(
@@ -1647,7 +1650,8 @@ def init_db():
                     status     TEXT    NOT NULL DEFAULT 'unpaid',
                     due_date   TEXT    NOT NULL DEFAULT '',
                     interest   REAL    NOT NULL DEFAULT 0,
-                    image_path TEXT    NOT NULL DEFAULT ''
+                    image_path TEXT    NOT NULL DEFAULT '',
+                    repaid     REAL    NOT NULL DEFAULT 0
                 )
                 """
             )
@@ -4209,12 +4213,16 @@ def delete_contact(contact_id):
 
 def _row_to_debt(row):
     keys = row.keys()
+    repaid = round(row["repaid"] or 0, 2) if "repaid" in keys else 0.0
+    amount = round(row["amount"], 2)
     return {
         "id": row["id"],
         "contact_id": row["contact_id"],
         "contact_name": row["contact_name"],
         "account": row["account"],
-        "amount": round(row["amount"], 2),
+        "amount": amount,
+        "repaid": repaid,
+        "remaining": round(max(amount - repaid, 0), 2),
         "type": row["type"],
         "date": normalize_date(row["date"]),
         "status": row["status"],
@@ -4227,7 +4235,7 @@ def _row_to_debt(row):
 
 DEBT_SELECT = (
     "SELECT d.id, d.contact_id, c.name AS contact_name, d.account, d.amount, "
-    "       d.type, d.date, d.status, d.due_date, d.interest, d.image_path "
+    "       d.type, d.date, d.status, d.due_date, d.interest, d.image_path, d.repaid "
     "  FROM debts d JOIN contacts c ON c.id = d.contact_id"
 )
 
@@ -4429,6 +4437,13 @@ def update_debt(
                     fields.get("amount", old["amount"]),
                 ),
             )
+            # v0.13.8：金额调小到低于已还金额时，已还金额跟着收敛，避免出现负数待还
+            if "amount" in fields:
+                current_repaid = conn.execute(
+                    "SELECT repaid FROM debts WHERE id = ? AND user_id = ?",
+                    (debt_id, _uid()),
+                ).fetchone()["repaid"] or 0
+                fields["repaid"] = round(min(float(current_repaid), fields["amount"]), 2)
             assignments = ", ".join("%s = ?" % key for key in fields)
             conn.execute(
                 "UPDATE debts SET " + assignments + " WHERE id = ? AND user_id = ?",
@@ -4494,6 +4509,155 @@ def settle_debt(debt_id, settle_date=None):
         if error is None:
             record = get_record(record_id)
     return get_debt(debt_id), record, None
+
+
+def repay_debt(debt_id, amount, account=None, repay_date=None):
+    """v0.13.8 还款/收款闭环：一次事务里改余额 + 生成流水 + 累加已还 + 结清。
+
+    - 借入（borrow）还款：资金账户 **减少**，生成一条 expense 流水，分类「借入还款」
+    - 借出（lend）收回：资金账户 **增加**，生成一条 income 流水，分类「借出收款」
+    部分还款时 debt.status 仍为 unpaid，累加到 repaid；还满自动置 paid。
+    返回 (借贷字典, 流水字典或 None, 错误信息)。
+    """
+    problem = _check_debt_amount(amount)
+    if problem is not None:
+        return None, None, problem
+    amount = round(float(amount), 2)
+    conn = get_conn()
+    record_id = None
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT d.id, c.name AS contact_name, d.account, d.amount, d.type, "
+                "       d.status, d.repaid "
+                "  FROM debts d JOIN contacts c ON c.id = d.contact_id "
+                " WHERE d.id = ? AND d.user_id = ?",
+                (debt_id, _uid()),
+            ).fetchone()
+            if row is None:
+                return None, None, "借贷记录不存在"
+            if row["status"] == "paid":
+                return None, None, "这笔借贷已经结清"
+            repaid = round(row["repaid"] or 0, 2)
+            remaining = round(row["amount"] - repaid, 2)
+            if amount > remaining + 1e-9:
+                return None, None, "还款金额不能超过剩余待还 %.2f" % remaining
+            use_account = (account or row["account"] or "").strip()
+            if not use_account:
+                return None, None, "account 不能为空"
+            exists = conn.execute(
+                "SELECT 1 FROM accounts WHERE name = ? AND user_id = ?",
+                (use_account, _uid()),
+            ).fetchone()
+            if exists is None:
+                return None, None, "账户「%s」不存在" % use_account
+
+            is_borrow = row["type"] == "borrow"
+            record_type = "expense" if is_borrow else "income"
+            category = "借入还款" if is_borrow else "借出收款"
+            note = ("借入还款" if is_borrow else "借出收款") + " #%d · %s" % (
+                debt_id,
+                row["contact_name"] or "",
+            )
+            when = (
+                normalize_date(repay_date)
+                if repay_date
+                else datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO records
+                       (user_id, amount, category, category_id, note, date, account, type,
+                        formula, to_account, fee, is_reimbursable,
+                        reimbursement_contact_id, reimbursed_amount, total_reimbursement,
+                        image_path, created_at)
+                VALUES (?, ?, ?, NULL, ?, ?, ?, ?, '', '', 0, 0, NULL, 0, 0, '',
+                        datetime('now','localtime'))
+                """,
+                (_uid(), amount, category, note, when, use_account, record_type),
+            )
+            record_id = cur.lastrowid
+            _apply_effects(conn, _balance_effects(record_type, use_account, "", amount, 0))
+            new_repaid = round(repaid + amount, 2)
+            status = "paid" if new_repaid >= row["amount"] - 1e-9 else "unpaid"
+            conn.execute(
+                "UPDATE debts SET repaid = ?, status = ? WHERE id = ? AND user_id = ?",
+                (min(new_repaid, round(row["amount"], 2)), status, debt_id, _uid()),
+            )
+    finally:
+        conn.close()
+    return get_debt(debt_id), get_record(record_id), None
+
+
+def reimburse_record(record_id, amount=None, account=None, reimburse_date=None):
+    """v0.13.8 报销闭环：把一条可报销支出的未报销部分入账。
+
+    流程与借贷对称：资金账户 **增加**（公司/对方打钱进来），生成一条 income 流水
+    （分类「报销入账」，备注带原账目 id），同时累加 records.reimbursed_amount。
+    不传 amount 时默认把剩余未报销金额全部结清。
+    返回 (账目字典, 流水字典或 None, 错误信息)。
+    """
+    record = get_record(record_id)
+    if record is None:
+        return None, None, "账目不存在"
+    if not record.get("is_reimbursable"):
+        return None, None, "这条账目没有开启报销"
+    total = round(float(record.get("total_reimbursement") or 0), 2)
+    paid = round(float(record.get("reimbursed_amount") or 0), 2)
+    remaining = round(total - paid, 2)
+    if remaining <= 0:
+        return None, None, "这条账目已经全部报销"
+    if amount is None:
+        amount = remaining
+    problem = _check_debt_amount(amount)
+    if problem is not None:
+        return None, None, problem
+    amount = round(float(amount), 2)
+    if amount > remaining + 1e-9:
+        return None, None, "报销金额不能超过待报销 %.2f" % remaining
+    use_account = (account or "").strip()
+    if not use_account:
+        return None, None, "报销必须选择一个入账账户"
+    conn = get_conn()
+    record_new_id = None
+    try:
+        with conn:
+            exists = conn.execute(
+                "SELECT 1 FROM accounts WHERE name = ? AND user_id = ?",
+                (use_account, _uid()),
+            ).fetchone()
+            if exists is None:
+                return None, None, "账户「%s」不存在" % use_account
+            when = (
+                normalize_date(reimburse_date)
+                if reimburse_date
+                else datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+            )
+            note = "报销入账 #%d · %s" % (
+                record_id,
+                (record.get("note") or record.get("category") or "").strip(),
+            )
+            cur = conn.execute(
+                """
+                INSERT INTO records
+                       (user_id, amount, category, category_id, note, date, account, type,
+                        formula, to_account, fee, is_reimbursable,
+                        reimbursement_contact_id, reimbursed_amount, total_reimbursement,
+                        image_path, created_at)
+                VALUES (?, ?, '报销入账', NULL, ?, ?, ?, 'income', '', '', 0, 0, NULL, 0, 0,
+                        '', datetime('now','localtime'))
+                """,
+                (_uid(), amount, note, when, use_account),
+            )
+            record_new_id = cur.lastrowid
+            _apply_effects(conn, _balance_effects("income", use_account, "", amount, 0))
+            conn.execute(
+                "UPDATE records SET reimbursed_amount = ? WHERE id = ? AND user_id = ?",
+                (round(min(paid + amount, total), 2), record_id, _uid()),
+            )
+    finally:
+        conn.close()
+    return get_record(record_id), get_record(record_new_id), None
 
 
 # ---------------- 图标素材库（v0.12.3） ----------------

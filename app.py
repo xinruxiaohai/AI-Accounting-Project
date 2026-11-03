@@ -3623,7 +3623,7 @@ def admin_users():
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.7-DEV"
+APP_VERSION_FALLBACK = "v0.13.8-DEV"
 def detect_version():
     """返回当前版本号，比如 v0.06.3-DEV。
 
@@ -3882,6 +3882,54 @@ def settle_debt(debt_id):
         status = 404 if error == "借贷记录不存在" else 400
         return jsonify(error=error), status
     return jsonify(debt=debt, record=record, message="已结清" + ("，利息账单已入账" if record else ""))
+
+
+@app.route("/api/debts/<int:debt_id>/repay", methods=["POST"])
+def repay_debt(debt_id):
+    """v0.13.8 还款闭环：扣/加资金账户余额 + 生成流水 + 累加已还 + 到期自动结清。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    amount = data.get("amount")
+    if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+        return jsonify(error="amount 必须是数字"), 400
+    account = data.get("account")
+    if account is not None and not isinstance(account, str):
+        return jsonify(error="account 必须是字符串"), 400
+    debt, record, error = database.repay_debt(
+        debt_id, amount, account, data.get("date")
+    )
+    if error is not None:
+        status = 404 if error == "借贷记录不存在" else 400
+        return jsonify(error=error), status
+    message = "已结清" if debt["status"] == "paid" else "已还 %.2f，剩余 %.2f" % (
+        float(amount),
+        debt["remaining"],
+    )
+    return jsonify(debt=debt, record=record, message=message)
+
+
+@app.route("/api/records/<int:record_id>/reimburse", methods=["POST"])
+def reimburse_record(record_id):
+    """v0.13.8 报销闭环：生成报销入账流水并累加已报销金额。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    amount = data.get("amount")
+    if amount is not None and (
+        isinstance(amount, bool) or not isinstance(amount, (int, float))
+    ):
+        return jsonify(error="amount 必须是数字"), 400
+    account = data.get("account")
+    if account is not None and not isinstance(account, str):
+        return jsonify(error="account 必须是字符串"), 400
+    record, flow, error = database.reimburse_record(
+        record_id, amount, account, data.get("date")
+    )
+    if error is not None:
+        status = 404 if error == "账目不存在" else 400
+        return jsonify(error=error), status
+    return jsonify(record=record, flow=flow, message="已标记报销并入账")
 
 
 # ---------------- 图标素材库（v0.12.3） ----------------
