@@ -475,30 +475,32 @@ function setButtonBusy(button, busy, busyText) {
 
 const SKELETON_WIDTHS = [38, 26, 52, 34, 44, 62, 30];
 
-function emptyStateInner(hint) {
+function emptyStateInner(hint, title) {
   return (
     '<div class="empty-state">' +
-    '<svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-    'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z"></path>' +
-    '<path d="M3.5 7.5 12 12l8.5-4.5M12 12v9"></path>' +
+    '<svg class="empty-icon" viewBox="0 0 64 64" fill="none" stroke="currentColor" ' +
+    'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="14" y="24" width="36" height="26" rx="6"></rect>' +
+    '<path d="M22 24v-3a6 6 0 0 1 6-6h8a6 6 0 0 1 6 6v3"></path>' +
+    '<circle cx="32" cy="37" r="5.5"></circle>' +
+    '<path d="M32 34v6M29 37h6"></path>' +
     "</svg>" +
-    '<div class="empty-title">暂无数据</div>' +
+    '<div class="empty-title">' + (title ? escapeHtml(title) : "空空如也") + "</div>" +
     (hint ? '<div class="empty-text">' + escapeHtml(hint) + "</div>" : "") +
     "</div>"
   );
 }
 
 /** 表格里的空数据行：图标 + 暂无数据 + 一句引导 */
-function emptyStateHtml(colspan, hint) {
+function emptyStateHtml(colspan, hint, title) {
   return (
-    '<tr><td colspan="' + colspan + '" class="empty-cell">' + emptyStateInner(hint) + "</td></tr>"
+    '<tr><td colspan="' + colspan + '" class="empty-cell">' + emptyStateInner(hint, title) + "</td></tr>"
   );
 }
 
 /** 非表格区域（账户卡片）的空数据块 */
-function emptyBlockHtml(hint) {
-  return '<div class="empty-block">' + emptyStateInner(hint) + "</div>";
+function emptyBlockHtml(hint, title) {
+  return '<div class="empty-block">' + emptyStateInner(hint, title) + "</div>";
 }
 
 function skeletonRowsHtml(colspan, rows) {
@@ -535,8 +537,8 @@ function beginTableLoad(tbody, colspan, rows) {
     tbody.removeAttribute("aria-busy");
     if (tbody.querySelector(".skeleton-row, .sk-feed-row")) {
       tbody.innerHTML = isTable
-        ? emptyStateHtml(colspan, "数据加载失败，请稍后重试")
-        : feedEmptyHtml("数据加载失败，请稍后重试");
+        ? emptyStateHtml(colspan, "数据加载失败，请稍后重试", "加载失败了")
+        : feedEmptyHtml("数据加载失败，请稍后重试", "加载失败了");
     }
   };
 }
@@ -585,7 +587,7 @@ function beginGroupsLoad(box) {
     clearTimeout(timer);
     box.removeAttribute("aria-busy");
     if (box.querySelector(".is-skeleton")) {
-      box.innerHTML = emptyBlockHtml("账户加载失败，请刷新重试");
+      box.innerHTML = emptyBlockHtml("账户加载失败，请刷新重试", "加载失败了");
     }
   };
 }
@@ -3862,8 +3864,8 @@ function feedGroupsHtml(records, snapshots, options) {
   return html;
 }
 
-function feedEmptyHtml(hint) {
-  return '<div class="feed-empty">' + escapeHtml(hint) + "</div>";
+function feedEmptyHtml(hint, title) {
+  return '<div class="feed-empty">' + emptyStateInner(hint, title) + "</div>";
 }
 
 /* ---------- 分页 / 滚动加载（v0.06.3） ---------- */
@@ -6217,6 +6219,36 @@ function playPageEnterAnimation(pageName) {
   );
 }
 
+/* v0.13.8：首次进入某页时先展示页面级骨架屏，数据/组件骨架就位后淡出 */
+var pageSkeletonPrimed = {};
+function showPageSkeleton(page) {
+  if (pageSkeletonPrimed[page]) {
+    return;
+  }
+  pageSkeletonPrimed[page] = true;
+  var section = document.getElementById("page-" + page);
+  if (!section) {
+    return;
+  }
+  var sk = section.querySelector(".page-skeleton");
+  if (!sk) {
+    return;
+  }
+  section.classList.add("is-loading");
+  sk.hidden = false;
+  var reduce = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var hold = reduce ? 0 : 550;
+  window.setTimeout(function () {
+    sk.classList.add("is-fading");
+    window.setTimeout(function () {
+      sk.hidden = true;
+      sk.classList.remove("is-fading");
+      section.classList.remove("is-loading");
+    }, reduce ? 0 : 320);
+  }, hold);
+}
+
 function switchPage(page) {
   const target = PAGE_TITLES[page] ? page : "home";
   $("page-title").textContent = PAGE_TITLES[target];
@@ -6231,6 +6263,9 @@ function switchPage(page) {
   document.querySelectorAll(".page").forEach(function (section) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
+
+  // v0.13.8：首次进入该页展示骨架屏（已加载过则跳过，避免重复闪烁）
+  showPageSkeleton(target);
 
   // v0.13.2：目标页做一次 fadeSlideUp 切入（250ms、ease-out）。
   // 连续点同一个导航项也要能重放：先移除类 → 强制重排 → 再加回。

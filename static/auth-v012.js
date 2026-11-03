@@ -101,6 +101,141 @@
     };
   }
 
+  /* ---------------- 登录页 Canvas 粒子背景（v0.13.8） ---------------- */
+  function initAuthBackground() {
+    var canvas = document.getElementById("auth-bg-canvas");
+    if (!canvas) {
+      return;
+    }
+    // 尊重「减少动态效果」：隐藏画布，保留 CSS 渐变兜底
+    var reduceMotion = window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion) {
+      canvas.style.display = "none";
+      return;
+    }
+
+    var ctx = canvas.getContext("2d");
+    var gate = document.getElementById("auth-gate") || document.body;
+    var dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var W = 0, H = 0, particles = [], rafId = null;
+    var mouse = { x: -9999, y: -9999 };
+    var COLORS = ["#60a5fa", "#34d399", "#22d3ee", "#818cf8"];
+    var MAX_DIST = 130;
+
+    function resize() {
+      W = gate.clientWidth || window.innerWidth;
+      H = gate.clientHeight || window.innerHeight;
+      canvas.width = Math.floor(W * dpr);
+      canvas.height = Math.floor(H * dpr);
+      canvas.style.width = W + "px";
+      canvas.style.height = H + "px";
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      buildParticles();
+    }
+
+    function buildParticles() {
+      // 粒子数随视口面积缩放：约每 10000px² 一个，限制在 28~120
+      var count = Math.max(28, Math.min(120, Math.floor((W * H) / 10000)));
+      particles = [];
+      for (var i = 0; i < count; i += 1) {
+        particles.push({
+          x: Math.random() * W,
+          y: Math.random() * H,
+          vx: (Math.random() - 0.5) * 0.35,
+          vy: (Math.random() - 0.5) * 0.35,
+          r: Math.random() * 1.6 + 1.2,
+          c: COLORS[(Math.random() * COLORS.length) | 0]
+        });
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      var i, p, dxm, dym, dm, f;
+      for (i = 0; i < particles.length; i += 1) {
+        p = particles[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        if (p.x < 0 || p.x > W) p.vx *= -1;
+        if (p.y < 0 || p.y > H) p.vy *= -1;
+        // 鼠标轻微交互：靠近的粒子被轻轻推开
+        dxm = p.x - mouse.x;
+        dym = p.y - mouse.y;
+        dm = Math.sqrt(dxm * dxm + dym * dym);
+        if (dm < 110) {
+          f = (110 - dm) / 110;
+          p.x += (dxm / (dm || 1)) * f * 1.2;
+          p.y += (dym / (dm || 1)) * f * 1.2;
+        }
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = p.c;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      // 邻近粒子连线
+      for (var a = 0; a < particles.length; a += 1) {
+        for (var b = a + 1; b < particles.length; b += 1) {
+          var pa = particles[a], pb = particles[b];
+          var dx = pa.x - pb.x, dy = pa.y - pb.y;
+          var d = Math.sqrt(dx * dx + dy * dy);
+          if (d < MAX_DIST) {
+            ctx.beginPath();
+            ctx.moveTo(pa.x, pa.y);
+            ctx.lineTo(pb.x, pb.y);
+            ctx.strokeStyle = "rgba(148, 163, 184, " + (0.18 * (1 - d / MAX_DIST)) + ")";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+          }
+        }
+      }
+      // 鼠标连线
+      for (var k = 0; k < particles.length; k += 1) {
+        var pk = particles[k];
+        var dkx = pk.x - mouse.x, dky = pk.y - mouse.y;
+        var dk = Math.sqrt(dkx * dkx + dky * dky);
+        if (dk < MAX_DIST) {
+          ctx.beginPath();
+          ctx.moveTo(pk.x, pk.y);
+          ctx.lineTo(mouse.x, mouse.y);
+          ctx.strokeStyle = "rgba(96, 165, 250, " + (0.22 * (1 - dk / MAX_DIST)) + ")";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+      }
+    }
+
+    function loop() {
+      rafId = window.requestAnimationFrame(loop);
+      // 标签页隐藏或登录遮罩已收起时不绘制，避免空耗 CPU
+      if (document.hidden || gate.hidden || canvas.offsetParent === null) {
+        return;
+      }
+      draw();
+    }
+
+    gate.addEventListener("mousemove", function (e) {
+      var rect = canvas.getBoundingClientRect();
+      mouse.x = e.clientX - rect.left;
+      mouse.y = e.clientY - rect.top;
+    });
+    gate.addEventListener("mouseleave", function () {
+      mouse.x = -9999;
+      mouse.y = -9999;
+    });
+    window.addEventListener("resize", resize);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        resize();
+      }
+    });
+
+    resize();
+    loop();
+  }
+
   /* ---------------- 登录 / 注册遮罩 ---------------- */
 
   var gateElement = null;
@@ -114,6 +249,7 @@
     gateElement.className = "auth-gate";
     gateElement.id = "auth-gate";
     gateElement.innerHTML =
+      '<canvas id="auth-bg-canvas"></canvas>' +
       '<div class="auth-card">' +
         '<div class="auth-brand">' +
           '<img class="auth-logo-img" id="auth-brand-logo" src="/static/images/logo-main.png" alt="智汇账">' +
@@ -165,6 +301,8 @@
     document.body.appendChild(gateElement);
     // 登录页的品牌图标同样跟随「品牌图标主题」
     applyBrandLogo();
+    // v0.13.8：登录页动态粒子背景（蓝绿粒子网络 + 鼠标轻交互）
+    initAuthBackground();
 
     gateElement.addEventListener("click", function (event) {
       var tab = event.target.closest("[data-auth-tab]");
