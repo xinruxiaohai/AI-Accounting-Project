@@ -12442,58 +12442,41 @@ body.has-avatar-lightbox {
 [data-theme="dark"] .empty-title { color: #94a3b8; }
 [data-theme="dark"] .empty-text { color: #64748b; }
 
-/* ---- 页面级骨架屏占位：首次进入某页时展示，数据就位后淡出 ---- */
-.page-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 4px;
-  animation: fadeSlideUp 0.25s ease both;
-}
-.page-skeleton[hidden] {
-  display: none;
-}
-.page.is-loading > *:not(.page-skeleton) {
-  display: none;
-}
-.page-skeleton.is-fading {
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-.sk-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 14px;
-}
-.skeleton.sk-card {
-  height: 84px;
-  border-radius: 12px;
-}
-.skeleton.sk-line-lg {
-  height: 18px;
-  width: 42%;
-}
-.skeleton.sk-line-md {
-  height: 12px;
-  width: 72%;
-}
+/* v0.13.9-FIX：页面级骨架屏已废弃，彻底移除遮罩规则；仅保留组件级 sk-shimmer / skeletonRowsHtml */
 
 /* =====================================================================
    v0.13.9 强化：吸顶真正生效 / 卡片发光 / 悬浮上浮 / 骨架高对比 / 数字发光 / 图表融合
    （以下规则覆盖 v0.13.8 同名规则，置于文件末尾以确保优先级）
    ===================================================================== */
 
-/* ---- 顶部工具栏：磨砂吸顶真正生效（主滚动容器已改为 .main）---- */
+/* ---- 顶部工具栏：磨砂吸顶（z-index 提到 100，压过一切内容遮罩）---- */
 .topbar {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 100;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   background: rgba(255, 255, 255, 0.75);
 }
 [data-theme="dark"] .topbar {
   background: rgba(19, 28, 43, 0.75);
+}
+
+/* v0.13.9-FIX：让 .main 成为权威滚动容器，顶栏 sticky 才有滚动上下文
+   （覆盖 v0.10 全局滚动锁定对 .main/.content/.page.active 的 overflow:hidden）*/
+.main {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.content {
+  overflow: visible;
+}
+.page.active {
+  height: auto;
+  overflow: visible;
+}
+#page-home.active {
+  height: 100%;
 }
 
 /* ---- 卡片悬浮：明显上浮 -4px + 背景高亮 + 0.25s ease-out ---- */
@@ -12516,6 +12499,12 @@ body.has-avatar-lightbox {
 .clickable:hover {
   transform: translateY(-4px);
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+}
+
+/* v0.13.9-FIX：统计卡与面板也参与 -4px 上浮，呼应卡片发光质感 */
+.panel:hover,
+.stat-card:hover {
+  transform: translateY(-4px);
 }
 [data-theme="dark"] .feed-row:hover {
   background: rgba(255, 255, 255, 0.06);
@@ -12546,26 +12535,9 @@ body.has-avatar-lightbox {
   background: linear-gradient(90deg, #243042 25%, #34465f 37%, #243042 63%);
 }
 
-/* ---- 页面级骨架屏：切换页面时的半透明磨砂遮罩（≥500ms 清晰可见微光）---- */
+/* v0.13.9-FIX：页面级磨砂遮罩已废弃，杜绝幽灵灰块遮挡数据 */
 .page {
   position: relative;
-}
-.page-skeleton {
-  position: absolute;
-  inset: 0;
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 24px;
-  background: rgba(255, 255, 255, 0.86);
-}
-[data-theme="dark"] .page-skeleton {
-  background: rgba(19, 28, 43, 0.86);
-}
-.page-skeleton.is-fading {
-  opacity: 0;
-  transition: opacity 0.3s ease;
 }
 
 /* ---- 核心资产大数字：深色模式微弱文字发光，第一眼跳出来 ---- */

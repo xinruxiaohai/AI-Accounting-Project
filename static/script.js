@@ -6219,30 +6219,8 @@ function playPageEnterAnimation(pageName) {
   );
 }
 
-/* v0.13.9：每次切换页面都展示半透明磨砂骨架遮罩，至少维持 500ms，确保微光动画清晰可见 */
-var pageSkeletonPrimed = {};
-function showPageSkeleton(page) {
-  var section = document.getElementById("page-" + page);
-  if (!section) {
-    return;
-  }
-  var sk = section.querySelector(".page-skeleton");
-  if (!sk) {
-    return;
-  }
-  sk.hidden = false;
-  sk.classList.remove("is-fading");
-  var reduce = window.matchMedia &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  var hold = reduce ? 0 : 500;
-  window.setTimeout(function () {
-    sk.classList.add("is-fading");
-    window.setTimeout(function () {
-      sk.hidden = true;
-      sk.classList.remove("is-fading");
-    }, reduce ? 0 : 300);
-  }, hold);
-}
+/* v0.13.9-FIX：页面级骨架屏已废弃，彻底移除遮罩逻辑，仅保留组件级 sk-shimmer / skeletonRowsHtml，
+ * 杜绝「幽灵灰块」永久遮挡真实数据。 */
 
 function switchPage(page) {
   const target = PAGE_TITLES[page] ? page : "home";
@@ -6259,8 +6237,7 @@ function switchPage(page) {
     section.classList.toggle("active", section.id === "page-" + target);
   });
 
-  // v0.13.9：切换页面时展示半透明磨砂骨架屏，并把主滚动区（.main）滚动到顶部
-  showPageSkeleton(target);
+  // v0.13.9-FIX：切换页面时把主滚动区（.main）滚动到顶部（页面级骨架屏已废弃）
   var mainScroll = document.querySelector(".main");
   if (mainScroll) {
     mainScroll.scrollTop = 0;
