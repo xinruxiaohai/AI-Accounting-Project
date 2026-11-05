@@ -6,7 +6,7 @@
  *   - 静态资源：stale-while-revalidate，先用缓存秒开，后台顺手更新
  *   - /api/ 与后台页面：完全不缓存，避免把旧余额当成新数据
  */
-const CACHE_NAME = "ai-accounting-v0.13.8-r1";
+const CACHE_NAME = "ai-accounting-v0.14.0-tst5";
 const CACHE_PREFIX = "ai-accounting-";
 const PRECACHE_URLS = [
   "/",
@@ -23,7 +23,11 @@ const PRECACHE_URLS = [
 
 self.addEventListener("install", function (event) {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(function (cache) {
+    // v0.14.0-TST：版本串退回 r1 时浏览器里可能残留同名旧缓存，
+    // install 先删同名缓存再重建，避免强刷后仍拿到上一轮旧 CSS / JS。
+    caches.delete(CACHE_NAME)
+      .then(function () { return caches.open(CACHE_NAME); })
+      .then(function (cache) {
       // 逐个 add：某一个文件 404 不应该让整个安装失败
       return Promise.all(
         PRECACHE_URLS.map(function (url) {
@@ -39,6 +43,8 @@ self.addEventListener("install", function (event) {
 self.addEventListener("activate", function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
+      // v0.14.0：清掉所有旧版本缓存（CACHE_PREFIX 前缀但非当前 CACHE_NAME），
+      // 保证升级后不会继续命中上一版的旧 style.css / script.js / 图标。
       return Promise.all(
         keys
           .filter(function (key) {

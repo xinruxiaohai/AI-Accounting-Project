@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="/static/images/logo-main.png">
   <link rel="apple-touch-icon" href="/static/images/logo-main.png">
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.13.8">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.0-tst5">
   <style>
     /* v0.12.7：后台单独解除全局滚动锁定，长表单也能滑到底 */
     html,
@@ -325,6 +325,207 @@
       font-weight: 700;
       font-variant-numeric: tabular-nums;
     }
+
+    /* v0.14.0：提示文案管理（Tips）—— 前端 toast() 的颜文字文案库 */
+    .tip-form {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .tip-form .form-select { max-width: 168px; }
+    .tip-form .form-control { flex: 1 1 300px; min-width: 200px; }
+    .tip-table td { white-space: normal; }
+    .tip-content {
+      min-width: 280px;
+      word-break: break-word;
+      line-height: 1.55;
+    }
+    .tip-actions { white-space: nowrap; }
+    .tip-actions .btn + .btn { margin-left: 6px; }
+    .tip-type {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .tip-type-success { background: rgba(22, 163, 74, 0.14); color: #15803d; }
+    .tip-type-error { background: rgba(220, 38, 38, 0.14); color: #b91c1c; }
+    .tip-type-info { background: rgba(37, 99, 235, 0.14); color: #1d4ed8; }
+    .tip-type-warn { background: rgba(217, 119, 6, 0.16); color: #b45309; }
+    .tip-on { color: #15803d; font-weight: 600; }
+    .tip-off { color: var(--text-muted); }
+    .tip-edit-input { max-width: 420px; }
+    [data-theme="dark"] .tip-type-success { background: rgba(34, 197, 94, 0.18); color: #4ade80; }
+    [data-theme="dark"] .tip-type-error { background: rgba(248, 113, 113, 0.18); color: #fca5a5; }
+    [data-theme="dark"] .tip-type-info { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+    [data-theme="dark"] .tip-type-warn { background: rgba(251, 191, 36, 0.18); color: #fcd34d; }
+    [data-theme="dark"] .tip-on { color: #4ade80; }
+
+    /* v0.14.0：提示文案「场景位置」列与行内编辑控件 */
+    .tip-form .tip-form-location { flex: 0 1 220px; min-width: 160px; }
+    .tip-location {
+      display: inline-block;
+      max-width: 180px;
+      padding: 1px 8px;
+      border-radius: 6px;
+      background: var(--surface-3);
+      color: var(--text-muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    .tip-location.is-empty { background: transparent; color: var(--text-dim); }
+    .tip-edit-type { max-width: 110px; }
+    .tip-edit-location { max-width: 170px; }
+
+    /* v0.14.0：帮助与反馈内容配置（管理员编辑原文，行格式：问题|答案） */
+    .help-config-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px 18px;
+    }
+    @media (max-width: 767.98px) {
+      .help-config-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+    .help-config-field { display: flex; flex-direction: column; gap: 6px; }
+    .help-config-field textarea {
+      min-height: 110px;
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.6;
+    }
+    .help-config-field .admin-hint { margin-top: 0; }
+    .help-config-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    /* v0.14.0：用户反馈查看器（前台「帮助与反馈」表单提交） */
+    .user-feedback-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      max-height: 760px;
+      overflow-y: auto;
+    }
+    .user-feedback-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      padding: 14px 16px;
+    }
+    .user-feedback-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .user-feedback-identity {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .user-feedback-email {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-strong);
+      word-break: break-all;
+    }
+    .user-feedback-uid {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.12);
+      color: #2563eb;
+      font-size: 12px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .user-feedback-nickname { font-size: 13px; color: var(--text-muted); }
+    .user-feedback-time {
+      font-size: 12px;
+      color: var(--text-dim);
+      white-space: nowrap;
+    }
+    .user-feedback-issue {
+      margin: 12px 0 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface-1);
+      color: var(--text-main);
+      font-size: 13px;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .user-feedback-figure {
+      margin: 12px 0 0;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .user-feedback-thumb {
+      display: block;
+      width: 120px;
+      height: 90px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--surface-1);
+      flex: none;
+    }
+    .user-feedback-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .user-feedback-shot-link { font-size: 12px; align-self: center; }
+    .user-feedback-meta {
+      margin-top: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .user-feedback-meta-item { display: inline-flex; align-items: center; gap: 6px; }
+    .user-feedback-meta-label { color: var(--text-dim); }
+    .user-feedback-contact-tag {
+      display: inline-block;
+      padding: 1px 8px;
+      border-radius: 999px;
+      background: rgba(37, 99, 235, 0.12);
+      color: #2563eb;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    [data-theme="dark"] .user-feedback-uid,
+    [data-theme="dark"] .user-feedback-contact-tag {
+      background: rgba(96, 165, 250, 0.18);
+      color: #93c5fd;
+    }
+    [data-theme="dark"] .user-feedback-card { background: var(--surface-3); }
+
+    .admin-error {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      background: rgba(220, 38, 38, 0.1);
+      color: #b91c1c;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    [data-theme="dark"] .admin-error {
+      background: rgba(248, 113, 113, 0.14);
+      color: #fca5a5;
+    }
     .feedback-raw {
       font-weight: 600;
       color: var(--text-strong);
@@ -637,6 +838,55 @@
         width: 100%;
       }
     }
+    /* v0.14.1-FIX：AI 大脑管理 —— 上排左右分栏等高、列表限高，下排反馈通栏 */
+    .ai-brain-grid {
+      align-items: stretch !important;
+    }
+    .ai-brain-card {
+      display: flex !important;
+      flex-direction: column !important;
+      height: 100% !important;
+      min-height: 0 !important;
+    }
+    .ai-brain-card .admin-card-title {
+      font-size: 16px !important;
+      font-weight: 700 !important;
+    }
+    #pane-ai-brain .admin-hint,
+    #pane-ai-brain .feedback-raw,
+    #pane-ai-brain .center-log-text,
+    #pane-ai-brain .feedback-table {
+      font-size: 14px !important;
+      line-height: 1.7 !important;
+    }
+    #pane-ai-brain .center-scroll {
+      flex: 1 1 auto !important;
+      min-height: 220px !important;
+      max-height: 46vh !important;
+      overflow-y: auto !important;
+      overscroll-behavior: contain !important;
+      scrollbar-width: thin !important;
+    }
+    #pane-ai-brain > .admin-card {
+      margin-bottom: 24px !important;
+    }
+    @media (max-width: 900px) {
+      .ai-brain-grid {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+    }
+    /* v0.14.0-TST：后台头部版本号徽章，和 /api/version、静态文案保持一致 */
+    .admin-version {
+      display: inline-flex !important;
+      align-items: center !important;
+      padding: 5px 10px !important;
+      border-radius: 999px !important;
+      background: rgba(148, 163, 184, 0.14) !important;
+      color: var(--text-muted, #64748b) !important;
+      font-size: 12px !important;
+      font-weight: 600 !important;
+      white-space: nowrap !important;
+    }
   </style>
 </head>
 <body>
@@ -647,6 +897,7 @@
         <p>在这里写通知，前台点顶部信封就能看到；仅在开发期使用。</p>
       </div>
       <div class="admin-head-actions">
+        <span class="admin-version" id="admin-version">v0.14.0-TST</span>
         <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
         <button type="button" class="admin-gear-btn" id="admin-settings-btn"
                 title="访问密码与验证设置" aria-label="访问密码与验证设置">
@@ -662,20 +913,22 @@
     <div class="admin-tabs" role="tablist">
       <button type="button" class="admin-tab is-active" role="tab" data-tab="notices"
               aria-selected="true">通知发布</button>
-      <button type="button" class="admin-tab" role="tab" data-tab="feedback"
-              aria-selected="false">AI 反馈与记忆</button>
-      <!-- v0.11.4：ai_memory 纠错记忆，解析前取最近 3 条注入 Prompt -->
-      <button type="button" class="admin-tab" role="tab" data-tab="memory"
-              aria-selected="false">AI 记忆库</button>
-      <!-- v0.11.5：左框 ai_memory、右框纠错审计日志（改前/改后对比） -->
-      <button type="button" class="admin-tab" role="tab" data-tab="center"
-              aria-selected="false">AI 纠错与反馈中心</button>
+      <!-- v0.14.1-FIX：原「AI 反馈与记忆 / AI 记忆库 / AI 纠错与反馈中心」
+           三个分散 Tab 合并为单一入口「AI 大脑管理」，内部左右分栏 + 下方反馈列表 -->
+      <button type="button" class="admin-tab" role="tab" data-tab="ai-brain"
+              aria-selected="false">AI 大脑管理</button>
       <!-- v0.12.3：图标素材库（系统内置 + 用户上传） -->
       <button type="button" class="admin-tab" role="tab" data-tab="icons"
               aria-selected="false">图标素材库</button>
       <!-- v0.13.7：用户管理，主键是 users.id（UID） -->
       <button type="button" class="admin-tab" role="tab" data-tab="users"
               aria-selected="false">用户管理</button>
+      <!-- v0.14.0：提示文案（颜文字 toast 文案库），前端 toast() 优先取这里启用的随机文案 -->
+      <button type="button" class="admin-tab" role="tab" data-tab="tips"
+              aria-selected="false">提示文案管理</button>
+      <!-- v0.14.0：用户反馈（前台「帮助与反馈」表单提交，别再和 v0.10 AI 反馈共用 id） -->
+      <button type="button" class="admin-tab" role="tab" data-tab="user-feedback"
+              aria-selected="false">用户反馈</button>
     </div>
 
     <section id="pane-notices">
@@ -776,12 +1029,49 @@
     </div>
     </section>
 
-    <!-- AI 反馈与记忆（v0.10）：看 /api/feedback 列表，把处理完的反馈标记掉 -->
-    <section id="pane-feedback" hidden>
-      <div class="admin-card">
+    <!-- v0.14.1-FIX：AI 大脑管理（三 Tab 合一）
+         上排左右分栏：记忆库（Few-Shot） | 纠错审计；下排通栏：AI 反馈列表。
+         所有元素 id 保持与既有加载逻辑一致，切进来一次串行拉三份数据。 -->
+    <section id="pane-ai-brain" hidden>
+      <div class="admin-grid ai-brain-grid">
+        <section>
+          <div class="admin-card ai-brain-card">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <h2 class="admin-card-title mb-0">
+                AI 记忆库（Few-Shot）
+                <span class="badge text-bg-secondary" id="center-memory-total">0</span>
+              </h2>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-memory-refresh">刷新</button>
+            </div>
+            <p class="admin-hint">
+              用户每次纠错都会落一条；AI 解析前按这句话的关键词模糊匹配最近 3 条注入 Prompt 当 few-shot。
+              删掉某条后，下次解析立刻不再参考它。
+            </p>
+            <div class="center-scroll" id="center-memory-list"></div>
+          </div>
+        </section>
+        <section>
+          <div class="admin-card ai-brain-card">
+            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+              <h2 class="admin-card-title mb-0">
+                近期纠错审计
+                <span class="badge text-bg-secondary" id="center-log-total">0</span>
+              </h2>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-log-refresh">刷新</button>
+            </div>
+            <p class="admin-hint">
+              气泡里说「改成微信零钱，金额 50」、详情点「AI 纠错」都会留一条审计；
+              这里展示改前 → 改后的字段差异，方便排查 AI 到底改对了没有。
+            </p>
+            <div class="center-scroll" id="center-log-list"></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="admin-card mt-3">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
           <h2 class="admin-card-title mb-0">
-            AI 反馈与记忆
+            AI 反馈列表
             <span class="badge text-bg-secondary" id="feedback-total">0</span>
           </h2>
           <div class="d-flex align-items-center gap-2">
@@ -798,62 +1088,6 @@
           每行点「标记已处理」即 PUT /api/feedback/&lt;id&gt; 改状态。
         </p>
         <div id="feedback-list"></div>
-      </div>
-    </section>
-
-    <!-- AI 纠错记忆库（v0.11.4）：ai_memory 表，每次 AI 解析前取最近 3 条当 few-shot -->
-    <section id="pane-memory" hidden>
-      <div class="admin-card">
-        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
-          <h2 class="admin-card-title mb-0">
-            AI 纠错记忆库
-            <span class="badge text-bg-secondary" id="memory-total">0</span>
-          </h2>
-          <button type="button" class="btn btn-sm btn-outline-secondary" id="memory-refresh">刷新</button>
-        </div>
-        <p class="admin-hint mb-3">
-          用户在账单详情点「AI 纠错」时写入一条；每次解析前取最近 3 条注入 Prompt（few-shot）。
-          删掉某条后，下次解析立刻不再参考它。
-        </p>
-        <div id="memory-list"></div>
-      </div>
-    </section>
-
-    <!-- AI 纠错与反馈中心（v0.11.5）：左 ai_memory 可滚动可删，右近期纠错审计（改前/改后） -->
-    <section id="pane-center" hidden>
-      <div class="admin-grid">
-        <section>
-          <div class="admin-card">
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-              <h2 class="admin-card-title mb-0">
-                AI 记忆库（Few-Shot）
-                <span class="badge text-bg-secondary" id="center-memory-total">0</span>
-              </h2>
-              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-memory-refresh">刷新</button>
-            </div>
-            <p class="admin-hint">
-              每次 AI 解析前，会按用户这句话的关键词从表里模糊匹配最近 3 条注入 Prompt 当 few-shot。
-              删掉某条后，下次解析立刻不再参考它。
-            </p>
-            <div class="center-scroll" id="center-memory-list"></div>
-          </div>
-        </section>
-        <section>
-          <div class="admin-card">
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
-              <h2 class="admin-card-title mb-0">
-                近期纠错审计
-                <span class="badge text-bg-secondary" id="center-log-total">0</span>
-              </h2>
-              <button type="button" class="btn btn-sm btn-outline-secondary" id="center-log-refresh">刷新</button>
-            </div>
-            <p class="admin-hint">
-              气泡里说「改成微信零钱，金额 50」、详情点「AI 纠错」都会留一条审计；
-              这里展示改前 → 改后的字段差异，方便排查 AI 到底改对了没有。
-            </p>
-            <div class="center-scroll" id="center-log-list"></div>
-          </div>
-        </section>
       </div>
     </section>
 
@@ -903,6 +1137,103 @@
         </div>
         <p class="admin-hint">UID 就是 <code>users.id</code>，全局唯一、不随昵称或邮箱变化，报障时直接报 UID 最快。</p>
         <div class="user-table-wrap" id="user-list">
+          <div class="admin-empty">正在加载…</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- v0.14.0：提示文案管理 —— 前端 toast() 优先从 /api/tips 取启用中的颜文字文案 -->
+    <section id="pane-tips" hidden>
+      <div class="admin-card mb-3">
+        <div class="d-flex align-items-center justify-content-between mb-2">
+          <h2 class="admin-card-title mb-0">提示文案管理 <span class="badge text-bg-secondary" id="tip-total">0</span></h2>
+          <button class="btn btn-sm btn-outline-secondary" type="button" id="tip-refresh">刷新</button>
+        </div>
+        <p class="admin-hint">
+          前端 toast() 优先从启用的文案里随机取一条（按类型匹配），接口不可用时自动回退内置颜文字保底文案。
+          只能填颜文字，不要用 Emoji。
+        </p>
+        <div class="tip-form">
+          <select class="form-select" id="tip-new-type" aria-label="新增文案类型">
+            <option value="success">成功 success</option>
+            <option value="error">警告 error</option>
+            <option value="info">信息 info</option>
+            <option value="warn">提醒 warn</option>
+          </select>
+          <!-- v0.14.0：场景位置，前端按 location 区分「记账成功 / 云同步 / 网络」等场景 -->
+          <input class="form-control tip-form-location" id="tip-new-location" type="text" maxlength="20"
+                 placeholder="场景位置，如：记账成功" aria-label="新增文案场景位置">
+          <input class="form-control" id="tip-new-content" type="text" maxlength="80"
+                 placeholder="例如：(๑•̀ㅂ•́)و✧ 保存成功啦！" aria-label="新增文案内容">
+          <button class="btn btn-primary" type="button" id="tip-add">添加文案</button>
+        </div>
+        <p class="admin-error" id="tip-error" hidden></p>
+      </div>
+
+      <div class="admin-card">
+        <div class="user-table-wrap" id="tip-list">
+          <div class="admin-empty">正在加载…</div>
+        </div>
+      </div>
+
+      <!-- v0.14.0：帮助与反馈内容配置（前台「设置 → 帮助与反馈」直接读这里的原文） -->
+      <div class="admin-card">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+          <h2 class="admin-card-title mb-0">帮助与反馈内容配置</h2>
+          <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="help-refresh">刷新</button>
+            <button class="btn btn-primary btn-sm" type="button" id="help-save">保存配置</button>
+          </div>
+        </div>
+        <p class="admin-hint mb-3">
+          前台「设置 → 帮助与反馈」打开时读这里的内容：一行一条、竖线分隔字段；
+          改完点「保存配置」，前台下次打开设置弹窗即可看到最新内容。
+        </p>
+        <div class="help-config-grid">
+          <div class="help-config-field">
+            <label class="admin-label" for="help-faq">常见问题（FAQ）</label>
+            <textarea class="form-control" id="help-faq" rows="6" maxlength="8000"
+                      placeholder="问题|答案"></textarea>
+            <p class="admin-hint">行格式「问题|答案」，一行一条；竖线只切第一个，答案里可以再出现竖线。</p>
+          </div>
+          <div class="help-config-field">
+            <label class="admin-label" for="help-shortcuts">快捷键说明</label>
+            <textarea class="form-control" id="help-shortcuts" rows="6" maxlength="8000"
+                      placeholder="按键|说明"></textarea>
+            <p class="admin-hint">行格式「按键|说明」，一行一条，例如：Ctrl+K|搜索账单。</p>
+          </div>
+          <div class="help-config-field">
+            <label class="admin-label" for="help-contact">联系方式</label>
+            <textarea class="form-control" id="help-contact" rows="4" maxlength="8000"
+                      placeholder="名称|值"></textarea>
+            <p class="admin-hint">行格式「名称|值」，一行一条，例如：客服邮箱|support@zhihuizhang.example.com。</p>
+          </div>
+          <div class="help-config-field">
+            <label class="admin-label" for="help-placeholder">反馈输入框占位文案</label>
+            <textarea class="form-control" id="help-placeholder" rows="4" maxlength="8000"
+                      placeholder="抱歉，工程师是小呆呆，有什么问题和诉求请在这里留言！(・ω・)ノ"></textarea>
+            <p class="admin-hint">单行文本，显示在前台反馈输入框的 placeholder（留空则用前台默认文案）。</p>
+          </div>
+        </div>
+        <p class="admin-error" id="help-error" hidden></p>
+      </div>
+    </section>
+
+    <!-- v0.14.0：用户反馈 —— 前台「帮助与反馈」表单提交，管理员在这里查看 -->
+    <section id="pane-user-feedback" hidden>
+      <div class="admin-card">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+          <h2 class="admin-card-title mb-0">
+            用户反馈
+            <span class="badge text-bg-secondary" id="user-feedback-total">0</span>
+          </h2>
+          <button class="btn btn-sm btn-outline-secondary" type="button" id="user-feedback-refresh">刷新</button>
+        </div>
+        <p class="admin-hint mb-3">
+          前台用户提交的求助、报障与建议，按反馈时间倒序排列；
+          截图点缩略图或右侧链接可在新窗口查看原图。
+        </p>
+        <div class="user-feedback-list" id="user-feedback-list">
           <div class="admin-empty">正在加载…</div>
         </div>
       </div>
@@ -988,8 +1319,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.13.8"></script>
-<script src="/static/access-guard.js?v=0.13.8"></script>
+  <script src="/static/auth-v012.js?v=0.14.0-tst5"></script>
+<script src="/static/access-guard.js?v=0.14.0-tst5"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -1858,8 +2189,7 @@
 
       var $ = function (id) { return document.getElementById(id); };
       var state = { items: [], loaded: false, loading: false };
-      // v0.11.4：AI 记忆库单独一份状态，和反馈列表互不影响
-      var memoryState = { items: [], loaded: false, loading: false };
+      // v0.14.1：记忆库与纠错审计统一由 centerState / brainState 管理
 
       function toast(message, isError) {
         var box = $("admin-toast");
@@ -1896,6 +2226,24 @@
 
       var tabs = Array.prototype.slice.call(document.querySelectorAll(".admin-tab"));
 
+      /* v0.14.1：三个 AI Tab 合并为「AI 大脑管理」。
+       * 首次进入串行拉「反馈列表 → 记忆库 + 纠错审计」，单块失败不阻塞其余两块，
+       * 保持 v0.11.5 定下的「避免并发压 SQLite」约束。 */
+      var brainState = { loaded: false, loading: false };
+
+      function loadAiBrain() {
+        if (brainState.loading) { return Promise.resolve(); }
+        brainState.loading = true;
+        return loadFeedback()
+          .catch(function () { /* 反馈列表失败不阻塞记忆 / 审计 */ })
+          .then(function () { return loadCenter(); })
+          .catch(function () { /* 记忆 / 审计失败也不卡住 Tab */ })
+          .then(function () {
+            brainState.loaded = true;
+            brainState.loading = false;
+          });
+      }
+
       function switchTab(name) {
         tabs.forEach(function (tab) {
           var active = tab.getAttribute("data-tab") === name;
@@ -1903,17 +2251,18 @@
           tab.setAttribute("aria-selected", active ? "true" : "false");
         });
         $("pane-notices").hidden = name !== "notices";
-        $("pane-feedback").hidden = name !== "feedback";
-        $("pane-memory").hidden = name !== "memory";
-        $("pane-center").hidden = name !== "center";
+        $("pane-ai-brain").hidden = name !== "ai-brain";
         $("pane-icons").hidden = name !== "icons";
         $("pane-users").hidden = name !== "users";
-        // 第一次进反馈 / 记忆 Tab 才拉数据，避免每次进 /admin 都多打一个请求
-        if (name === "feedback" && !state.loaded) { loadFeedback(); }
-        if (name === "memory" && !memoryState.loaded) { loadMemory(); }
-        if (name === "center" && !centerState.loaded) { loadCenter(); }
+        $("pane-tips").hidden = name !== "tips";
+        $("pane-user-feedback").hidden = name !== "user-feedback";
+        if (name === "ai-brain" && !brainState.loaded) { loadAiBrain(); }
         if (name === "icons" && !iconsState.loaded) { loadIcons(); }
         if (name === "users" && !usersState.loaded) { loadUsers(); }
+        if (name === "user-feedback" && !userFeedbackState.loaded) { loadUserFeedback(); }
+        // 提示文案 Tab：文案列表 + 帮助内容配置一起进页，只拉一次
+        if (name === "tips" && !tipsState.loaded) { loadTips(); }
+        if (name === "tips" && !helpState.loaded) { loadHelp(); }
       }
 
       tabs.forEach(function (tab) {
@@ -2027,77 +2376,11 @@
           });
       });
 
-      /* ---------- AI 记忆库（v0.11.4） ---------- */
+      /* v0.14.1：原「AI 记忆库」独立 Tab 已并入「AI 大脑管理」。
+       * 记忆列表渲染与删除统一由下面 loadCenter() / renderCenterMemories() 承担，
+       * 这里不再保留 memory-list / memory-refresh 的重复绑定（对应元素已移除）。 */
 
-      function renderMemory() {
-        var box = $("memory-list");
-        $("memory-total").textContent = String(memoryState.items.length);
-        if (!memoryState.items.length) {
-          box.innerHTML =
-            '<div class="admin-empty">还没有纠错记忆。用户在账单详情点「AI 纠错」后，这里就会出现一条。</div>';
-          return;
-        }
-        box.innerHTML =
-          '<div class="feedback-scroll"><table class="feedback-table">' +
-            '<colgroup><col style="width:26%"><col style="width:16%"><col style="width:16%">' +
-            '<col style="width:26%"><col style="width:16%"></colgroup>' +
-            '<thead><tr><th>原话 / 备注</th><th>AI 原分类</th><th>纠正为</th><th>备注</th><th>操作</th></tr></thead><tbody>' +
-            memoryState.items.map(function (item) {
-              var created = item.created_at ? String(item.created_at).slice(0, 16) : "";
-              return (
-                '<tr data-memory-id="' + item.id + '">' +
-                  "<td>" +
-                    '<div class="feedback-raw">' + escapeHtml(item.original_text || "—") + "</div>" +
-                    '<div class="feedback-source">#' + item.id + (created ? " · " + escapeHtml(created) : "") + "</div>" +
-                  "</td>" +
-                  '<td><span class="feedback-status is-pending">' + escapeHtml(item.raw_category || "—") + "</span></td>" +
-                  '<td><span class="feedback-status is-processed">' + escapeHtml(item.corrected_category) + "</span></td>" +
-                  '<td><div class="feedback-raw ' + (item.note ? "" : "text-muted") + '">' + escapeHtml(item.note || "—") + "</div></td>" +
-                  '<td><button type="button" class="btn btn-sm btn-outline-danger" data-memory-delete="' + item.id + '">删除</button></td>' +
-                "</tr>"
-              );
-            }).join("") +
-          "</tbody></table></div>";
-      }
-
-      function loadMemory() {
-        if (memoryState.loading) { return Promise.resolve(); }
-        memoryState.loading = true;
-        return request("/api/ai-memory?limit=100")
-          .then(function (data) {
-            memoryState.items = data.items || [];
-            memoryState.loaded = true;
-            renderMemory();
-          })
-          .catch(function (error) {
-            $("memory-list").innerHTML =
-              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
-          })
-          .then(function () { memoryState.loading = false; });
-      }
-
-      $("memory-refresh").addEventListener("click", function () {
-        memoryState.loaded = false;
-        loadMemory().then(function () { toast("AI 记忆库已刷新"); });
-      });
-
-      $("memory-list").addEventListener("click", function (event) {
-        var button = event.target.closest("[data-memory-delete]");
-        if (!button) { return; }
-        var id = button.getAttribute("data-memory-delete");
-        button.disabled = true;
-        request("/api/ai-memory/" + id, { method: "DELETE" })
-          .then(function () {
-            toast("记忆 #" + id + " 已删除，下次解析不再参考");
-            return loadMemory();
-          })
-          .catch(function (error) {
-            button.disabled = false;
-            toast(error.message, true);
-          });
-      });
-
-      /* ---------- AI 纠错与反馈中心（v0.11.5） ---------- */
+      /* ---------- AI 纠错与反馈中心（v0.11.5，现为「AI 大脑管理」上排双栏） ---------- */
 
       var centerState = { memories: [], logs: [], loaded: false, loading: false };
 
@@ -2342,6 +2625,408 @@
       $("user-refresh").addEventListener("click", function () {
         usersState.loaded = false;
         loadUsers().then(function () { toast("用户列表已刷新"); });
+      });
+
+      /* ---------- 提示文案管理（v0.14.0）：toast() 的颜文字文案库 ---------- */
+
+      var TIP_TYPE_LABELS = {
+        success: "成功",
+        error: "错误",
+        info: "信息",
+        warn: "提醒"
+      };
+
+      var tipsState = { items: [], loaded: false, loading: false, editingId: null };
+
+      function tipTypeLabel(type) {
+        return TIP_TYPE_LABELS[type] || String(type || "—");
+      }
+
+      // admin.html 里的 request() 只做 fetch + 解析，JSON 头要自己补；
+      // 不补 Content-Type 的话 Flask 的 request.get_json() 会拿到 None。
+      function tipRequest(url, method, body) {
+        return request(url, {
+          method: method,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body || {})
+        });
+      }
+
+      function tipTypeOptions(selected) {
+        return ["success", "error", "info", "warn"].map(function (type) {
+          return '<option value="' + type + '"' + (type === selected ? " selected" : "") + ">" +
+            tipTypeLabel(type) + "</option>";
+        }).join("");
+      }
+
+      // v0.14.0：列改为 ID / 类型 / 场景位置 / 文案 / 状态 / 创建时间 / 操作；
+      // 行内编辑同时改类型、场景位置、文案三个字段。
+      function renderTips() {
+        var box = $("tip-list");
+        $("tip-total").textContent = String(tipsState.items.length);
+        if (!tipsState.items.length) {
+          box.innerHTML = '<div class="admin-empty">还没有提示文案，点上面的「添加文案」建一条。</div>';
+          return;
+        }
+        box.innerHTML =
+          '<table class="user-table tip-table">' +
+            "<thead><tr>" +
+              "<th>ID</th><th>类型</th><th>场景位置</th><th>文案</th><th>状态</th><th>创建时间</th><th>操作</th>" +
+            "</tr></thead><tbody>" +
+            tipsState.items.map(function (tip) {
+              var editing = String(tip.id) === String(tipsState.editingId);
+              var location = tip.location || "";
+              var typeCell = editing
+                ? '<td><select class="form-select form-select-sm tip-edit-type" data-tip-type aria-label="文案类型">' +
+                    tipTypeOptions(tip.type) + "</select></td>"
+                : '<td><span class="tip-type tip-type-' + escapeHtml(tip.type) + '">' +
+                    escapeHtml(tipTypeLabel(tip.type)) + "</span></td>";
+              var locationCell = editing
+                ? '<td><input class="form-control form-control-sm tip-edit-location" type="text" ' +
+                    'maxlength="20" data-tip-location value="' + escapeHtml(location) + '"></td>'
+                : '<td><span class="tip-location' + (location ? "" : " is-empty") + '">' +
+                    escapeHtml(location || "—") + "</span></td>";
+              var contentCell = editing
+                ? '<td><input class="form-control form-control-sm tip-edit-input" type="text" ' +
+                    'maxlength="80" data-tip-input value="' + escapeHtml(tip.content) + '"></td>'
+                : '<td class="tip-content">' + escapeHtml(tip.content) + "</td>";
+              var actions = editing
+                ? '<button class="btn btn-sm btn-primary" type="button" data-tip-save="' +
+                    escapeHtml(String(tip.id)) + '">保存</button>' +
+                  '<button class="btn btn-sm btn-outline-secondary" type="button" data-tip-cancel="' +
+                    escapeHtml(String(tip.id)) + '">取消</button>'
+                : '<button class="btn btn-sm btn-outline-secondary" type="button" data-tip-edit="' +
+                    escapeHtml(String(tip.id)) + '">编辑</button>' +
+                  '<button class="btn btn-sm btn-outline-secondary" type="button" data-tip-toggle="' +
+                    escapeHtml(String(tip.id)) + '">' + (tip.is_active ? "停用" : "启用") + "</button>" +
+                  '<button class="btn btn-sm btn-outline-danger" type="button" data-tip-delete="' +
+                    escapeHtml(String(tip.id)) + '">删除</button>';
+              return (
+                "<tr>" +
+                  "<td>#" + escapeHtml(String(tip.id)) + "</td>" +
+                  typeCell +
+                  locationCell +
+                  contentCell +
+                  "<td>" + (tip.is_active
+                    ? '<span class="tip-on">启用</span>'
+                    : '<span class="tip-off">停用</span>') + "</td>" +
+                  "<td>" + escapeHtml(String(tip.created_at || "—")) + "</td>" +
+                  '<td class="tip-actions">' + actions + "</td>" +
+                "</tr>"
+              );
+            }).join("") +
+          "</tbody></table>";
+        var input = box.querySelector(".tip-edit-input");
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }
+
+      function setTipError(message) {
+        var box = $("tip-error");
+        box.textContent = message || "";
+        box.hidden = !message;
+      }
+
+      function loadTips() {
+        if (tipsState.loading) { return Promise.resolve(); }
+        tipsState.loading = true;
+        setTipError("");
+        return request("/api/admin/tips")
+          .then(function (data) {
+            tipsState.items = data.tips || [];
+            tipsState.loaded = true;
+            renderTips();
+          })
+          .catch(function (error) {
+            $("tip-list").innerHTML = '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+            setTipError(error.message);
+          })
+          .then(function () { tipsState.loading = false; });
+      }
+
+      function findTip(tipId) {
+        var matched = tipsState.items.filter(function (tip) {
+          return String(tip.id) === String(tipId);
+        });
+        return matched.length ? matched[0] : null;
+      }
+
+      function startEditTip(tipId) {
+        tipsState.editingId = tipId;
+        setTipError("");
+        renderTips();
+      }
+
+      function cancelEditTip() {
+        tipsState.editingId = null;
+        renderTips();
+      }
+
+      function saveEditTip(tipId) {
+        // 行内编辑时三套控件只出现在正在编辑的那一行；统一用 querySelector 取
+        var typeInput = $("tip-list").querySelector(".tip-edit-type");
+        var locationInput = $("tip-list").querySelector(".tip-edit-location");
+        var input = $("tip-list").querySelector(".tip-edit-input");
+        var content = input ? input.value.trim() : "";
+        if (!content) { setTipError("提示文案不能为空"); return; }
+        var payload = {
+          type: typeInput ? typeInput.value : "success",
+          location: locationInput ? locationInput.value.trim().slice(0, 20) : "",
+          content: content
+        };
+        setTipError("");
+        tipRequest("/api/admin/tips/" + encodeURIComponent(tipId), "PUT", payload)
+          .then(function () {
+            tipsState.editingId = null;
+            return loadTips();
+          })
+          .then(function () { toast("提示文案已更新"); })
+          .catch(function (error) { setTipError(error.message); toast(error.message, true); });
+      }
+
+      function toggleTip(tipId) {
+        var tip = findTip(tipId);
+        if (!tip) { return; }
+        tipRequest("/api/admin/tips/" + encodeURIComponent(tipId), "PUT", {
+          is_active: tip.is_active ? 0 : 1
+        })
+          .then(function () { return loadTips(); })
+          .then(function () { toast(tip.is_active ? "文案已停用" : "文案已启用"); })
+          .catch(function (error) { setTipError(error.message); toast(error.message, true); });
+      }
+
+      function deleteTip(tipId) {
+        var tip = findTip(tipId);
+        if (!tip) { return; }
+        if (!window.confirm("确定删除这条提示文案吗？\n" + tip.content)) { return; }
+        tipRequest("/api/admin/tips/" + encodeURIComponent(tipId), "DELETE")
+          .then(function () { return loadTips(); })
+          .then(function () { toast("提示文案已删除"); })
+          .catch(function (error) { setTipError(error.message); toast(error.message, true); });
+      }
+
+      $("tip-refresh").addEventListener("click", function () {
+        tipsState.loaded = false;
+        tipsState.editingId = null;
+        loadTips().then(function () { toast("提示文案已刷新"); });
+      });
+
+      $("tip-add").addEventListener("click", function () {
+        var type = $("tip-new-type").value;
+        var location = $("tip-new-location").value.trim().slice(0, 20);
+        var content = $("tip-new-content").value.trim();
+        if (!content) { setTipError("先填提示文案内容"); return; }
+        setTipError("");
+        tipRequest("/api/admin/tips", "POST", {
+          type: type,
+          location: location,
+          content: content,
+          is_active: 1
+        })
+          .then(function () {
+            $("tip-new-content").value = "";
+            $("tip-new-location").value = "";
+            return loadTips();
+          })
+          .then(function () { toast("提示文案已添加"); })
+          .catch(function (error) { setTipError(error.message); toast(error.message, true); });
+      });
+
+      $("tip-new-content").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          $("tip-add").click();
+        }
+      });
+
+      // 场景位置填完按回车也直接提交，和文案输入框行为一致
+      $("tip-new-location").addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          $("tip-add").click();
+        }
+      });
+
+      $("tip-list").addEventListener("click", function (event) {
+        var editBtn = event.target.closest("[data-tip-edit]");
+        if (editBtn) { startEditTip(editBtn.getAttribute("data-tip-edit")); return; }
+        var saveBtn = event.target.closest("[data-tip-save]");
+        if (saveBtn) { saveEditTip(saveBtn.getAttribute("data-tip-save")); return; }
+        var cancelBtn = event.target.closest("[data-tip-cancel]");
+        if (cancelBtn) { cancelEditTip(); return; }
+        var toggleBtn = event.target.closest("[data-tip-toggle]");
+        if (toggleBtn) { toggleTip(toggleBtn.getAttribute("data-tip-toggle")); return; }
+        var deleteBtn = event.target.closest("[data-tip-delete]");
+        if (deleteBtn) { deleteTip(deleteBtn.getAttribute("data-tip-delete")); }
+      });
+
+      $("tip-list").addEventListener("keydown", function (event) {
+        if (!tipsState.editingId) { return; }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          saveEditTip(tipsState.editingId);
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          cancelEditTip();
+        }
+      });
+
+      /* ---------- 帮助与反馈内容配置（后台编辑原文） ---------- */
+      var helpState = { loaded: false, loading: false };
+      var HELP_FIELDS = [
+        { id: "help-faq", key: "faq" },
+        { id: "help-shortcuts", key: "shortcuts" },
+        { id: "help-contact", key: "contact" },
+        { id: "help-placeholder", key: "feedback_placeholder" }
+      ];
+
+      function setHelpError(message) {
+        var box = $("help-error");
+        box.textContent = message || "";
+        box.hidden = !message;
+      }
+
+      function fillHelpInputs(help) {
+        help = help || {};
+        HELP_FIELDS.forEach(function (field) {
+          var input = $(field.id);
+          if (input) { input.value = help[field.key] || ""; }
+        });
+      }
+
+      function loadHelp() {
+        if (helpState.loading) { return Promise.resolve(); }
+        helpState.loading = true;
+        setHelpError("");
+        return request("/api/admin/help")
+          .then(function (data) {
+            fillHelpInputs(data.help);
+            helpState.loaded = true;
+          })
+          .catch(function (error) {
+            setHelpError("帮助内容加载失败：" + error.message);
+          })
+          .then(function () { helpState.loading = false; });
+      }
+
+      function saveHelp() {
+        var payload = {};
+        HELP_FIELDS.forEach(function (field) {
+          payload[field.key] = $(field.id).value;
+        });
+        setHelpError("");
+        request("/api/admin/help", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function (data) {
+            if (data.help) { fillHelpInputs(data.help); }
+            helpState.loaded = true;
+            toast("帮助内容已保存");
+          })
+          .catch(function (error) {
+            setHelpError("保存失败：" + error.message);
+            toast(error.message, true);
+          });
+      }
+
+      $("help-refresh").addEventListener("click", function () {
+        helpState.loaded = false;
+        loadHelp().then(function () { toast("帮助内容已刷新"); });
+      });
+
+      $("help-save").addEventListener("click", saveHelp);
+
+      /* ---------- 用户反馈（前台「帮助与反馈」表单提交） ---------- */
+      var userFeedbackState = { items: [], loaded: false, loading: false };
+      var FEEDBACK_CONTACT_LABELS = { qq: "QQ", wechat: "微信", phone: "手机号" };
+
+      function formatFeedbackTime(value) {
+        return value ? String(value).replace("T", " ") : "—";
+      }
+
+      function renderUserFeedback() {
+        var box = $("user-feedback-list");
+        var items = userFeedbackState.items;
+        $("user-feedback-total").textContent = String(items.length);
+        if (!items.length) {
+          box.innerHTML = '<div class="admin-empty">还没有用户反馈，等前台用户提交后会出现在这里。</div>';
+          return;
+        }
+        box.innerHTML = items.map(function (item) {
+          var email = item.email || "（未提供邮箱）";
+          var uid = item.uid != null ? item.uid : item.user_id;
+          var nickname = item.nickname || "（未设置昵称）";
+          var contactLabel = FEEDBACK_CONTACT_LABELS[item.contact_type] || (item.contact_type || "联系方式");
+          var imagePath = item.image_path || "";
+          var figure = imagePath
+            ? '<figure class="user-feedback-figure">' +
+                '<a class="user-feedback-thumb" href="' + escapeHtml(imagePath) +
+                  '" target="_blank" rel="noopener" title="新窗口查看原图">' +
+                  '<img src="' + escapeHtml(imagePath) + '" alt="反馈截图" loading="lazy">' +
+                "</a>" +
+                '<a class="user-feedback-shot-link" href="' + escapeHtml(imagePath) +
+                  '" target="_blank" rel="noopener">新窗口查看截图 ↗</a>' +
+              "</figure>"
+            : "";
+          return (
+            '<article class="user-feedback-card" data-feedback-id="' + escapeHtml(String(item.id)) + '">' +
+              '<div class="user-feedback-head">' +
+                '<div class="user-feedback-identity">' +
+                  '<span class="user-feedback-email">' + escapeHtml(email) + "</span>" +
+                  '<span class="user-feedback-uid">UID #' + escapeHtml(String(uid)) + "</span>" +
+                  '<span class="user-feedback-nickname">' + escapeHtml(nickname) + "</span>" +
+                "</div>" +
+                '<span class="user-feedback-time">反馈时间 ' +
+                  escapeHtml(formatFeedbackTime(item.created_at)) + "</span>" +
+              "</div>" +
+              '<p class="user-feedback-issue">' + escapeHtml(item.issue_description || "（无内容）") + "</p>" +
+              figure +
+              '<div class="user-feedback-meta">' +
+                '<span class="user-feedback-meta-item">' +
+                  '<span class="user-feedback-meta-label">发生日期</span>' +
+                  escapeHtml(item.occur_date || "—") +
+                "</span>" +
+                '<span class="user-feedback-meta-item">' +
+                  '<span class="user-feedback-meta-label">联系方式</span>' +
+                  '<span class="user-feedback-contact-tag">' + escapeHtml(contactLabel) + "</span>" +
+                  "<span>" + escapeHtml(item.contact_info || "—") + "</span>" +
+                "</span>" +
+                '<span class="user-feedback-meta-item">' +
+                  '<span class="user-feedback-meta-label">反馈编号</span>#' +
+                  escapeHtml(String(item.id)) +
+                "</span>" +
+              "</div>" +
+            "</article>"
+          );
+        }).join("");
+      }
+
+      function loadUserFeedback() {
+        if (userFeedbackState.loading) { return Promise.resolve(); }
+        userFeedbackState.loading = true;
+        $("user-feedback-list").innerHTML = '<div class="admin-empty">正在加载…</div>';
+        return request("/api/admin/feedback")
+          .then(function (data) {
+            // 后端按 created_at DESC, id DESC 返回，这里保持顺序不再重排
+            userFeedbackState.items = data.feedback || [];
+            userFeedbackState.loaded = true;
+            renderUserFeedback();
+          })
+          .catch(function (error) {
+            $("user-feedback-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+            toast(error.message, true);
+          })
+          .then(function () { userFeedbackState.loading = false; });
+      }
+
+      $("user-feedback-refresh").addEventListener("click", function () {
+        userFeedbackState.loaded = false;
+        loadUserFeedback().then(function () { toast("用户反馈已刷新"); });
       });
 
       $("icon-upload-btn").addEventListener("click", function () {

@@ -2475,7 +2475,7 @@ def remove_record(record_id):
     return jsonify(deleted=record_id, trashed=True)
 
 
-# ---------------- 回收站（v0.09） ----------------
+# ---------------- 回收站（旧版沿用） ----------------
 
 @app.route("/api/records/trash", methods=["GET"])
 def list_trash():
@@ -2777,6 +2777,75 @@ def remove_account(name):
     if not deleted:
         return jsonify(error=error), 404 if "不存在" in error else 409
     return jsonify(deleted=name)
+
+
+@app.route("/api/accounts/<name>/adjust_balance", methods=["POST"])
+def adjust_account_balance(name):
+    """快捷改余额（v0.14.0-TST）：直接覆盖余额，并按差额生成一笔收入 / 支出流水。
+
+    body: {"balance": 1234.5, "generate_record": true,
+           "note": "账户余额修改", "category_id": 3, "date": "2026-11-05"}
+
+    与 PUT /api/accounts/<name> 的区别：这里会把差额记成账单，让「改余额」在流水里
+    留痕；PUT 仍是纯改字段、不产生流水（行内编辑表单继续用它）。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    # 兼容 balance / new_balance 两种键名，前端传哪个都不会 400
+    new_balance = data.get("balance", data.get("new_balance"))
+    if isinstance(new_balance, bool) or not isinstance(new_balance, (int, float)):
+        return jsonify(error="balance 必须是数字"), 400
+    if new_balance != new_balance or new_balance in (float("inf"), float("-inf")):
+        return jsonify(error="balance 必须是有效数字"), 400
+
+    generate_record = data.get("generate_record", True)
+    if not isinstance(generate_record, bool):
+        generate_record = bool(generate_record)
+
+    note = data.get("note", "账户余额修改")
+    if note is None:
+        note = "账户余额修改"
+    if not isinstance(note, str):
+        return jsonify(error="note 必须是字符串"), 400
+
+    category_id = data.get("category_id")
+    if category_id in ("", None):
+        category_id = None
+    else:
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
+            return jsonify(error="category_id 必须是整数"), 400
+
+    record_date = data.get("date")
+    if record_date in ("", None):
+        record_date = None
+    elif not isinstance(record_date, str) or not re.match(
+        r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$", record_date.strip()
+    ):
+        return jsonify(error="date 格式应为 YYYY-MM-DD"), 400
+
+    result, error = database.adjust_account_balance(
+        name,
+        new_balance,
+        generate_record=generate_record,
+        note=note.strip()[:60],
+        category_id=category_id,
+        record_date=record_date,
+    )
+    if error is not None:
+        return jsonify(error=error), 404 if "不存在" in error else 400
+
+    # 回带最新账户（含 market_value / total），前端可直接替换 state.accounts 对应项，
+    # 不用为了一个数字再拉一次 /api/accounts
+    latest = next(
+        (item for item in database.list_accounts() if item["name"] == name), None
+    )
+    payload = dict(result)
+    payload["account_detail"] = latest
+    return jsonify(payload)
 
 
 @app.route("/api/accounts/merge", methods=["POST"])
@@ -3587,14 +3656,24 @@ def admin():
 
 @app.route("/manifest.json")
 def serve_manifest():
-    """manifest 放根目录，作用域覆盖整站；用 Flask 发是为了带上正确的 mimetype。"""
-    return send_from_directory(BASE_DIR, "manifest.json", mimetype="application/manifest+json")
+    """manifest 放根路径访问，作用域覆盖整站；实际文件以 static/manifest.json 为准。
+
+    v0.14.0 修复：历史上项目根目录和 static/ 各有一份 manifest.json / service-worker.js，
+    真正被浏览器加载的是根目录那份，而发版改的却是 static/ 副本 —— 于是
+    「manifest 加 ?v」和「SW 升 r2 清缓存」永远不生效，页面一直吃旧缓存。
+    这里统一把根路径指向 static/ 下的唯一版本，避免再出现两份文件打架。
+    """
+    return send_from_directory(
+        os.path.join(BASE_DIR, "static"), "manifest.json", mimetype="application/manifest+json"
+    )
 
 
 @app.route("/service-worker.js")
 def serve_service_worker():
-    """SW 必须能从根路径访问，才能控制 / 与所有子路径。"""
-    response = send_from_directory(BASE_DIR, "service-worker.js", mimetype="text/javascript")
+    """SW 必须能从根路径访问，才能控制 / 与所有子路径；文件同样以 static/ 为准。"""
+    response = send_from_directory(
+        os.path.join(BASE_DIR, "static"), "service-worker.js", mimetype="text/javascript"
+    )
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Service-Worker-Allowed"] = "/"
     return response
@@ -3621,31 +3700,223 @@ def admin_users():
     return jsonify(users=database.list_users())
 
 
+# ---------------- v0.14.0：提示文案库（Tips） ----------------
+# 前端的 toast() 用 /api/tips 取「启用中的颜文字文案」，接口不可用时前端自动回退内置池；
+# 后台「提示文案管理」用 /api/admin/tips 增删改查，守卫口径跟 /api/admin/users 一致。
+
+
+def _require_admin_access():
+    """后台接口的统一守卫：设了访问密码就必须带有效的 X-Access-Token。"""
+    config = database.get_access_config()
+    if config["protected"] and not database.check_access_session(_request_access_token()):
+        return jsonify(error="请先验证访问密码", code="access_denied"), 401
+    return None
+
+
+@app.route("/api/tips", methods=["GET"])
+def api_tips():
+    """前端 toast() 专用：只回 is_active=1 的文案，按类型分组。
+
+    返回结构 {"tips": {"success": [...], "error": [...], "info": [...], "warn": [...]}}，
+    某类型空列表时前端回退内置保底池，所以这里不需要 404 / 兜底文案。
+    """
+    return jsonify(tips=database.active_tips_by_type())
+
+
+@app.route("/api/admin/tips", methods=["GET"])
+def admin_list_tips():
+    """后台提示文案管理：全量列表（含停用的），按 type + id 排序。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    return jsonify(tips=database.list_system_tips())
+
+
+@app.route("/api/admin/tips", methods=["POST"])
+def admin_create_tip():
+    """新增一条提示文案。字段：type（默认 success）、content（必填，≤80 字）、
+    location（场景位置，可选，≤20 字）、is_active。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        tip = database.create_system_tip(
+            data.get("type", "success"),
+            data.get("content"),
+            data.get("is_active", 1),
+            data.get("location", ""),
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(tip=tip), 201
+
+
+@app.route("/api/admin/tips/<int:tip_id>", methods=["PUT"])
+def admin_update_tip(tip_id):
+    """修改提示文案：只改 body 里出现的字段，没传的保持原样。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        tip = database.update_system_tip(
+            tip_id,
+            tip_type=data.get("type") if "type" in data else None,
+            content=data.get("content") if "content" in data else None,
+            is_active=data.get("is_active") if "is_active" in data else None,
+            # location 传了才改；没传（None）表示保持原场景位置不动
+            location=data.get("location") if "location" in data else None,
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if tip is None:
+        return jsonify(error="提示文案不存在"), 404
+    return jsonify(tip=tip)
+
+
+@app.route("/api/admin/tips/<int:tip_id>", methods=["DELETE"])
+def admin_delete_tip(tip_id):
+    """删除提示文案。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    if not database.delete_system_tip(tip_id):
+        return jsonify(error="提示文案不存在"), 404
+    return jsonify(ok=True, id=tip_id)
+
+
+# ---------------- v0.14.0：帮助与反馈 ----------------
+# 用户在设置弹窗「帮助与反馈」里读 FAQ / 快捷键 / 联系方式，并提交问题反馈；
+# 后台在「提示文案管理」里编辑帮助内容、在「用户反馈」Tab 里看全部反馈。
+# 帮助内容存在 app_settings（见 database.get_help_raw / update_help_content）。
+
+# 反馈截图上限：前端已经压到 2MB 以内，服务端再兜一层，超了直接 413
+FEEDBACK_MAX_IMAGE_BYTES = 2 * 1024 * 1024
+
+
+@app.route("/api/help", methods=["GET"])
+def api_help():
+    """设置弹窗「帮助与反馈」：登录用户读取结构化帮助内容（无后台访问密码要求）。"""
+    return jsonify(help=database.get_help_content())
+
+
+@app.route("/api/admin/help", methods=["GET"])
+def admin_get_help():
+    """后台读取帮助内容原文（FAQ / 快捷键 / 联系方式 / 反馈占位文案）。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    return jsonify(help=database.get_help_raw())
+
+
+@app.route("/api/admin/help", methods=["PUT"])
+def admin_update_help():
+    """后台保存帮助内容：只改 body 里出现的字段，返回保存后的原文。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        help_content = database.update_help_content(
+            faq=data.get("faq") if "faq" in data else None,
+            shortcuts=data.get("shortcuts") if "shortcuts" in data else None,
+            contact=data.get("contact") if "contact" in data else None,
+            feedback_placeholder=(
+                data.get("feedback_placeholder") if "feedback_placeholder" in data else None
+            ),
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(help=help_content)
+
+
+@app.route("/api/user-feedback", methods=["POST"])
+def submit_user_feedback():
+    """用户提交问题反馈（设置弹窗「帮助与反馈」）。
+
+    注意：路径用 /api/user-feedback，不占用 v0.10 的 AI 反馈 /api/feedback。
+    body JSON：issue_description（必填）、occur_date（YYYY-MM-DD 或 ""）、
+    image_path（dataURL / Base64，或已经落盘的 /static/uploads/... 路径；可空）、
+    contact_type（""|qq|wechat|phone）、contact_info、email、nickname。
+    截图非空时按截图记账同一套函数落盘；超过 2MB 返回 413。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    # 前端契约字段叫 image_path，同时兼容老写法的 image；空串 / None 都表示没截图
+    image_value = data.get("image_path")
+    if not isinstance(image_value, str) or not image_value.strip():
+        image_value = data.get("image")
+    image_value = image_value.strip() if isinstance(image_value, str) else ""
+
+    image_path = ""
+    if image_value.startswith("/static/uploads/"):
+        # 已经落过盘（比如前端重试提交）：沿用原路径，不重复写文件
+        image_path = image_value
+    elif image_value:
+        # Base64 相对原图膨胀约 4/3，先按编码长度粗筛，别把超大图读进内存再报错
+        if len(image_value) > FEEDBACK_MAX_IMAGE_BYTES * 2:
+            return jsonify(error="截图太大，请压到 2MB 以内"), 413
+        mime = data.get("mime") if isinstance(data.get("mime"), str) else None
+        raw, mime, error_message = _decode_ai_image(image_value, mime)
+        if error_message is not None:
+            return jsonify(error=error_message), 400
+        if len(raw) > FEEDBACK_MAX_IMAGE_BYTES:
+            return jsonify(error="截图太大，请压到 2MB 以内"), 413
+        image_path, error_message = _save_ai_image_to_disk(raw, mime)
+        if error_message is not None:
+            return jsonify(error=error_message), 400
+
+    try:
+        feedback = database.create_user_feedback(
+            data.get("issue_description"),
+            occur_date=data.get("occur_date") or "",
+            image_path=image_path,
+            contact_type=data.get("contact_type") or "",
+            contact_info=data.get("contact_info") or "",
+            email=data.get("email") or "",
+            nickname=data.get("nickname") or "",
+        )
+    except database.RecordError as exc:
+        # 校验失败（含 10 秒防刷）时把刚落盘的截图删掉，别留下孤儿文件
+        if image_path:
+            _remove_saved_image(image_path)
+        return jsonify(error=str(exc)), 400
+    return jsonify(feedback=feedback), 201
+
+
+@app.route("/api/admin/feedback", methods=["GET"])
+def admin_list_user_feedback():
+    """后台「用户反馈」列表：全部用户的反馈，按提交时间倒序。"""
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    return jsonify(feedback=database.list_user_feedback())
+
+
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.13.8-DEV"
-def detect_version():
-    """返回当前版本号，比如 v0.06.3-DEV。
+APP_VERSION_FALLBACK = "v0.14.0-TST"
 
-    优先 APP_VERSION（部署时钉死），否则读 Git Tag；
-    Git 不可用（比如拷到 U 盘里演示）时回落到内置版本号。
-    不做进程级缓存：打 Tag 后不重启服务也能立刻读到新版本，git describe 本身很快。
+
+def detect_version():
+    """返回当前统一版本号 v0.14.0-TST。
+
+    v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
+    v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿
+    全部串成旧版本，和静态文案对不上。验收期直接钉死内置版本号；
+    部署时仍可用 APP_VERSION 环境变量显式覆盖，封版时同步改本常量即可。
     """
-    version = (os.environ.get("APP_VERSION") or "").strip()
-    if not version:
-        try:
-            result = subprocess.run(
-                ["git", "describe", "--tags", "--abbrev=0"],
-                cwd=BASE_DIR,
-                capture_output=True,
-                text=True,
-                timeout=2,
-            )
-            if result.returncode == 0:
-                version = result.stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            version = ""
-    return version or APP_VERSION_FALLBACK
+    pinned = (os.environ.get("APP_VERSION") or "").strip()
+    return pinned or APP_VERSION_FALLBACK
 
 
 @app.route("/api/version")

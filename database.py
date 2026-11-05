@@ -20,28 +20,61 @@ _MIGRATION_BACKUP_FILE = ""
 # ---------------- 默认数据（缺了才补，不动已有数据） ----------------
 
 # 两级分类种子：(一级分类, [二级分类...])
+# v0.14.0：科学重构默认分类体系（替换 v0.13 及以前的「早餐/午餐/晚餐」「地铁/公交」等拍脑袋分组）。
+# 「其他」必须保留：它是 DEFAULT_CATEGORY，脏分类清洗与老账单兜底都挂到它下面。
 CATEGORY_SEEDS = [
-    ("餐饮", ["早餐", "午餐", "晚餐", "外卖"]),
-    ("交通", ["打车", "地铁", "公交", "加油"]),
-    ("购物", ["日用品", "服饰", "数码"]),
-    ("娱乐", ["电影", "游戏", "旅游"]),
-    ("居住", ["房租", "水电", "物业"]),
+    ("餐饮", ["三餐", "外卖", "零食饮料", "下馆子"]),
+    ("交通", ["公交地铁", "打车", "加油/停车"]),
+    ("购物", ["日用品", "衣服鞋包", "数码电器"]),
+    ("娱乐", ["游戏", "电影", "旅游"]),
+    ("居住", ["房租", "水电燃气", "物业"]),
+    ("医疗", ["药品", "门诊挂号"]),
+    ("人情", ["红包", "送礼"]),
     ("其他", []),
 ]
+
+# v0.13 及以前由种子写进库、但 v0.14.0 新体系里已经不需要的默认分类名。
+# 只在「没有任何账单引用」时才删除（有引用的保留，绝不为了好看丢真实数据）。
+LEGACY_DEFAULT_CATEGORY_NAMES = frozenset(
+    {
+        "早餐",
+        "午餐",
+        "晚餐",
+        "打车",
+        "地铁",
+        "公交",
+        "加油",
+        "服饰",
+        "数码",
+        "电影",
+        "游戏",
+        "旅游",
+        "房租",
+        "水电",
+        "物业",
+        # 旧收入分类（新体系用「工资薪酬」「退款/报销」「红包/礼金」）
+        "工资",
+        "红包",
+        "利息",
+        "退款",
+    }
+)
 
 # 账户大类：只认这三种，前端用 <optgroup> 分组展示
 ACCOUNT_GROUPS = ("资金账户", "储蓄账户", "投资账户")
 DEFAULT_GROUP = "资金账户"
 
 # 账户种子：(账户名, 大类)
+# v0.14.0：按「资金 / 储蓄 / 投资」三层重排——资金账户放日常支付工具，
+# 储蓄账户放银行卡，投资账户放证券/基金户，用户一眼能分清钱在哪一层。
 ACCOUNT_SEEDS = [
     ("现金", "资金账户"),
     ("微信", "资金账户"),
     ("支付宝", "资金账户"),
-    ("招行卡", "储蓄账户"),
-    ("建行卡", "储蓄账户"),
-    ("余额宝", "投资账户"),
-    ("基金", "投资账户"),
+    ("储蓄卡", "储蓄账户"),
+    ("信用卡", "储蓄账户"),
+    ("基金账户", "投资账户"),
+    ("股票账户", "投资账户"),
 ]
 
 DEFAULT_ACCOUNT = "现金"
@@ -635,7 +668,16 @@ def _ensure_category(conn, name, parent_id=None, category_type="expense", user_i
 
 
 # 默认收入分类（一级，无二级）；已存在同名一级分类则跳过，幂等
-INCOME_CATEGORY_SEEDS = ("工资", "兼职外快", "投资理财", "红包", "利息", "退款", "其他收入")
+# v0.14.0：「工资」「红包」「退款」升级为更明确的「工资薪酬」「红包/礼金」「退款/报销」，
+# 并补「其他收入」兜底；旧名由 LEGACY_DEFAULT_CATEGORY_NAMES 在迁移时清理（无引用才删）。
+INCOME_CATEGORY_SEEDS = (
+    "工资薪酬",
+    "兼职外快",
+    "投资理财",
+    "退款/报销",
+    "红包/礼金",
+    "其他收入",
+)
 
 
 def _seed_categories(conn, user_id=None):
@@ -652,6 +694,201 @@ def _seed_income_categories(conn, user_id=None):
     uid = _resolve_user_id(user_id)
     for name in INCOME_CATEGORY_SEEDS:
         _ensure_category(conn, name, None, "income", uid)
+
+
+# ---------------- v0.14.0：默认分类体系迁移（脏数据清洗 + 科学重构） ----------------
+
+# 迁移标记键：写在 schema_migrations 表里（v0.13.3 起复用的迁移标记表）。
+# **只能跑一次**——跑过之后再启动不会重新补种，否则「用户删过的分类下次重启又冒出来」，
+# 破坏 v0.13 起就承诺过的口径。
+TAXONOMY_MIGRATION_KEY = "taxonomy_v0140"
+
+
+def _expense_category_map():
+    """新体系里的支出分类位置：{名字: 父分类名}（一级分类父名是 None）。
+
+    只比「名字」不够——旧版有个一级「红包」（income），新版「红包」是「人情」的二级子类，
+    同名但不同位置，必须按 type + parent 一起判断是不是新体系里的那一颗。
+    """
+    mapping = {}
+    for top_name, children in CATEGORY_SEEDS:
+        mapping[top_name] = None
+        for child in children:
+            mapping[child] = top_name
+    return mapping
+
+
+def _default_category_names():
+    """新体系里所有默认分类名（一级 + 二级），用来区分「默认模板」和「用户自定义」。"""
+    return set(_expense_category_map()) | set(INCOME_CATEGORY_SEEDS)
+
+
+def _is_in_new_taxonomy(row, rows_by_id):
+    """这条分类是不是新体系里的默认节点（名字 + 类型 + 父分类三者都要对上）。"""
+    name = str(row["name"] or "").strip()
+    if row["type"] == "income":
+        return name in INCOME_CATEGORY_SEEDS
+    parent = rows_by_id.get(row["parent_id"])
+    parent_name = str(parent["name"] or "").strip() if parent is not None else None
+    return _expense_category_map().get(name, "__missing__") == parent_name
+
+
+def _user_category_rows(conn, uid):
+    return conn.execute(
+        "SELECT id, name, parent_id, type FROM categories WHERE user_id = ? ORDER BY id",
+        (uid,),
+    ).fetchall()
+
+
+def _category_record_count(conn, uid, category_id, name):
+    """这条分类被多少条账单引用（按 id 优先，老数据只有文本时按名字兜底）。
+
+    回收站里的账单也算引用：恢复一条「213」账单时分类必须还在，
+    所以这里**不加 deleted_at IS NULL**。
+    """
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM records "
+        " WHERE user_id = ? "
+        "   AND (category_id = ? OR (category_id IS NULL AND category = ?))",
+        (uid, category_id, name),
+    ).fetchone()
+    return row["n"]
+
+
+def _move_records_to_category(conn, uid, from_id, from_name, to_id, to_name):
+    """把某分类下的账单改挂到兜底分类（金额 / 备注 / 时间全部原样保留，只换分类）。
+
+    回收站（软删除）里的账单同样要迁：不然它一恢复，又会带回「213」这种孤儿分类。
+    """
+    conn.execute(
+        "UPDATE records SET category = ?, category_id = ? "
+        " WHERE user_id = ? "
+        "   AND (category_id = ? OR (category_id IS NULL AND category = ?))",
+        (to_name, to_id, uid, from_id, from_name),
+    )
+
+
+def _cleanup_dirty_categories(conn):
+    """v0.14.0：清掉历史遗留的脏分类（纯数字名、空名，例如「213」）。
+
+    纪律：**绝不直接删账单**。先把它们名下的账单改挂到「其他 / 其他收入」，
+    保留金额、备注、时间，再删分类行；整个过程按 user_id 隔离。
+    返回删除掉的分类条数（重复调用返回 0，幂等）。
+    """
+    removed = 0
+    user_ids = [row["user_id"] for row in conn.execute("SELECT DISTINCT user_id FROM categories")]
+    for uid in user_ids:
+        rows = _user_category_rows(conn, uid)
+        dirty = [
+            row
+            for row in rows
+            if not str(row["name"] or "").strip() or str(row["name"]).strip().isdigit()
+        ]
+        for row in dirty:
+            is_income = row["type"] == "income"
+            fallback_name = "其他收入" if is_income else DEFAULT_CATEGORY
+            fallback_type = "income" if is_income else "expense"
+            fallback_id = _ensure_category(conn, fallback_name, None, fallback_type, uid)
+            _move_records_to_category(conn, uid, row["id"], row["name"], fallback_id, fallback_name)
+            # 脏分类如果还挂着子分类，孩子同样先迁账再一起删（不留下孤儿分类）
+            for child in rows:
+                if child["parent_id"] != row["id"]:
+                    continue
+                _move_records_to_category(
+                    conn, uid, child["id"], child["name"], fallback_id, fallback_name
+                )
+                conn.execute(
+                    "DELETE FROM categories WHERE id = ? AND user_id = ?", (child["id"], uid)
+                )
+                removed += 1
+            conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", (row["id"], uid))
+            removed += 1
+    return removed
+
+
+def _cleanup_legacy_default_categories(conn):
+    """v0.14.0：删掉旧版默认模板里、新体系**位置已经对不上**且没有任何账单引用的分类。
+
+    判断只看「名字」是不够的：旧版有个一级收入分类「红包」，新版「红包」是「人情」的
+    二级子类——同名不同位置，必须按 type + parent 一起判断（`_is_in_new_taxonomy`）。
+    有引用的（例如「早餐」还挂着 1 条真实账单）一律保留——宁可界面多一点，
+    也不为了好看让历史账单变成孤儿。按 user_id 隔离，重复调用幂等。
+    返回删除掉的分类条数。
+    """
+    removed = 0
+    user_ids = [row["user_id"] for row in conn.execute("SELECT DISTINCT user_id FROM categories")]
+    for uid in user_ids:
+        rows = _user_category_rows(conn, uid)
+        rows_by_id = {row["id"]: row for row in rows}
+        for row in rows:
+            name = str(row["name"] or "").strip()
+            if name not in LEGACY_DEFAULT_CATEGORY_NAMES:
+                continue
+            if _is_in_new_taxonomy(row, rows_by_id):
+                continue
+            if _category_record_count(conn, uid, row["id"], name):
+                continue
+            children = [child for child in rows if child["parent_id"] == row["id"]]
+            if any(_category_record_count(conn, uid, c["id"], c["name"]) for c in children):
+                continue
+            # 孩子已经落进新体系时不能连坐删除——那会让用户丢掉新分类
+            if any(_is_in_new_taxonomy(c, rows_by_id) for c in children):
+                continue
+            for child in children:
+                conn.execute(
+                    "DELETE FROM categories WHERE id = ? AND user_id = ?", (child["id"], uid)
+                )
+            conn.execute("DELETE FROM categories WHERE id = ? AND user_id = ?", (row["id"], uid))
+            removed += 1
+    return removed
+
+
+def _migrate_v0140_taxonomy(conn):
+    """v0.14.0 一次性迁移：清洗脏分类 → 清理旧默认分类 → 给所有用户补种新默认分类与账户。
+
+    为什么要用 schema_migrations 记标记：`_seed_categories` 是「补缺不覆盖」，
+    如果每次启动都跑，用户主动删掉的默认分类会在重启后复活（v0.13 起明确不许）。
+    迁移只跑一次，之后注册链路走 `ensure_category_templates` 给新用户补种。
+
+    额外兜底：v0.14.0 开发期有一轮初始化把「基金账户 / 股票账户」写成了 normal，
+    这里按名字一次性纠正成 investment（只跑一次，之后用户手动改的类型不再被覆盖）。
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "  name TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
+    done = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?", (TAXONOMY_MIGRATION_KEY,)
+    ).fetchone()
+    if done is not None:
+        return False
+    dirty_removed = _cleanup_dirty_categories(conn)
+    legacy_removed = _cleanup_legacy_default_categories(conn)
+    user_ids = [row["id"] for row in conn.execute("SELECT id FROM users ORDER BY id")]
+    for uid in user_ids:
+        _seed_categories(conn, uid)
+        _seed_income_categories(conn, uid)
+        _seed_accounts(conn, uid)
+    conn.execute(
+        "UPDATE accounts SET type = ? WHERE group_name = ? AND type = ? AND name IN (?, ?)",
+        (
+            INVESTMENT_ACCOUNT_TYPE,
+            "投资账户",
+            DEFAULT_ACCOUNT_TYPE,
+            "基金账户",
+            "股票账户",
+        ),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_migrations (name) VALUES (?)",
+        (TAXONOMY_MIGRATION_KEY,),
+    )
+    print(
+        "[v0.14.0] 默认分类体系迁移完成：脏分类 %d 条、旧默认分类 %d 条"
+        % (dirty_removed, legacy_removed),
+        flush=True,
+    )
+    return True
 
 
 def ensure_category_templates(user_id=None):
@@ -682,13 +919,22 @@ def ensure_category_templates(user_id=None):
         conn.close()
 
 
-def _seed_accounts(conn):
-    """按 ACCOUNT_SEEDS 补齐默认账户。INSERT OR IGNORE 不会覆盖已有余额。"""
+def _seed_accounts(conn, user_id=None):
+    """按 ACCOUNT_SEEDS 补齐默认账户。INSERT OR IGNORE 不会覆盖已有余额。
+
+    v0.14.0：支持指定用户（迁移要给所有用户补新默认账户），并按大类顺手写对
+    `accounts.type`——「投资账户」下的基金账户 / 股票账户直接标成 investment，
+    省得用户建完还要去资产页手动切类型。
+    """
+    uid = _resolve_user_id(user_id)
     for name, group_name in ACCOUNT_SEEDS:
+        account_type = (
+            INVESTMENT_ACCOUNT_TYPE if group_name == "投资账户" else DEFAULT_ACCOUNT_TYPE
+        )
         conn.execute(
-            "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name) "
-            "VALUES (1, ?, 0, ?)",
-            (name, group_name),
+            "INSERT OR IGNORE INTO accounts (user_id, name, balance, group_name, type) "
+            "VALUES (?, ?, 0, ?, ?)",
+            (uid, name, group_name, account_type),
         )
 
 
@@ -708,6 +954,40 @@ def _seed_notifications(conn):
             datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
         ),
     )
+
+
+# v0.14.1：AI 记忆库默认纠错示例。
+# 只做「缺哪条补哪条」的幂等插入，绝不覆盖或删除用户已有记忆；
+# note 统一带【系统示例】前缀，方便管理员识别、且在 AI 取 few-shot 时排除，
+# 这样列表丰满但不会把示例当成用户真实纠错习惯喂给模型。
+DEFAULT_AI_MEMORIES = (
+    ("中午点了一份外卖 35 元", "餐饮", "外卖", "【系统示例】外卖类商户统一归到「外卖」"),
+    ("美团外卖 28 块", "餐饮美食", "外卖", "【系统示例】美团 / 饿了么一律判为外卖，不按商户名建分类"),
+    ("打车去公司花了 23", "交通", "打车", "【系统示例】打车 / 出租 / 网约车归到「打车」"),
+    ("滴滴快车 17.5", "出行", "打车", "【系统示例】平台名不是分类，按出行场景回标准分类"),
+    ("地铁 4 元", "交通出行", "公共交通", "【系统示例】地铁 / 公交与打车分开记账"),
+    ("午饭 15.5+20*2", "其他", "餐饮", "【系统示例】金额算式取实付合计，不取单个分项"),
+    ("实付 39.9，优惠前 59", "购物", "购物", "【系统示例】金额只认「实付」，忽略划线价 / 优惠前"),
+    ("微信零钱付款 18", "支付宝", "微信", "【系统示例】按支付渠道纠正账户，不猜品牌别名"),
+)
+
+SEED_MEMORY_MARK = "【系统示例】"
+
+
+def _seed_ai_memory_defaults(conn):
+    """幂等补齐默认 Few-Shot 纠错示例；按 original_text 判重，重复启动不会插入重复行。"""
+    for original_text, raw, corrected, note in DEFAULT_AI_MEMORIES:
+        exists = conn.execute(
+            "SELECT 1 FROM ai_memory WHERE original_text = ? LIMIT 1",
+            (original_text,),
+        ).fetchone()
+        if exists:
+            continue
+        conn.execute(
+            "INSERT INTO ai_memory (original_text, raw_category, corrected_category, note) "
+            "VALUES (?, ?, ?, ?)",
+            (original_text, raw, corrected, note),
+        )
 
 
 def _backfill_category_ids(conn):
@@ -1745,6 +2025,79 @@ def init_db():
                 """
             )
 
+            # v0.14.0：后台「提示文案管理」的文案库。toast() 优先取这里 is_active=1 的
+            # 随机文案，接口不可用时才回退前端内置的颜文字保底文案。
+            # type 走应用层白名单（success / error / info / warn），不加 CHECK，
+            # 保持「新库 / 老库」结构一致。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS system_tips (
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type       TEXT    NOT NULL DEFAULT 'success',
+                    content    TEXT    NOT NULL,
+                    location   TEXT    NOT NULL DEFAULT '',
+                    is_active  INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT    NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_system_tips_type ON system_tips (type, is_active)"
+            )
+            # v0.14.0：老库的 system_tips 没有 location 列（场景位置标签），
+            # 新库建表时已直接带上，这里 PRAGMA 幂等检查，缺了才补，已有行自动填空串。
+            tip_columns = [
+                row["name"] for row in conn.execute("PRAGMA table_info(system_tips)")
+            ]
+            if "location" not in tip_columns:
+                conn.execute(
+                    "ALTER TABLE system_tips ADD COLUMN location TEXT NOT NULL DEFAULT ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_system_tips_location "
+                "ON system_tips (location, is_active)"
+            )
+
+            # v0.14.0：设置弹窗「帮助与反馈」提交的用户反馈。
+            # 与 v0.10 的 ai_feedback 分开存：ai_feedback 是 AI 解析纠错样本，
+            # 这张表是用户找客服的问题单，后台「用户反馈」Tab 直接读它。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_feedback (
+                    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id           INTEGER NOT NULL,
+                    email             TEXT    NOT NULL DEFAULT '',
+                    nickname          TEXT    NOT NULL DEFAULT '',
+                    issue_description TEXT    NOT NULL DEFAULT '',
+                    occur_date        TEXT    NOT NULL DEFAULT '',
+                    image_path        TEXT    NOT NULL DEFAULT '',
+                    contact_type      TEXT    NOT NULL DEFAULT '',
+                    contact_info      TEXT    NOT NULL DEFAULT '',
+                    created_at        TEXT    NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_feedback_user "
+                "ON user_feedback (user_id, created_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_feedback_created "
+                "ON user_feedback (created_at)"
+            )
+
+            # v0.14.0：帮助内容配置（FAQ / 快捷键 / 联系方式 / 反馈占位文案）。
+            # 单行 key/value 配置表，缺 key 时由 _seed_help_settings 灌默认值，
+            # 管理员在后台改过之后就算键已存在也不会被默认值覆盖。
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+
         # v0.12：多用户基建（users / import_history / 核心表 user_id / 账户复合主键 / 1 号管理员）
         with conn:
             _ensure_user_schema(conn)
@@ -1768,10 +2121,22 @@ def init_db():
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
         with conn:
+            # v0.14.0：分类体系一次性迁移必须排在常规补种之前——
+            # 先清洗「213」这类脏分类、清理无引用的旧默认分类，再按新体系补种，
+            # 这样迁移日志里「脏分类先转挂到其他、再删除」的顺序才是可验证的。
+            _migrate_v0140_taxonomy(conn)
             _seed_categories(conn, ADMIN_USER_ID)
             _seed_income_categories(conn, ADMIN_USER_ID)
             _seed_accounts(conn)
             _seed_notifications(conn)
+            # v0.14.1：记忆库默认纠错示例（幂等补种，不覆盖 / 不删除用户已有记忆）
+            _seed_ai_memory_defaults(conn)
+            _seed_system_tips(conn)
+            # v0.14.0：老库的 6 条默认文案是先于 location 列存在的，补列后 location 全是空串，
+            # 这里按「原文一字不改」的对应关系把场景位置补上（已有值的行不动，删光的也不复活）。
+            _backfill_tip_locations(conn)
+            # v0.14.0：帮助内容默认值（只补缺失的 key，管理员改过的内容不会被覆盖）
+            _seed_help_settings(conn)
             _backfill_category_ids(conn)
             # 只有刚补列的那一次才回填：分类按 id、账户按 rowid，
             # 正好等于升级前「按创建先后」的显示顺序
@@ -2215,19 +2580,41 @@ def list_accounts():
 
     v0.13.3：多下发 `type`（normal / investment）。老前端不读这个键也完全不坏，
     符合「新增字段一律可空兼容」纪律（设计 §3.5 保障 2）。
+
+    v0.14.0-TST：多下发 `market_value`（投资账户持仓市值）与 `total`（余额 + 市值）。
+    `balance` 的语义**不变**，仍是账户可用资金，行内编辑/投资看板都照旧用它；
+    只是「总资产」和资产页账户总额改为读 `total`，否则持仓市值就被漏算。
+    口径与 `_row_to_holding()` 完全一致：current_price 为 0 时回落 cost_price。
     """
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT name, balance, group_name, type FROM accounts "
-            "WHERE user_id = ? ORDER BY sort_order, rowid",
-            (_uid(),),
+            "SELECT a.name, a.balance, a.group_name, a.type,"
+            "       COALESCE(mv.market_value, 0) AS market_value"
+            "  FROM accounts a"
+            "  LEFT JOIN ("
+            "      SELECT p.account AS account_name,"
+            "             SUM(h.shares * CASE WHEN h.current_price > 0"
+            "                                 THEN h.current_price ELSE h.cost_price END) AS market_value"
+            "        FROM holdings h"
+            "        JOIN invest_platforms p"
+            "          ON p.id = h.platform_id AND p.user_id = h.user_id"
+            "       WHERE h.user_id = ?"
+            "       GROUP BY p.account"
+            "  ) mv ON mv.account_name = a.name"
+            " WHERE a.user_id = ?"
+            " ORDER BY a.sort_order, a.rowid",
+            (_uid(), _uid()),
         ).fetchall()
         accounts = []
         for row in rows:
             account = dict(row)
-            account["balance"] = round(account["balance"], 2)
+            account["balance"] = round(account["balance"] or 0, 2)
             account["type"] = _clean_account_type(account.get("type"))
+            market_value = round(float(account.get("market_value") or 0), 2)
+            account["market_value"] = market_value
+            # 投资账户对外可见总额 = 可用资金 + 持仓市值；普通账户 market_value 恒 0
+            account["total"] = round(account["balance"] + market_value, 2)
             accounts.append(account)
         return accounts
     finally:
@@ -2327,6 +2714,107 @@ def update_account(name, balance=None, group_name=None, account_type=None):
                 "balance": new_balance,
                 "group_name": new_group,
                 "type": new_type,
+            }, None
+    finally:
+        conn.close()
+
+
+def adjust_account_balance(
+    name,
+    new_balance,
+    generate_record=True,
+    note="账户余额修改",
+    category_id=None,
+    record_date=None,
+):
+    """把账户余额直接改成 new_balance，并按差额可选补一笔流水（v0.14.0-TST）。
+
+    与 `update_account()` 的区别：这里会算差额并**生成账单**，让「改余额」在流水里
+    留下可追溯的一笔，而不是悄悄改数字。
+
+    三个关键实现点：
+    1. 余额用 UPDATE 直接覆盖，保证落库值精确等于用户输入（不受浮点累加影响）；
+    2. 生成账单时裸插 records，**不调 add_record()**：add_record 会走 `_apply_effects`
+       再把差额加一次余额，余额就变成 new_balance + diff；
+    3. 差额绝对值 < 0.01 视为没变，只改余额、不生成流水，避免出现 0 元账单。
+    """
+    new_balance = round(float(new_balance), 2)
+    conn = get_conn()
+    try:
+        with conn:
+            uid = _uid()
+            row = conn.execute(
+                "SELECT name, balance FROM accounts WHERE name = ? AND user_id = ?",
+                (name, uid),
+            ).fetchone()
+            if row is None:
+                return None, "账户不存在"
+
+            old_balance = round(float(row["balance"] or 0), 2)
+            diff = round(new_balance - old_balance, 2)
+            conn.execute(
+                "UPDATE accounts SET balance = ? WHERE name = ? AND user_id = ?",
+                (new_balance, name, uid),
+            )
+
+            record_id = None
+            record_type = ""
+            category_label = ""
+            if generate_record and abs(diff) >= 0.01:
+                record_type = "income" if diff > 0 else "expense"
+                resolved_id = None
+                resolved_name = ""
+                # 用户显式选的分类优先；非法 / 越权 / 已删的 id 一律回落到「其他」
+                if category_id is not None:
+                    cat = conn.execute(
+                        "SELECT id, name FROM categories WHERE id = ? AND user_id = ?",
+                        (int(category_id), uid),
+                    ).fetchone()
+                    if cat is not None:
+                        resolved_id = int(cat["id"])
+                        resolved_name = cat["name"]
+                if resolved_id is None:
+                    cat = conn.execute(
+                        "SELECT id, name FROM categories WHERE name = ? AND user_id = ? "
+                        "ORDER BY (parent_id IS NOT NULL), id LIMIT 1",
+                        (DEFAULT_CATEGORY, uid),
+                    ).fetchone()
+                    if cat is not None:
+                        resolved_id = int(cat["id"])
+                        resolved_name = cat["name"]
+                if not resolved_name:
+                    resolved_name = DEFAULT_CATEGORY
+
+                cur = conn.execute(
+                    "INSERT INTO records "
+                    "(user_id, amount, category, category_id, note, date, account, type, "
+                    " formula, to_account, fee, is_reimbursable, reimbursed_amount, "
+                    " total_reimbursement, image_path, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, 0, 0, 0, '', "
+                    " datetime('now','localtime'))",
+                    (
+                        uid,
+                        round(abs(diff), 2),
+                        resolved_name,
+                        resolved_id,
+                        (note or "").strip() or "账户余额修改",
+                        normalize_date(record_date or datetime.date.today().isoformat()),
+                        name,
+                        record_type,
+                    ),
+                )
+                record_id = cur.lastrowid
+                category_label = resolved_name
+
+            return {
+                "account": name,
+                "old_balance": old_balance,
+                "balance": new_balance,
+                "diff": diff,
+                "record_id": record_id,
+                "record_type": record_type,
+                "record_amount": round(abs(diff), 2) if record_id else 0.0,
+                "category": category_label,
             }, None
     finally:
         conn.close()
@@ -5174,9 +5662,22 @@ def list_ai_memories(limit=50):
         conn.close()
 
 
+def list_ai_memories_for_prompt(limit=200):
+    """给 AI Prompt 用的记忆：排除【系统示例】，示例只用于后台列表展示。
+
+    v0.14.1：默认纠错示例写进了同一张表，若直接喂给模型会把所有人的
+    few-shot 都变成内置例句。这里按 note 前缀过滤，用户自己写的记忆不受影响。
+    """
+    return [
+        item
+        for item in list_ai_memories(limit)
+        if SEED_MEMORY_MARK not in (item.get("note") or "")
+    ]
+
+
 def list_recent_ai_memories(limit=3):
     """取最近几条纠错给 Prompt 当 few-shot；条数固定很小，避免提示词被撑爆。"""
-    return list_ai_memories(limit)
+    return list_ai_memories_for_prompt(limit)
 
 
 def search_ai_memories(text, limit=3):
@@ -5188,7 +5689,7 @@ def search_ai_memories(text, limit=3):
     - 分数太低的直接不要，不足 limit 时用最近的记忆补齐，保证 Prompt 里总有几条参考。
     """
     query = re.sub(r"\s+", "", (text or "").strip().lower())
-    memories = list_ai_memories(200)
+    memories = list_ai_memories_for_prompt(200)
     if not query:
         return memories[:limit]
 
@@ -5694,5 +6195,502 @@ def revoke_access_session(token):
     try:
         with conn:
             conn.execute("DELETE FROM access_sessions WHERE token = ?", (token,))
+    finally:
+        conn.close()
+
+
+# ---------------- 提示文案库（v0.14.0，后台 Tips 管理） ----------------
+
+# toast() 的状态类型白名单：success / error / info / warn。
+# 前三种是需求定的；warn 是 v0.11.4 起就存在的黄色提醒，允许后台补文案，前端有内置兜底。
+TIP_TYPES = ("success", "error", "info", "warn")
+DEFAULT_TIP_TYPE = "success"
+MAX_TIP_LENGTH = 80
+
+# 首次建表时的默认颜文字文案（严禁 Emoji，全部用 Kaomoji）。
+# 与 static/script.js 里的 TOAST_COPY 保底池保持同一套话术，接口挂了也不会变味。
+# 每条：(type, content, location)。location 是「场景位置」短标签（≤20 字），
+# 后台提示文案管理用来分场景定位文案；文案本身沿用原来的 6 条原文，一字不改。
+DEFAULT_SYSTEM_TIPS = (
+    ("success", r"0v0 记账成功，又存下了一笔！", "记账成功"),
+    ("success", r"(≧∇≦)ﾉ 保存成功啦！", "保存"),
+    ("success", r"(๑•̀ㅂ•́)و✧ 数据已安全同步至云端！", "云同步"),
+    ("error", r">_< 网络开小差了，请稍后再试", "网络"),
+    ("error", r"(´･ω･\) 操作失败了，检查一下网络吧", "网络"),
+    ("info", r"(・ω・)ノ 正在为您拉取最新数据...", "通用"),
+)
+
+
+# 场景位置标签上限：后台输入框 maxlength 也是 20，服务端再兜一层
+MAX_TIP_LOCATION_LENGTH = 20
+
+
+def _row_to_tip(row):
+    return {
+        "id": row["id"],
+        "type": row["type"],
+        "content": row["content"],
+        "location": row["location"] or "",
+        "is_active": int(row["is_active"] or 0),
+        "created_at": row["created_at"] or "",
+    }
+
+
+def _seed_system_tips(conn):
+    """提示文案表为空时灌入默认颜文字文案。只在空表时灌，管理员删光也不会复活。"""
+    count = conn.execute("SELECT COUNT(*) AS n FROM system_tips").fetchone()["n"]
+    if count:
+        return
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    for tip_type, content, location in DEFAULT_SYSTEM_TIPS:
+        conn.execute(
+            "INSERT INTO system_tips (type, content, location, is_active, created_at) "
+            "VALUES (?, ?, ?, 1, ?)",
+            (tip_type, content, location, now),
+        )
+
+
+def _backfill_tip_locations(conn):
+    """v0.14.0：给「先于 location 列存在」的 6 条默认文案补场景位置。
+
+    老库升级时 location 列是 ALTER 出来的、已有行全是空串，后台表格会显示一片「—」。
+    这里只按默认文案原文精确匹配、且只在 location 为空时回填：
+    - 管理员改过的文案不会被动到；
+    - 管理员删掉的文案也不会复活（本函数不插行）；
+    - 重复执行幂等（已有 location 的行不再 matches 空条件）。
+    """
+    updated = 0
+    for _tip_type, content, location in DEFAULT_SYSTEM_TIPS:
+        cursor = conn.execute(
+            "UPDATE system_tips SET location = ? "
+            " WHERE content = ? AND (location IS NULL OR TRIM(location) = '')",
+            (location, content),
+        )
+        updated += cursor.rowcount or 0
+    if updated:
+        print("[v0.14.0] 提示文案场景位置回填：%d 条" % updated)
+    return updated
+
+
+def list_system_tips(active_only=False):
+    """提示文案列表（后台管理看全量，前端只看启用中的）。按类型 + id 排序，顺序稳定。"""
+    sql = "SELECT id, type, content, location, is_active, created_at FROM system_tips"
+    if active_only:
+        sql += " WHERE is_active = 1"
+    sql += " ORDER BY type, id"
+    conn = get_conn()
+    try:
+        return [_row_to_tip(row) for row in conn.execute(sql).fetchall()]
+    finally:
+        conn.close()
+
+
+def active_tips_by_type():
+    """前端 toast() 用的结构：{"success": [...], "error": [...], "info": [...], "warn": [...]}。
+
+    只返回 is_active=1 的文案；某个类型一条都没有时给空列表，前端自动回退内置保底池。
+    """
+    grouped = {tip_type: [] for tip_type in TIP_TYPES}
+    for tip in list_system_tips(active_only=True):
+        grouped.setdefault(tip["type"], []).append(tip["content"])
+    return grouped
+
+
+def _normalize_tip_input(tip_type, content, is_active, location=""):
+    tip_type = str(tip_type or DEFAULT_TIP_TYPE).strip()
+    if tip_type not in TIP_TYPES:
+        raise RecordError("提示类型只能是 success / error / info / warn")
+    content = str(content or "").strip()
+    if not content:
+        raise RecordError("提示文案不能为空")
+    if len(content) > MAX_TIP_LENGTH:
+        raise RecordError("提示文案最多 %d 个字" % MAX_TIP_LENGTH)
+    # 场景位置是可选短标签：去空白后截断到 20 字，不填就是空串（后台显示为空）
+    location = str(location or "").strip()[:MAX_TIP_LOCATION_LENGTH]
+    try:
+        active = 1 if int(is_active) else 0
+    except (TypeError, ValueError):
+        active = 1
+    return tip_type, content, active, location
+
+
+def create_system_tip(tip_type="success", content="", is_active=1, location=""):
+    """新增一条提示文案，返回入库后的字典。类型 / 空文案 / 长度都在这里校验。"""
+    tip_type, content, active, location = _normalize_tip_input(
+        tip_type, content, is_active, location
+    )
+    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO system_tips (type, content, location, is_active, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (tip_type, content, location, active, now),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, type, content, location, is_active, created_at "
+            "FROM system_tips WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_tip(row)
+    finally:
+        conn.close()
+
+
+def update_system_tip(tip_id, tip_type=None, content=None, is_active=None, location=None):
+    """按 id 局部更新提示文案；字段传 None 表示不改。找不到返回 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, type, content, location, is_active FROM system_tips WHERE id = ?",
+            (tip_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        next_type = row["type"] if tip_type is None else tip_type
+        next_content = row["content"] if content is None else content
+        next_active = row["is_active"] if is_active is None else is_active
+        next_location = row["location"] if location is None else location
+        next_type, next_content, next_active, next_location = _normalize_tip_input(
+            next_type, next_content, next_active, next_location
+        )
+        with conn:
+            conn.execute(
+                "UPDATE system_tips SET type = ?, content = ?, location = ?, "
+                "is_active = ? WHERE id = ?",
+                (next_type, next_content, next_location, next_active, tip_id),
+            )
+        updated = conn.execute(
+            "SELECT id, type, content, location, is_active, created_at "
+            "FROM system_tips WHERE id = ?",
+            (tip_id,),
+        ).fetchone()
+        return _row_to_tip(updated)
+    finally:
+        conn.close()
+
+
+def delete_system_tip(tip_id):
+    """按 id 删除提示文案，返回是否真的删掉了一条。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute("DELETE FROM system_tips WHERE id = ?", (tip_id,))
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------- 帮助内容配置 + 用户反馈（v0.14.0） ----------------
+
+# app_settings 里的四个帮助内容键；后台「帮助与反馈内容配置」直接编辑这四段文本
+HELP_FAQ_KEY = "help_faq"
+HELP_SHORTCUTS_KEY = "help_shortcuts"
+HELP_CONTACT_KEY = "help_contact"
+HELP_PLACEHOLDER_KEY = "help_feedback_placeholder"
+MAX_HELP_TEXT_LENGTH = 8000
+
+# 默认帮助内容（只在该 key 还不存在时灌入，管理员改过就永久保留自己的版本）。
+# 多行文本行格式：FAQ「问题|答案」、快捷键「按键|说明」、联系方式「名称|值」。
+_DEFAULT_HELP_FAQ = "\n".join(
+    (
+        "如何快速记一笔？|按一下键盘 N，或点右下角钢笔悬浮球，填写金额与分类后回车即可保存。",
+        "账单记错了怎么改？|在账单列表里右键该条账单，选择「编辑」，改完保存即可。",
+        "数据会丢吗？|账本已安全同步云端；也可以在「我的 → 导入/导出账单」里随时导出 CSV/XLSX 备份。",
+        "支持哪些导入格式？|支持微信、支付宝导出的 CSV / XLSX 账单，导入前会先预览、重复项默认不勾选。",
+    )
+)
+_DEFAULT_HELP_SHORTCUTS = "\n".join(
+    (
+        "N|新建账单",
+        "Ctrl+K|搜索账单",
+        "Ctrl+S|保存当前弹窗（如记账）",
+        "Esc|关闭当前弹窗",
+    )
+)
+_DEFAULT_HELP_CONTACT = "\n".join(
+    (
+        "客服邮箱|support@zhihuizhang.example.com",
+        "客服 QQ|800123456",
+        "工作时间|工作日 9:00 - 18:00",
+    )
+)
+_DEFAULT_HELP_PLACEHOLDER = "抱歉，工程师是小呆呆，有什么问题和诉求请在这里留言！(・ω・)ノ"
+
+HELP_SETTING_DEFAULTS = (
+    (HELP_FAQ_KEY, _DEFAULT_HELP_FAQ),
+    (HELP_SHORTCUTS_KEY, _DEFAULT_HELP_SHORTCUTS),
+    (HELP_CONTACT_KEY, _DEFAULT_HELP_CONTACT),
+    (HELP_PLACEHOLDER_KEY, _DEFAULT_HELP_PLACEHOLDER),
+)
+
+
+def _seed_help_settings(conn):
+    """帮助内容只在缺 key 时灌默认值；管理员改过的内容不会被默认值覆盖。"""
+    for key, value in HELP_SETTING_DEFAULTS:
+        conn.execute(
+            "INSERT OR IGNORE INTO app_settings (key, value) VALUES (?, ?)", (key, value)
+        )
+
+
+def get_app_setting(key, default=""):
+    """读 app_settings 里的单个配置；没有这个 key 时返回 default。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (str(key),)
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return default
+    value = row["value"]
+    return default if value is None else value
+
+
+def set_app_setting(key, value):
+    """写单个配置（有则覆盖、无则新增），返回写入后的字符串值。"""
+    key = str(key or "").strip()
+    if not key:
+        raise RecordError("配置键不能为空")
+    value = "" if value is None else str(value)
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                (key, value),
+            )
+    finally:
+        conn.close()
+    return value
+
+
+def get_help_raw():
+    """后台编辑用的帮助内容原文：FAQ / 快捷键 / 联系方式 / 反馈占位文案。"""
+    return {
+        "faq": get_app_setting(HELP_FAQ_KEY, _DEFAULT_HELP_FAQ),
+        "shortcuts": get_app_setting(HELP_SHORTCUTS_KEY, _DEFAULT_HELP_SHORTCUTS),
+        "contact": get_app_setting(HELP_CONTACT_KEY, _DEFAULT_HELP_CONTACT),
+        "feedback_placeholder": get_app_setting(
+            HELP_PLACEHOLDER_KEY, _DEFAULT_HELP_PLACEHOLDER
+        ),
+    }
+
+
+def _parse_help_rows(raw):
+    """把「A|B」多行文本解析成 [(A, B)]：空行忽略，| 只切第一次。"""
+    rows = []
+    for line in str(raw or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        left, _, right = line.partition("|")
+        rows.append((left.strip(), right.strip()))
+    return rows
+
+
+def get_help_content():
+    """设置弹窗「帮助与反馈」用的结构化内容，前端直接按字段渲染。"""
+    raw = get_help_raw()
+    return {
+        "faq": [
+            {"q": question, "a": answer}
+            for question, answer in _parse_help_rows(raw["faq"])
+        ],
+        "shortcuts": [
+            {"keys": keys, "desc": desc}
+            for keys, desc in _parse_help_rows(raw["shortcuts"])
+        ],
+        "contact": [
+            {"label": label, "value": value}
+            for label, value in _parse_help_rows(raw["contact"])
+        ],
+        "feedback_placeholder": raw["feedback_placeholder"],
+    }
+
+
+def update_help_content(
+    faq=None, shortcuts=None, contact=None, feedback_placeholder=None
+):
+    """后台保存帮助内容：只更新传入项（None=不改），每项上限 8000 字，返回最新原文。"""
+    updates = (
+        (HELP_FAQ_KEY, faq),
+        (HELP_SHORTCUTS_KEY, shortcuts),
+        (HELP_CONTACT_KEY, contact),
+        (HELP_PLACEHOLDER_KEY, feedback_placeholder),
+    )
+    conn = get_conn()
+    try:
+        with conn:
+            for key, value in updates:
+                if value is None:
+                    continue
+                if not isinstance(value, str):
+                    raise RecordError("帮助内容必须是文本")
+                value = value.strip()
+                if len(value) > MAX_HELP_TEXT_LENGTH:
+                    raise RecordError("帮助内容最多 %d 个字" % MAX_HELP_TEXT_LENGTH)
+                conn.execute(
+                    "INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+    finally:
+        conn.close()
+    return get_help_raw()
+
+
+# 用户反馈：问题描述上限、联系方式类型白名单、10 秒防刷
+MAX_FEEDBACK_LENGTH = 2000
+MAX_FEEDBACK_CONTACT_LENGTH = 100
+FEEDBACK_CONTACT_TYPES = ("", "qq", "wechat", "phone")
+FEEDBACK_COOLDOWN_SECONDS = 10
+
+
+def _feedback_now():
+    """反馈时间统一用「YYYY-MM-DD HH:MM:SS」：列表可读，10 秒防刷也算得准。"""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _row_to_user_feedback(row):
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        # 后台卡片用 uid 展示，等价于 user_id，语义跟用户管理保持一致
+        "uid": row["user_id"],
+        "email": row["email"] or "",
+        "nickname": row["nickname"] or "",
+        "issue_description": row["issue_description"] or "",
+        "occur_date": row["occur_date"] or "",
+        "image_path": row["image_path"] or "",
+        "contact_type": row["contact_type"] or "",
+        "contact_info": row["contact_info"] or "",
+        "created_at": row["created_at"] or "",
+    }
+
+
+def create_user_feedback(
+    issue_description,
+    occur_date="",
+    image_path="",
+    contact_type="",
+    contact_info="",
+    email="",
+    nickname="",
+):
+    """新增一条用户反馈，返回入库后的字典。
+
+    user_id 一律取当前登录用户上下文（app.py 的 JWT 守卫已注入）；
+    issue 必填且 ≤2000 字；occur_date 可空，非空要求 YYYY-MM-DD；
+    contact_type 只允许 ""/qq/wechat/phone；联系方式 ≤100 字。
+    服务端兜底 10 秒防刷：同一用户最近一条反馈距今不足 10 秒直接抛 RecordError。
+    """
+    user_id = current_user_id()
+    issue = str(issue_description or "").strip()
+    if not issue:
+        raise RecordError("反馈内容不能为空")
+    if len(issue) > MAX_FEEDBACK_LENGTH:
+        raise RecordError("反馈内容最多 %d 个字" % MAX_FEEDBACK_LENGTH)
+
+    occur_date = str(occur_date or "").strip()
+    if occur_date:
+        try:
+            datetime.datetime.strptime(occur_date, "%Y-%m-%d")
+        except ValueError:
+            raise RecordError("发生日期格式应为 YYYY-MM-DD")
+
+    contact_type = str(contact_type or "").strip().lower()
+    if contact_type not in FEEDBACK_CONTACT_TYPES:
+        raise RecordError("联系方式类型只能是 qq / wechat / phone")
+
+    contact_info = str(contact_info or "").strip()
+    if len(contact_info) > MAX_FEEDBACK_CONTACT_LENGTH:
+        raise RecordError("联系方式最多 %d 个字" % MAX_FEEDBACK_CONTACT_LENGTH)
+
+    image_path = str(image_path or "").strip()
+    email = str(email or "").strip()
+    nickname = str(nickname or "").strip()
+    # 前端没带邮箱/昵称时按 user_id 回表兜底，保证后台卡片一定能看到联系方式
+    if not email or not nickname:
+        user = get_user(user_id)
+        if user:
+            email = email or (user.get("email") or "")
+            nickname = nickname or (user.get("nickname") or "")
+
+    now = datetime.datetime.now()
+    conn = get_conn()
+    try:
+        last = conn.execute(
+            "SELECT created_at FROM user_feedback WHERE user_id = ? "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        if last is not None and last["created_at"]:
+            try:
+                last_time = datetime.datetime.strptime(
+                    last["created_at"], "%Y-%m-%d %H:%M:%S"
+                )
+            except ValueError:
+                last_time = None
+            if (
+                last_time is not None
+                and (now - last_time).total_seconds() < FEEDBACK_COOLDOWN_SECONDS
+            ):
+                raise RecordError("发送太频繁，请 10 秒后再试")
+
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO user_feedback "
+                "(user_id, email, nickname, issue_description, occur_date, image_path, "
+                " contact_type, contact_info, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    user_id,
+                    email,
+                    nickname,
+                    issue,
+                    occur_date,
+                    image_path,
+                    contact_type,
+                    contact_info,
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, user_id, email, nickname, issue_description, occur_date, "
+            "       image_path, contact_type, contact_info, created_at "
+            "  FROM user_feedback WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_user_feedback(row)
+    finally:
+        conn.close()
+
+
+def list_user_feedback():
+    """后台「用户反馈」列表：所有用户的反馈，按提交时间倒序。
+
+    管理员专用接口（app.py 里 _require_admin_access 守卫），所以不带 user_id 过滤；
+    email / nickname 优先用反馈里存的那份，users 表兜底老数据。
+    """
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT f.id, f.user_id, f.email, f.nickname, f.issue_description, "
+            "       f.occur_date, f.image_path, f.contact_type, f.contact_info, "
+            "       f.created_at, u.email AS user_email, u.nickname AS user_nickname "
+            "  FROM user_feedback f LEFT JOIN users u ON u.id = f.user_id "
+            " ORDER BY f.created_at DESC, f.id DESC"
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = _row_to_user_feedback(row)
+            item["email"] = row["email"] or row["user_email"] or ""
+            item["nickname"] = row["nickname"] or row["user_nickname"] or ""
+            items.append(item)
+        return items
     finally:
         conn.close()

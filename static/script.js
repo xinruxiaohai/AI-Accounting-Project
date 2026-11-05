@@ -27,6 +27,10 @@ const PAGE_TITLES = {
 
 // localStorage 键名集中在这里，避免各函数各写一份字符串
 const LS_THEME = "ai-accounting-theme";
+/* v0.14.1：Shift + D 在「跟随系统」模式下的临时覆盖标记。
+ * 纯内存变量，绝不写 localStorage —— 刷新即消失，boot() 的
+ * applyTheme(readTheme()) 会按「跟随系统」重新套用，设置值永不改变。 */
+let themeTempOverride = false;
 const LS_SIDEBAR = "ai-accounting-sidebar-collapsed";
 const LS_BUDGET = "ai-accounting-budget";
 const LS_NOTIFY_READ = "ai-accounting-notify-read-at";
@@ -294,12 +298,111 @@ function todayText() {
 
 // 各类 Toast 的停留时长（毫秒）。错误类要给用户足够时间读完后续到底错在哪，
 // 2400ms 实测来不及看清（v0.13.3 QA）；成功类是「知道了」的确认感，保持短。
-const TOAST_DURATION = { success: 2400, warn: 3600, error: 4800 };
+const TOAST_DURATION = { success: 2400, info: 3000, warn: 3600, error: 4800 };
+
+/* v0.14.1-FIX：每条 Toast 的销毁定时器都登记在册，清空实例时一并清掉，
+ * 否则旧定时器会去 remove 已不在 DOM 的节点、或抢在新 Toast 上执行退场动画。 */
+const TOAST_TIMERS = new Set();
+
+/** 强制销毁页面上所有已存在的 Toast 实例（单实例契约，杜绝多实例叠加） */
+function clearToastStack() {
+  TOAST_TIMERS.forEach(function (timer) {
+    window.clearTimeout(timer);
+  });
+  TOAST_TIMERS.clear();
+  const stack = $("toast-stack");
+  if (!stack) {
+    return;
+  }
+  Array.prototype.slice.call(stack.querySelectorAll(".toast-item")).forEach(function (item) {
+    if (item.parentNode) {
+      item.parentNode.removeChild(item);
+    }
+  });
+}
+
+// v0.14.0：Toast 颜文字文案库（**严禁 Emoji**，只用 Kaomoji）。
+// 后端 /api/tips 可用时优先用后台「提示文案管理」里同类启用中的随机文案；
+// 接口报错或该类型一条都没有时回退到这里，保证提示永远「有话说」。
+// v0.14.1-FIX：成功类文案必须是**通用**的。旧版第一条写死「记账成功，又存下了一笔」，
+// 结果切主题、改分类、加联系人全都被串成记账成功 —— 场景专属文案一律不进公共池。
+const TOAST_COPY = {
+  success: [
+    "(≧∇≦)ﾉ 搞定啦！",
+    "(๑•̀ㅂ•́)و✧ 已经为您处理好啦！",
+    "(・ω・)ノ 操作成功，数据已更新！",
+  ],
+  error: [
+    ">_< 网络开小差了，请稍后再试",
+    "(´･ω･\\) 操作失败了，检查一下网络吧",
+  ],
+  info: ["(・ω・)ノ 正在为您拉取最新数据..."],
+  warn: ["(・_・;) 这个操作要小心一点哦"],
+};
+
+// 后端提示文案缓存：{ success: [...], error: [...], info: [...], warn: [...] }
+const TOAST_TIPS = { items: null, loading: false };
+
+/** 拉一次后台启用的提示文案；失败就静默保持内置池（不能再弹 toast，否则互相套娃） */
+function loadToastTips() {
+  if (TOAST_TIPS.loading) {
+    return;
+  }
+  TOAST_TIPS.loading = true;
+  fetch("/api/tips", { headers: { Accept: "application/json" } })
+    .then(function (response) {
+      return response.ok ? response.json() : null;
+    })
+    .then(function (data) {
+      if (data && data.tips && typeof data.tips === "object") {
+        TOAST_TIPS.items = data.tips;
+      }
+    })
+    .catch(function () {
+      TOAST_TIPS.items = TOAST_TIPS.items || null;
+    })
+    .then(function () {
+      TOAST_TIPS.loading = false;
+    });
+}
+
+/** 按类型取一条文案：优先后端启用的，退到内置颜文字池 */
+function pickToastCopy(kind) {
+  const remote = TOAST_TIPS.items && TOAST_TIPS.items[kind];
+  const pool = Array.isArray(remote) && remote.length ? remote : TOAST_COPY[kind] || [];
+  if (!pool.length) {
+    return "";
+  }
+  return String(pool[Math.floor(Math.random() * pool.length)] || "").trim();
+}
+
+// 左侧状态小图标：内联 SVG，避免 Emoji 在不同平台长得不一样（需求禁止 Emoji）
+const TOAST_ICON_SVG = {
+  success:
+    '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 10.5l4 4 8-9"/></svg>',
+  error:
+    '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="10" cy="10" r="8"/><path d="M10 5.8v5.4"/>' +
+    '<circle cx="10" cy="14.4" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  info:
+    '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="10" cy="10" r="8"/><path d="M10 9.2v5"/>' +
+    '<circle cx="10" cy="6" r="1.1" fill="currentColor" stroke="none"/></svg>',
+  warn:
+    '<svg viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M10 3.2L18 16.8H2z"/><path d="M10 7.6v3.8"/>' +
+    '<circle cx="10" cy="14" r="1.1" fill="currentColor" stroke="none"/></svg>',
+};
 
 /**
- * 顶部堆叠提示。
- * @param {string} message 文案
- * @param {string} type "success" | "warn" | "error"
+ * 顶部堆叠提示（v0.14.0：深色磨砂 + 颜文字，原 message 一律保留在副行）。
+ * @param {string} message 原始文案（业务信息，必须保留，方便定位问题）
+ * @param {string} type "success" | "warn" | "error" | "info"
  * @param {object} [options] 传 { duration: ms } 可覆盖默认时长
  */
 function toast(message, type, options) {
@@ -307,18 +410,86 @@ function toast(message, type, options) {
   if (!stack) {
     return;
   }
+  /* v0.14.1-FIX 单实例契约：每次弹新提示之前，强制清空 / 销毁当前页面上
+   * 所有已存在的 Toast 实例与定时器。旧实现直接 appendChild，用户连续操作
+   * 时多条 Toast 叠在一起，视觉上就像两段不相关文案被拼成了一句话。 */
+  clearToastStack();
   const kind =
-    type === "error" ? "error" : type === "warn" ? "warn" : "success";
-  let duration = TOAST_DURATION[kind];
+    type === "error"
+      ? "error"
+      : type === "warn"
+        ? "warn"
+        : type === "info"
+          ? "info"
+          : "success";
+  let duration = TOAST_DURATION[kind] || 2400;
   if (options && Number.isFinite(options.duration) && options.duration > 0) {
     duration = options.duration;
   }
+
+  const text = String(message == null ? "" : message).trim();
+  // exclusive：只显示业务文案，绝不叠加任何随机颜文字（主题切换等专属提示走这里）
+  const exclusive = !!(options && options.exclusive);
+  let copy = exclusive ? "" : pickToastCopy(kind);
+  if (copy && copy === text) {
+    copy = "";
+  }
+  /* v0.14.1-FIX 文案隔离护栏：后台「提示文案管理」里可能仍存着旧版
+   * 「记账成功 / 又存下了一笔」这类强场景文案，只要当前业务文案不属于记账语境
+   * 就直接丢掉随机文案，避免主题切换、分类保存等提示被串成记账成功。 */
+  if (
+    copy &&
+    /记账成功|又存下|存下了一笔|记下了一笔/.test(copy) &&
+    !/记账|存下|记下|记一笔|保存成功|同步成功/.test(text)
+  ) {
+    copy = "";
+  }
+
   const item = document.createElement("div");
-  item.className =
-    "toast-item " +
-    (kind === "error" ? "toast-error" : kind === "warn" ? "toast-warn" : "toast-success");
-  item.textContent = String(message || "");
+  item.className = "toast-item toast-" + kind;
+  item.setAttribute("data-toast-kind", kind);
   item.setAttribute("data-toast-duration", String(duration));
+  item.setAttribute("role", kind === "error" ? "alert" : "status");
+
+  const icon = document.createElement("span");
+  icon.className = "toast-icon";
+  icon.innerHTML = TOAST_ICON_SVG[kind] || TOAST_ICON_SVG.info;
+
+  const body = document.createElement("div");
+  body.className = "toast-body";
+
+  // 成功 / 信息：颜文字文案当主角，原 message 作副行（保留业务信息）；
+  // 错误 / 提醒：原 message 当主角（错误原因不能被颜文字盖住），颜文字作副行。
+  const copyFirst = kind === "success" || kind === "info";
+  const lines = [];
+  if (copyFirst) {
+    if (copy) {
+      lines.push({ cls: "toast-copy", text: copy });
+    }
+    if (text) {
+      lines.push({ cls: "toast-text", text: text });
+    }
+  } else {
+    if (text) {
+      lines.push({ cls: "toast-text", text: text });
+    }
+    if (copy) {
+      lines.push({ cls: "toast-copy", text: copy });
+    }
+  }
+  if (!lines.length) {
+    // 极端兜底：两种文案都空时也不让一个空气泡冒出来
+    lines.push({ cls: "toast-copy", text: TOAST_COPY.success[0] });
+  }
+  lines.forEach(function (line) {
+    const paragraph = document.createElement("p");
+    paragraph.className = line.cls;
+    paragraph.textContent = line.text;
+    body.appendChild(paragraph);
+  });
+
+  item.appendChild(icon);
+  item.appendChild(body);
   stack.appendChild(item);
 
   // 先插进 DOM 再加 show，才有从上面滑下来的动画
@@ -326,15 +497,19 @@ function toast(message, type, options) {
     item.classList.add("show");
   });
 
-  setTimeout(function () {
+  const hideTimer = window.setTimeout(function () {
+    TOAST_TIMERS.delete(hideTimer);
     item.classList.remove("show");
     item.setAttribute("data-toast-hiding", "1");
-    setTimeout(function () {
+    const removeTimer = window.setTimeout(function () {
+      TOAST_TIMERS.delete(removeTimer);
       if (item.parentNode) {
         item.parentNode.removeChild(item);
       }
     }, 260);
+    TOAST_TIMERS.add(removeTimer);
   }, duration);
+  TOAST_TIMERS.add(hideTimer);
 }
 
 /* ==================== 表单防呆：字段错误提示 ==================== */
@@ -543,7 +718,7 @@ function beginTableLoad(tbody, colspan, rows) {
   };
 }
 
-/** v0.09.2：列表流骨架屏（不是表格） */
+/** 旧版：列表流骨架屏（不是表格） */
 function skeletonFeedHtml(rows) {
   let html = "";
   for (let r = 0; r < (rows || 5); r += 1) {
@@ -763,6 +938,10 @@ const state = {
   // v0.13.3：投资账户双视图看板（会话态）。activeTab 只记 holdings / ledger，
   // 默认 holdings（持仓）；每次打开投资账户沿用会话内上一次停留的视图。
   invest: { accountName: "", activeTab: "holdings" },
+  // v0.14.0：设置弹窗「帮助与反馈」内容缓存（GET /api/help），null = 还没拉到
+  help: null,
+  // v0.14.0：当前登录用户（反馈提交自动带 email / uid / nickname，缺失时再兜底拉 /api/auth/me）
+  user: null,
 };
 
 let recordModal = null;
@@ -1821,14 +2000,18 @@ function renderAccountGroups() {
 
   box.innerHTML = state.accountGroups
     .map(function (group) {
+      // v0.14.0-TST：分组合计按「可用资金 + 持仓市值」算，和总资产口径保持一致
       const total = group.accounts.reduce(function (sum, account) {
-        return sum + Number(account.balance || 0);
+        return sum + accountTotalValue(account);
       }, 0);
 
       const rows = group.accounts
         .map(function (account) {
           const name = escapeHtml(account.name);
+          // balance 仅用于行内编辑表单与「可用资金」文案；对外显示统一走 totalValue
           const balance = Number(account.balance || 0);
+          const marketValue = Number(account.market_value || 0);
+          const totalValue = accountTotalValue(account);
           // v0.11.6：行内编辑表单，保存 / 取消由事件委托处理
           if (state.editingAccount === account.name) {
             // v0.13.3：账户类型可改（普通 ⇄ 投资）。改成投资账户时后端幂等补「默认」子平台；
@@ -1869,7 +2052,12 @@ function renderAccountGroups() {
           const batchOn = state.batchMode === "accounts";
           const selected =
             batchOn && state.batchAccountNames.indexOf(account.name) >= 0;
-          const shown = state.amountHidden ? "¥••••" : money(account.balance);
+          const shown = state.amountHidden ? "¥••••" : money(totalValue);
+          // 投资账户额外说明市值来源，避免用户以为「可用资金」被改大了
+          const marketHint =
+            marketValue > 0
+              ? " · 含持仓 " + (state.amountHidden ? "¥••••" : money(marketValue))
+              : "";
           return (
             '<div class="account-row' +
             active +
@@ -1897,14 +2085,23 @@ function renderAccountGroups() {
             "</span>" +
             '<span class="account-row-sub">' +
             escapeHtml(group.name) +
+            marketHint +
             "</span></span>" +
             '<span class="account-row-balance' +
-            (balance < 0 ? " is-negative" : "") +
+            (totalValue < 0 ? " is-negative" : "") +
             '" data-amount="' +
-            Number(balance || 0) +
+            Number(totalValue || 0) +
             '">' +
             shown +
             "</span>" +
+            /* v0.14.0-TST：快捷改余额入口。改余额会联动生成收入/支出流水，
+             * 与右侧「编辑账户」（改名/改类型）分开，避免误以为只能行内改。 */
+            '<button class="account-row-adjust" type="button" data-adjust-balance="' +
+            name +
+            '" title="修改余额" aria-label="修改余额">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+            '<path d="M7 5h10M7 9h10M12 9v10M8.5 13.5 12 17l3.5-3.5"></path>' +
+            "</svg></button>" +
             '<button class="account-row-edit" type="button" data-edit-account="' +
             name +
             '" title="编辑账户" aria-label="编辑账户">' +
@@ -1992,7 +2189,7 @@ async function loadAccounts() {
       }
     }
 
-    // v0.09.1：进入资产页默认选中「现金」（没有就选第一个账户），右侧直接渲染流水
+    // 旧版：进入资产页默认选中「现金」（没有就选第一个账户），右侧直接渲染流水
     if (!state.detailAccount && state.accounts.length) {
       const hasCash = state.accounts.some(function (account) {
         return account.name === "现金";
@@ -2153,7 +2350,7 @@ function saveSettings() {
   }
   localStorage.setItem(LS_CARDS, JSON.stringify(hidden));
   applyCardVisibility();
-  toast("显示与主题设置已保存", "success");
+  toast("显示与主题设置已保存", "success", { exclusive: true });
   // v0.11.7：设置搬进独立弹窗，保存完顺手收起
   if (window.bootstrap) {
     const modalElement = $("settings-modal");
@@ -2173,7 +2370,7 @@ function resetSettings() {
   applyTheme("system");
   renderCardVisibility();
   applyCardVisibility();
-  toast("已恢复默认显示与主题", "success");
+  toast("已恢复默认显示与主题", "success", { exclusive: true });
 }
 
 /** 主题三态：把设置值同步到「我的」页的单选按钮 */
@@ -2328,10 +2525,188 @@ function renderAccountBalanceCard() {
   if (!selected) {
     nameEl.textContent = "请选择账户";
     valueEl.textContent = "¥0.00";
+    if ($("account-balance-adjust")) {
+      $("account-balance-adjust").hidden = true;
+    }
     return;
   }
   nameEl.textContent = selected.name;
+  // 大卡片显示的是「账户余额」（可用资金），投资账户的市值在投资看板里，
+  // 这里保持 balance 口径，和左侧列表的 total 口径区分开。
   valueEl.textContent = state.amountHidden ? "¥••••" : money(selected.balance);
+  if ($("account-balance-adjust")) {
+    $("account-balance-adjust").hidden = false;
+  }
+}
+
+/* ---------- v0.14.0-TST：快捷修改账户余额 ---------- */
+
+let balanceAdjustModal = null;
+let balanceAdjustTarget = "";
+
+/** 分类下拉：一级分类全列，「其他」默认选中（后端拿不到会自己回落「其他」） */
+function fillBalanceAdjustCategories() {
+  const select = $("balance-adjust-category");
+  if (!select) {
+    return;
+  }
+  const tops = (state.categories || []).filter(function (item) {
+    return item && item.id;
+  });
+  select.innerHTML = tops
+    .map(function (top) {
+      return '<option value="' + Number(top.id) + '">' + escapeHtml(top.name) + "</option>";
+    })
+    .join("");
+  const fallback =
+    tops.filter(function (top) {
+      return top.name === "其他";
+    })[0] || tops[0];
+  if (fallback) {
+    select.value = String(fallback.id);
+  }
+}
+
+async function openBalanceAdjustModal(accountName) {
+  const account = (state.accounts || []).filter(function (item) {
+    return item.name === accountName;
+  })[0];
+  if (!account) {
+    toast("账户不存在，请刷新后重试", "error");
+    return;
+  }
+  balanceAdjustTarget = account.name;
+  const market = Number(account.market_value || 0);
+  $("balance-adjust-summary").textContent =
+    "「" + account.name + "」当前可用资金 " + money(account.balance) +
+    (market > 0 ? "，另有持仓市值 " + money(market) : "");
+  $("balance-adjust-input").value = Number(account.balance || 0).toFixed(2);
+  $("balance-adjust-record").checked = true;
+  $("balance-adjust-note").value = "账户余额修改";
+
+  if (!(state.categories || []).length) {
+    try {
+      await loadCategories();
+    } catch (error) {
+      // 分类拉不到就留空下拉，后端会自动落到「其他」
+    }
+  }
+  fillBalanceAdjustCategories();
+
+  if (!balanceAdjustModal && window.bootstrap && window.bootstrap.Modal) {
+    balanceAdjustModal = new window.bootstrap.Modal($("balance-adjust-modal"));
+  }
+  if (balanceAdjustModal) {
+    balanceAdjustModal.show();
+  }
+}
+
+async function submitBalanceAdjust() {
+  const input = $("balance-adjust-input");
+  const raw = String((input && input.value) || "").trim();
+  if (!raw) {
+    toast("请输入调整后余额", "error");
+    if (input) {
+      input.focus();
+    }
+    return;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value)) {
+    toast("金额格式不对", "error");
+    if (input) {
+      input.focus();
+    }
+    return;
+  }
+  if (!balanceAdjustTarget) {
+    toast("没有选中账户", "error");
+    return;
+  }
+
+  const recordBox = $("balance-adjust-record");
+  const generate = !!(recordBox && recordBox.checked);
+  const noteBox = $("balance-adjust-note");
+  const note = ((noteBox && noteBox.value) || "").trim() || "账户余额修改";
+  const categoryEl = $("balance-adjust-category");
+  const categoryId = categoryEl && categoryEl.value ? Number(categoryEl.value) : null;
+  const button = $("balance-adjust-confirm");
+  const target = balanceAdjustTarget;
+
+  if (button) {
+    button.disabled = true;
+    button.textContent = "保存中…";
+  }
+  try {
+    const result = await api(
+      "/api/accounts/" + encodeURIComponent(target) + "/adjust_balance",
+      jsonOptions("POST", {
+        balance: Math.round(value * 100) / 100,
+        generate_record: generate,
+        note: note,
+        category_id: categoryId,
+      })
+    );
+
+    // 后端已回带最新账户（含 market_value / total），直接替换避免多拉一次
+    const fresh = result.account_detail;
+    state.accounts = (state.accounts || []).map(function (item) {
+      if (item.name !== target) {
+        return item;
+      }
+      if (fresh) {
+        return fresh;
+      }
+      return Object.assign({}, item, { balance: result.balance });
+    });
+    // state.accountGroups 是独立副本，必须同步，否则左栏还显示旧数字
+    state.accountGroups = (state.accountGroups || []).map(function (group) {
+      return Object.assign({}, group, {
+        accounts: (group.accounts || []).map(function (item) {
+          return item.name === target ? Object.assign({}, item, fresh || { balance: result.balance }) : item;
+        }),
+      });
+    });
+
+    renderAccountGroups();
+    renderAssetsHero();
+    renderAccountBalanceCard();
+
+    // 当前正停在这个账户上就重拉一次：普通账户刷新流水（新账单可见），
+    // 投资账户刷新看板（可用资金是最显眼的那行数字）。不依赖是否生成账单，
+    // 否则「只改余额不留流水」时右栏数字不会跟着变。
+    if (state.detailAccount === target) {
+      try {
+        await selectAccount(target);
+      } catch (error) {
+        // 刷新失败不影响余额已改，忽略
+      }
+    }
+    if (balanceAdjustModal) {
+      balanceAdjustModal.hide();
+    }
+
+    if (result.record_id) {
+      toast(
+        "余额已更新，并生成一笔" +
+          (result.record_type === "income" ? "收入" : "支出") +
+          " " +
+          money(result.record_amount),
+        "success"
+      );
+    } else if (Math.abs(Number(result.diff || 0)) < 0.01) {
+      toast("余额没有变化", "success");
+    } else {
+      toast("余额已更新（未生成账单）", "success");
+    }
+  } catch (error) {
+    toast(error.message || "修改余额失败", "error");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "确认修改";
+    }
+  }
 }
 
 /* ---------- 批量管理（账单 + 账户） ---------- */
@@ -3382,7 +3757,7 @@ function trendOption(series) {
 }
 
 /** 第一次真正画图时才 init，避免页面还没有数据就建实例 */
-/** v0.09.2：窗口尺寸变化时同步重算 ECharts 画布，避免图表错位 */
+/** 旧版：窗口尺寸变化时同步重算 ECharts 画布，避免图表错位 */
 let chartResizeTimer = null;
 function scheduleChartResize() {
   window.clearTimeout(chartResizeTimer);
@@ -3661,9 +4036,67 @@ function renderDashboard() {
   renderFab();
 }
 
+/* ---------- v0.14.0-TST：近 7 天账单的刷新与折叠 ---------- */
+
+/** 记账成功后清掉全局搜索词，否则近 7 天会按旧关键词过滤，看起来像没刷新 */
+function clearSearchForNewRecord() {
+  const box = $("global-search");
+  if (!state.searchQuery && !(box && box.value)) {
+    return;
+  }
+  state.searchQuery = "";
+  if (box) {
+    box.value = "";
+  }
+}
+
+/** 强制重渲染近 7 天账单：手动 / AI / 截图记账成功后都会显式调一次 */
+function refreshRecentPanel() {
+  if ($("recent-groups")) {
+    renderRecentGroups();
+  }
+}
+
+const LS_RECENT_COLLAPSED = "ai-accounting-recent-collapsed";
+
+function readRecentCollapsed() {
+  try {
+    return localStorage.getItem(LS_RECENT_COLLAPSED) === "1";
+  } catch (error) {
+    return false;
+  }
+}
+
+/** 默认展开：只有用户手动收起来过才隐藏（折叠状态按浏览器记住，不跨设备） */
+function applyRecentCollapsed(collapsed) {
+  const box = $("recent-groups");
+  const button = $("recent-toggle");
+  if (box) {
+    box.hidden = collapsed;
+  }
+  if (button) {
+    button.textContent = collapsed ? "展开" : "收起";
+    button.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+}
+
+function toggleRecentPanel() {
+  const box = $("recent-groups");
+  if (!box) {
+    return;
+  }
+  const collapsed = !box.hidden;
+  applyRecentCollapsed(collapsed);
+  try {
+    localStorage.setItem(LS_RECENT_COLLAPSED, collapsed ? "1" : "0");
+  } catch (error) {
+    // 隐私模式写不进 localStorage 时只影响「记住状态」，本次折叠照常生效
+  }
+}
+
 /* ==================== 账单列表 ==================== */
 
-/** v0.09.2：金额语义色——收入绿、支出红、转账等资金流转深灰 */
+/** 旧版：金额语义色——收入绿、支出红、转账等资金流转深灰 */
 function amountCellHtml(record) {
   if (record.type === "income") {
     return '<span class="amt-income">+' + money(record.amount) + "</span>";
@@ -3693,7 +4126,7 @@ function timeOf(record) {
 }
 
 /**
- * v0.09.2：当时余额快照。
+ * 旧版：当时余额快照。
  * 账单没有存历史余额，这里从账户当前余额出发，按时间倒着把每笔的影响减回去，
  * 得到「这一笔记完之后」的余额。借贷没有账单行，跨过借贷日期时会有一点误差。
  */
@@ -4007,7 +4440,7 @@ function sentinelRowHtml(rendered, total) {
   );
 }
 
-/** v0.09.2：列表流的滚动哨兵（div 版） */
+/** 旧版：列表流的滚动哨兵（div 版） */
 function sentinelFeedHtml(rendered, total) {
   return (
     '<div class="feed-sentinel" id="scroll-sentinel">' + sentinelText(rendered, total) + "</div>"
@@ -4078,7 +4511,7 @@ function appendMoreRecords() {
     return;
   }
 
-  // v0.09.2：列表流按「月/日表头 + 明细」整段渲染，追加时整体重绘前缀保持一致
+  // 旧版：列表流按「月/日表头 + 明细」整段渲染，追加时整体重绘前缀保持一致
   state.renderedCount = Math.min(total, state.renderedCount + INFINITE_STEP);
   renderRecords();
   renderPager(total);
@@ -4177,7 +4610,7 @@ function renderAccountRecords() {
     return;
   }
 
-  // v0.09.2：月表头 → 日表头 → 流水行；右侧金额带当时余额快照
+  // 旧版：月表头 → 日表头 → 流水行；右侧金额带当时余额快照
   // v0.13.2：默认全展开（不读历史缓存），但点表头仍可收起 / 再展开，会话内保持
   const snapshots = balanceSnapshots(state.detailRecords);
   box.innerHTML = feedGroupsHtml(state.detailRecords, snapshots, {
@@ -5487,13 +5920,21 @@ async function saveRecord() {
         }
       }
       const created = await api("/api/records", jsonOptions("POST", payload));
-      // v0.13：手动记账成功也走右下角气泡，和 AI 记账保持同一套反馈
-      showRecordSuccessBubble(created, values);
+      // v0.14.0-TST：手动记账与 AI 气泡彻底解绑。
+      // 气泡里那个「哪里不对直接说，比如：改成微信」的输入框只属于「AI 快记」；
+      // 手动填表成功后只给一条普通 Toast，避免用户以为还得再跟 AI 对话一轮。
+      toast("记账成功", "success");
       // 新账目按时间倒序排在第一页，回到首页才看得见
       resetPaging();
+      void created;
     }
     closeRecordModal();
     await refresh();
+    // v0.14.0-TST：强制重渲染「近 7 天账单」。
+    // refresh() → renderDashboard() 里已经渲染过一次，这里再显式补一次并清空搜索词：
+    // 搜索框里有残留关键词时近 7 天会按关键词过滤，新记的账看起来像「没刷新」。
+    clearSearchForNewRecord();
+    refreshRecentPanel();
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -5579,8 +6020,11 @@ function confirmAction(options) {
 }
 
 /**
- * v0.13：手动记账成功气泡。复用 AI 的成功气泡样式，并直接挂上「哪里不对直接说」表单，
- * 让手感与 AI 记账完全一致。
+ * v0.13：记账成功气泡（含「哪里不对直接说」修订输入框）。
+ *
+ * v0.14.0-TST 起**手动记账不再调用本函数**：填表保存后只弹普通 Toast，
+ * 气泡与修订输入框只属于「AI 快记」。函数保留，供 AI 侧需要「保存后再修订」
+ * 的复合场景复用；任何手动入口都不要再接它。
  */
 function showRecordSuccessBubble(data, values) {
   const record = (data && data.record) || data || {};
@@ -6290,6 +6734,8 @@ function readTheme() {
 }
 
 function applyTheme(theme) {
+  // 任何显式套主题（初始化 / 设置页 / 顶栏按钮 / 系统主题变化）都清掉临时覆盖
+  themeTempOverride = false;
   const setting =
     theme === "dark" || theme === "light" || theme === "system"
       ? theme
@@ -6325,6 +6771,44 @@ function applyTheme(theme) {
 function toggleTheme() {
   const current = document.documentElement.getAttribute("data-theme") === "dark";
   applyTheme(current ? "light" : "dark");
+  // v0.14.1-FIX：主题切换只用专属文案，exclusive 确保不叠加任何记账类随机颜文字
+  toast("主题已切换并保存", "success", { exclusive: true });
+}
+
+/* ==================== v0.14.1：Shift + D 主题切换进阶逻辑 ====================
+ * 显式设置（light / dark）：走 applyTheme() 写 localStorage，持久保存、下次登录保持。
+ * 跟随系统（system）：只改当前页面的 data-theme，绝不写 localStorage、绝不改单选；
+ *   刷新或下次打开网页时 boot() 调 applyTheme(readTheme()) 自动恢复跟随系统。
+ * 注意：applyTheme() 内部会写盘，所以 system 分支必须绕开它，用 applyThemeTransient()。
+ */
+function applyThemeTransient(dark) {
+  document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+  const moon = document.querySelector(".icon-moon");
+  const sun = document.querySelector(".icon-sun");
+  if (moon) {
+    moon.classList.toggle("d-none", dark);
+  }
+  if (sun) {
+    sun.classList.toggle("d-none", !dark);
+  }
+  // 故意不调 syncThemeSetting()：设置值仍是「跟随系统」，单选按钮不能被改成浅/深色
+  if (pieChart || trendChart) {
+    renderCharts();
+  }
+}
+
+function toggleThemeAdvanced() {
+  const setting = readTheme();
+  const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+  if (setting === "system") {
+    themeTempOverride = true;
+    applyThemeTransient(!isDark);
+    toast("已临时切换主题：「跟随系统」设置保持不变，刷新后恢复", "success", { exclusive: true });
+    return;
+  }
+  // light / dark 是用户显式选的，切换后持久化，下次登录照旧
+  applyTheme(isDark ? "light" : "dark");
+  toast("主题已切换并保存，下次登录保持", "success", { exclusive: true });
 }
 
 /* ==================== 侧栏折叠 ==================== */
@@ -6334,13 +6818,23 @@ function readSidebarPref() {
   return saved === "collapsed" || saved === "expanded" ? saved : "";
 }
 
-/** 用户手动选过就听用户的；没选过则 <1200px 自动收成纯图标 */
+/** 用户手动选过就听用户的；没选过则 <1200px 自动收成纯图标
+ *  v0.14.0-TST：按钮改成纯图标，这里**不再**改文字与 Tooltip 文案
+ *  （HTML 也不再维护文字节点），只负责折叠状态与无障碍属性。
+ */
 function applySidebar() {
   const pref = readSidebarPref();
   const collapsed = pref ? pref === "collapsed" : window.innerWidth < 1200;
   const app = $("app");
   if (app) {
     app.classList.toggle("is-collapsed", collapsed);
+  }
+  /* 项目真实折叠态是 #app.is-collapsed。这里同步补两个兼容类名，
+   * 让 CSS 里 body.is-sidebar-collapsed / .sidebar.collapsed 选择器也命中。 */
+  document.body.classList.toggle("is-sidebar-collapsed", collapsed);
+  const sidebar = document.querySelector(".sidebar");
+  if (sidebar) {
+    sidebar.classList.toggle("collapsed", collapsed);
   }
   const button = $("sidebar-toggle");
   if (button) {
@@ -6634,7 +7128,7 @@ function saveBudget() {
   toast("本月预算已改为 " + money(state.budget), "success");
 }
 
-/* ==================== 右下角悬浮球（钢笔 + 三向菜单，v0.09.2） ==================== */
+/* ==================== 右下角悬浮球（钢笔 + 三向菜单，旧版） ==================== */
 
 let fabAutoTimer = null;
 // 鼠标离开悬浮球区域后，等这么久自动收回（v0.11：只有离开才开始计时）
@@ -6695,7 +7189,39 @@ function toggleFab() {
   }
 }
 
-/** 三个分支：普通记账 / AI 文本快记 / AI 截图识别（截图识别入口先占位） */
+/**
+ * v0.14.1：右下角问号悬浮球 / Alt + H 的统一入口。
+ * 打开「系统设置」弹窗 → 切到「帮助与反馈」Tab → scrollIntoView 平滑定位到「快捷键」区。
+ * 必须等 shown.bs.modal：弹窗入场动画期间 pane 还是 hidden，此时滚动拿不到正确位置
+ * （历史坑：Bootstrap 动画期间对弹窗的操作会被吞掉）。
+ */
+function openSettingsHelpTab() {
+  const modal = $("settings-modal");
+  if (!modal || !window.bootstrap) {
+    openHelpModal();
+    return;
+  }
+  const reveal = function () {
+    const tab = modal.querySelector('[data-settings-tab="help"]');
+    if (tab) {
+      // auth-v012.js 的 bindSettingsTabs() 已给所有 Tab 绑了 click，复用它切 pane
+      tab.click();
+    }
+    const block = $("help-block-shortcuts");
+    if (block) {
+      block.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+  if (modal.classList.contains("show")) {
+    reveal();
+  } else {
+    modal.addEventListener("shown.bs.modal", reveal, { once: true });
+    window.bootstrap.Modal.getOrCreateInstance(modal).show();
+  }
+  closeFab();
+}
+
+/** 四个分支：普通记账 / AI 文本快记 / 帮助与反馈 / AI 截图识别 */
 function handleFabAction(action) {
   // v0.11：点了功能菜单也保持展开，等鼠标移开悬浮球才开始 3 秒倒计时
   if (action === "record") {
@@ -6707,7 +7233,8 @@ function handleFabAction(action) {
     return;
   }
   if (action === "help") {
-    openHelpModal();
+    // v0.14.1：不再开独立的帮助弹窗，改为跳「系统设置 → 帮助与反馈 → 快捷键」
+    openSettingsHelpTab();
     return;
   }
   if (action === "shot") {
@@ -7068,8 +7595,12 @@ function isTypingTarget(target) {
   );
 }
 
+/* v0.14.1：数字键 1~5 与侧栏 data-page 的顺序严格一一对应 */
+const KEY_NAV_PAGES = ["home", "assets", "bills", "charts", "profile"];
+
 function onGlobalKeydown(event) {
   const key = String(event.key || "").toLowerCase();
+  const typing = isTypingTarget(event.target);
 
   // Ctrl / ⌘ + K：不管焦点在哪都跳到全局搜索
   if ((event.ctrlKey || event.metaKey) && key === "k") {
@@ -7090,7 +7621,37 @@ function onGlobalKeydown(event) {
     }
   }
 
-  if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target)) {
+  /* v0.14.1：Alt + A / Alt + H。必须放在下面那条 altKey 拦截之前，
+   * 但输入框聚焦时不抢键（用户正在打的字不能被吃掉）。 */
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !typing) {
+    if (key === "a") {
+      event.preventDefault();
+      openAiModal();
+      return;
+    }
+    if (key === "h") {
+      event.preventDefault();
+      openSettingsHelpTab();
+      return;
+    }
+  }
+
+  // 其它带修饰键的组合、以及输入框内的普通按键，一律不接管
+  if (event.ctrlKey || event.metaKey || event.altKey || typing) {
+    return;
+  }
+
+  /* v0.14.1：Shift + D 主题切换（浅 / 深持久保存；跟随系统只临时切本页） */
+  if (event.shiftKey && key === "d") {
+    event.preventDefault();
+    toggleThemeAdvanced();
+    return;
+  }
+
+  /* v0.14.1：1 ~ 5 快速切换主导航；弹窗开着时不切，避免焦点被抢 */
+  if (/^[1-5]$/.test(event.key) && !document.querySelector(".modal.show")) {
+    event.preventDefault();
+    switchPage(KEY_NAV_PAGES[Number(event.key) - 1]);
     return;
   }
 
@@ -7098,6 +7659,13 @@ function onGlobalKeydown(event) {
   if (key === "n" && !document.querySelector(".modal.show")) {
     event.preventDefault();
     openRecordModal();
+  }
+
+  /* v0.14.1：? 唤出快捷键提示弹窗。旧版在 12266 行另挂了一个监听，
+   * 已移除并统一收口到这里，否则一次按键会 show() 两次。 */
+  if (event.key === "?") {
+    event.preventDefault();
+    openHelpModal();
   }
 }
 
@@ -7391,6 +7959,9 @@ async function refresh() {
   renderDashboard();
   renderReimbCards();
   renderAssetsHero();
+  // v0.14.0-TST：所有记账入口（手动 / AI 文字 / AI 截图 / 云同步）最终都走 refresh()，
+  // 这里兜底再刷一次近 7 天，保证「刚记的账」一定出现在首页那一栏里。
+  refreshRecentPanel();
   if ($("page-bills") && $("page-bills").classList.contains("active")) {
     renderBillsPage();
   }
@@ -7641,6 +8212,8 @@ function renderIconSettings() {
   choice.innerHTML = '<option value="">默认图标</option>' + iconLib.map(function (icon) {
     return '<option value="' + icon.id + '">' + escapeHtml(icon.name) + (icon.is_system ? "（系统）" : "") + "</option>";
   }).join("");
+  // v0.14.0：默认把「当前对象已应用的图标」选上，预览面板才和左侧列表一致
+  syncIconChoiceToApplied();
   renderIconChoiceGrid();
   renderIconPreview();
 }
@@ -7658,6 +8231,13 @@ const ICON_FALLBACK_SVG =
   'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
   '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h4l1.6 2H17.5A2.5 2.5 0 0 1 20 9.5v7A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5z"/>' +
   '<path d="M9 13.5h6"/></svg>';
+
+// v0.14.0：图标实时预览槽的「系统默认」图形——和网格兜底图同一个 SVG，
+// 只把 class 换成 icon-preview-fallback，让 style.css 能单独控制尺寸 / 颜色。
+const ICON_PREVIEW_FALLBACK_SVG = ICON_FALLBACK_SVG.replace(
+  'class="icon-choice-fallback"',
+  'class="icon-preview-fallback"'
+);
 
 /** 一张图是否"等于没有"：加载失败（naturalWidth 0）或只有 1~2 px 的占位图 */
 function isDegenerateIcon(img) {
@@ -7714,9 +8294,10 @@ function renderIconChoiceGrid() {
     return;
   }
   const current = choice.value;
+  // v0.14.1：「系统默认」格不再塞纯文字「默认」，直接渲染真实占位 SVG
   const tiles = ['<button type="button" class="icon-choice-tile' + (current === "" ? " is-active" : "") +
     '" data-icon-id="" role="option" aria-selected="' + (current === "" ? "true" : "false") + '">' +
-    '<span class="icon-choice-thumb is-default"><span class="icon-choice-default">默认</span></span>' +
+    '<span class="icon-choice-thumb is-empty is-default">' + ICON_FALLBACK_SVG + '</span>' +
     '<span class="icon-choice-label">系统默认</span></button>'];
   iconLib.forEach(function (icon) {
     const active = String(current) === String(icon.id);
@@ -7733,17 +8314,104 @@ function renderIconChoiceGrid() {
   Array.prototype.forEach.call(grid.querySelectorAll(".icon-choice-thumb img"), guardIconImage);
 }
 
+// v0.14.0：图标库里按 id 找 path / 名称（实时预览用）
+function iconById(iconId) {
+  if (iconId === "" || iconId === null || iconId === undefined) {
+    return null;
+  }
+  for (let i = 0; i < iconLib.length; i += 1) {
+    if (String(iconLib[i].id) === String(iconId)) {
+      return iconLib[i];
+    }
+  }
+  return null;
+}
+
+/** v0.14.0：把预览槽填成「该图标实际长相」；空值渲染真实的系统默认 SVG，而不是「默认」两个字 */
+function fillIconPreviewSlot(slot, path) {
+  if (!slot) {
+    return;
+  }
+  if (!path) {
+    // 修复：原来只塞文字「默认」，预览区看起来像坏了；现在直接显示真实默认图形
+    slot.innerHTML = ICON_PREVIEW_FALLBACK_SVG;
+    return;
+  }
+  slot.innerHTML = '<img src="' + escapeHtml(path) + '" alt="">';
+  const img = slot.querySelector("img");
+  guardIconImage(img);
+  if (!img) {
+    return;
+  }
+  // 保留 guardIconImage 的退化判定：裂图 / 1×1 占位图时预览槽直接换成默认图形，
+  // 避免预览区只剩一块空白（原实现依赖 .icon-choice-thumb 的 CSS，预览槽不生效）
+  const fallbackIfDegenerate = function () {
+    if (img.classList.contains("is-degenerate")) {
+      slot.innerHTML = ICON_PREVIEW_FALLBACK_SVG;
+    }
+  };
+  if (img.complete) {
+    fallbackIfDegenerate();
+    return;
+  }
+  img.addEventListener("load", fallbackIfDegenerate, { once: true });
+  img.addEventListener("error", fallbackIfDegenerate, { once: true });
+}
+
+/** 选中对象变化时，把「已应用图标」同步到 #icon-choice，避免预览还是上一个对象的图标 */
+function syncIconChoiceToApplied() {
+  const kindSelect = $("icon-kind");
+  const targetSelect = $("icon-target");
+  const choice = $("icon-choice");
+  if (!kindSelect || !targetSelect || !choice) {
+    return;
+  }
+  const applied = iconFor(kindSelect.value, targetSelect.value);
+  choice.value = applied && applied.icon_id !== null && applied.icon_id !== undefined ? String(applied.icon_id) : "";
+}
+
 function renderIconPreview() {
+  const kindSelect = $("icon-kind");
+  const targetSelect = $("icon-target");
+  const choice = $("icon-choice");
+  const kind = kindSelect ? kindSelect.value : "category";
+  const name = targetSelect ? targetSelect.value : "";
+  const choiceId = choice ? choice.value : "";
+  // v0.14.0：以「当前选中的图标」为准做实时预览（点左侧网格立刻看到两个尺寸的实际效果）
+  const selected = iconById(choiceId);
+  const path = selected && selected.path ? selected.path : "";
+  fillIconPreviewSlot($("icon-preview-list"), path);
+  fillIconPreviewSlot($("icon-preview-large"), path);
+  fillIconPreviewSlot($("icon-preview-sample-icon"), path);
+  /* v0.14.1 硬断言：点左侧任一图标后，右侧三个预览槽必须真的含 <img> 或 <svg>。
+   * 历史 Bug 是槽里塞了纯文字「默认」，看起来就像预览坏了 —— 这里兜底补真实 SVG。 */
+  ["icon-preview-list", "icon-preview-large", "icon-preview-sample-icon"].forEach(function (id) {
+    const slot = $(id);
+    if (slot && !slot.querySelector("img, svg")) {
+      slot.innerHTML = ICON_PREVIEW_FALLBACK_SVG;
+    }
+  });
+  const sampleText = $("icon-preview-sample-text");
+  if (sampleText) {
+    sampleText.textContent = name || (kind === "account" ? "示例账户" : "示例分类");
+  }
+  const hint = $("icon-preview-hint");
+  if (hint) {
+    if (selected) {
+      hint.textContent = "已选中「" + (selected.name || "自定义") + "」图标，点「应用图标」保存到列表";
+    } else {
+      hint.textContent = "当前为系统默认图标，点左侧任一图标即可预览实际效果";
+    }
+  }
+  // 下面保留「当前已应用」的说明，和预览面板互不冲突
   const box = $("icon-preview");
   if (!box) {
     return;
   }
-  const kind = $("icon-kind").value;
-  const name = $("icon-target").value;
-  const icon = iconFor(kind, name);
-  if (icon && icon.path) {
+  const applied = iconFor(kind, name);
+  if (applied && applied.path) {
     box.innerHTML =
-      '<span class="icon-preview-thumb"><img src="' + escapeHtml(icon.path) + '" alt="">' +
+      '<span class="icon-preview-thumb"><img src="' + escapeHtml(applied.path) + '" alt="">' +
       ICON_FALLBACK_SVG +
       "</span><span>" + escapeHtml(name) + " 正在使用自定义图标</span>";
     guardIconImage(box.querySelector("img"));
@@ -7835,6 +8503,7 @@ function bindIconSettings() {
   }
   $("icon-kind").addEventListener("change", renderIconSettings);
   $("icon-target").addEventListener("change", function () {
+    syncIconChoiceToApplied();
     renderIconChoiceGrid();
     renderIconPreview();
   });
@@ -8216,6 +8885,10 @@ function bindEvents() {
   if ($("recent-groups")) {
     $("recent-groups").addEventListener("click", onRecentClick);
   }
+  // v0.14.0-TST：近 7 天折叠开关
+  if ($("recent-toggle")) {
+    $("recent-toggle").addEventListener("click", toggleRecentPanel);
+  }
 
   // 详情弹窗底部两个幽灵按钮
   if ($("detail-edit-btn")) {
@@ -8273,6 +8946,14 @@ function bindEvents() {
     if (del) {
       event.stopPropagation();
       removeAccount(del.getAttribute("data-del-account"));
+      return;
+    }
+    // v0.14.0-TST：快捷改余额（¥ 图标），必须在行点击之前拦下，否则会切账户
+    const adjustBtn = event.target.closest("[data-adjust-balance]");
+    if (adjustBtn) {
+      event.stopPropagation();
+      event.preventDefault();
+      openBalanceAdjustModal(adjustBtn.getAttribute("data-adjust-balance"));
       return;
     }
     const editBtn = event.target.closest("[data-edit-account]");
@@ -8358,6 +9039,32 @@ function bindEvents() {
       saveAccountEdit(form);
     }
   });
+
+  // v0.14.0-TST：大卡片右上角快捷改余额 + 弹窗确认 / 回车提交
+  if ($("account-balance-adjust")) {
+    $("account-balance-adjust").addEventListener("click", function (event) {
+      event.stopPropagation();
+      if (state.detailAccount) {
+        openBalanceAdjustModal(state.detailAccount);
+      } else {
+        toast("先点一个账户", "error");
+      }
+    });
+  }
+  if ($("balance-adjust-confirm")) {
+    $("balance-adjust-confirm").addEventListener("click", submitBalanceAdjust);
+  }
+  if ($("balance-adjust-modal")) {
+    $("balance-adjust-modal").addEventListener("keydown", function (event) {
+      if (event.key === "Enter" && event.target && event.target.tagName === "INPUT") {
+        event.preventDefault();
+        submitBalanceAdjust();
+      }
+    });
+    $("balance-adjust-modal").addEventListener("hidden.bs.modal", function () {
+      balanceAdjustTarget = "";
+    });
+  }
 
   // 快捷记账
   $("quick-add-btn").addEventListener("click", function () {
@@ -8515,6 +9222,12 @@ function bindEvents() {
   if ($("settings-modal")) {
     $("settings-modal").addEventListener("shown.bs.modal", function () {
       renderIconSettings();
+      // v0.14.0：帮助内容首屏没拉到（或后台刚改过）时补拉一次；已有则直接重绘
+      if (!state.help) {
+        loadHelpContent();
+      } else {
+        renderHelpContent();
+      }
       // v0.13.6：品牌图标主题网格（4×2）+ 当前选中态
       if (window.ZHAccountBrandLogo) {
         window.ZHAccountBrandLogo.buildGrid();
@@ -8573,7 +9286,7 @@ function bindEvents() {
     true
   );
 
-  // 通讯录：v0.09 起按钮走 data-bs-toggle 打开弹窗，内容在 #contacts-modal 内
+  // 通讯录：旧版 起按钮走 data-bs-toggle 打开弹窗，内容在 #contacts-modal 内
   const addContact = $("add-contact-btn");
   if (addContact) {
     addContact.addEventListener("click", function () {
@@ -8834,7 +9547,7 @@ function onAiImagePicked(event) {
   }
 })();
 
-/* ==================== 报销（v0.09） ==================== */
+/* ==================== 报销（旧版） ==================== */
 
 /** 资产页顶部汇总：待报销 = 应报未报，已报销 = 已经收回的；优先用统计接口，不受账户筛选影响 */
 function renderReimbCards() {
@@ -8873,7 +9586,7 @@ async function loadReimbSummary() {
   }
 }
 
-/* ==================== 资产页：净资产 / 借入借出（v0.09.1） ==================== */
+/* ==================== 资产页：净资产 / 借入借出（旧版） ==================== */
 
 /** 未结清借贷汇总：borrow=我欠别人的，lend=别人欠我的 */
 async function loadDebtSummary() {
@@ -8906,7 +9619,22 @@ function assetMoney(value) {
   return state.amountHidden ? "¥••••" : money(value);
 }
 
-/** 净资产卡背景图本地缓存键（v0.09.2 本地存储；TODO 云端：后续接账号体系后把同一 dataURL 上传对象存储并随用户同步） */
+/**
+ * v0.14.0-TST：账户对外可见总额 = 可用资金 + 持仓市值。
+ * 后端 /api/accounts 已下发 market_value / total；这里再兜一层，
+ * 兼容「老接口没有这两个字段」和「前端本地改过 balance 但没重拉」的情况，
+ * 否则投资账户的持仓市值在总资产里会被漏算。
+ */
+function accountTotalValue(account) {
+  if (!account) {
+    return 0;
+  }
+  const balance = Number(account.balance || 0);
+  const market = Number(account.market_value || 0);
+  return Math.round((balance + market) * 100) / 100;
+}
+
+/** 净资产卡背景图本地缓存键（旧版 本地存储；TODO 云端：后续接账号体系后把同一 dataURL 上传对象存储并随用户同步） */
 const HERO_BG_KEY = "dsh.assetsHeroBg";
 
 function applyHeroBg() {
@@ -8988,16 +9716,18 @@ function updateEyeButton() {
   btn.setAttribute("title", state.amountHidden ? "显示金额" : "隐藏金额");
 }
 
-/** 顶部净资产卡：总资产=正余额账户+待收借出；总负债=负余额账户+待还借入 */
+/** 顶部净资产卡：总资产=正余额账户+待收借出；总负债=负余额账户+待还借入
+ *  v0.14.0-TST：账户按「可用资金 + 持仓市值」计入，否则投资账户的钱等于没算进总资产。
+ */
 function renderAssetsHero() {
   let assets = 0;
   let liabilities = 0;
   (state.accounts || []).forEach(function (account) {
-    const balance = Number(account.balance || 0);
-    if (balance >= 0) {
-      assets += balance;
+    const total = accountTotalValue(account);
+    if (total >= 0) {
+      assets += total;
     } else {
-      liabilities += -balance;
+      liabilities += -total;
     }
   });
   const borrow = state.debtSummary ? state.debtSummary.borrow : 0;
@@ -9022,7 +9752,7 @@ function renderAssetsHero() {
   applyHeroBg();
 }
 
-/* ==================== 资产统计明细弹窗（v0.09.2） ==================== */
+/* ==================== 资产统计明细弹窗（旧版） ==================== */
 
 const STAT_DETAIL_TITLES = {
   borrow: "借入明细",
@@ -9506,7 +10236,7 @@ async function openStatDetail(kind) {
   statDetailModal.show();
 }
 
-/* ==================== 回收站（v0.09.1） ==================== */
+/* ==================== 回收站（旧版） ==================== */
 
 let trashModal = null;
 let budgetModal = null;
@@ -10012,6 +10742,13 @@ async function init() {
     }
   }
 
+  // v0.14.0：先把后台「提示文案管理」里启用的颜文字文案拉下来，toast() 优先用它；
+  // 接口不可用/为空时 toast() 自动回退内置池，不阻塞页面初始化。
+  loadToastTips();
+
+  // v0.14.0：帮助内容后台可配，进页面先拉一次（失败静默回退兜底文案，不阻塞看板）
+  loadHelpContent();
+
   // 主题 / 侧栏 / 预算 / 每页条数都从 localStorage 恢复，刷新页面不闪
   applyTheme(readTheme());
   state.budget = readBudget();
@@ -10021,11 +10758,18 @@ async function init() {
     $("page-size").value = String(state.pageSize);
   }
   applySidebar();
+  // v0.14.0-TST：近 7 天默认展开，只有用户上次手动收起来过才保持折叠
+  applyRecentCollapsed(readRecentCollapsed());
 
   bindEvents();
   bindCategoryPicker();
   bindDebtModalButtons();
   bindIconSettings();
+  // v0.14.0：帮助与反馈（设置弹窗第三个 Tab）的交互绑定
+  bindHelpUi();
+  bindFeedbackForm();
+  // v0.14.0-FIX：意见反馈改为磨砂 Modal，独立打开/关闭
+  bindFeedbackModal();
   initV0116Ui();
   initTooltips();
   initDateFields();
@@ -12016,17 +12760,8 @@ function bindV010Events() {
   }
   window.addEventListener("blur", pauseBubbleCountdowns);
 
-  // 帮助弹窗：FAB 里已由 handleFabAction 分支打开；这里再兜一层 ? 快捷键
-  document.addEventListener("keydown", function (event) {
-    if (event.key !== "?") {
-      return;
-    }
-    if (typeof isTypingTarget === "function" && isTypingTarget(event.target)) {
-      return;
-    }
-    event.preventDefault();
-    openHelpModal();
-  });
+  // v0.14.1：「?」快捷键已统一收口到 onGlobalKeydown()，这里不再重复监听，
+  // 否则一次按键会触发两次 openHelpModal()（Bootstrap 弹窗会叠出第二个框）。
 }
 
 /* v0.10 收尾自检：确认新函数都挂到了全局，便于控制台排查 */
@@ -12036,3 +12771,476 @@ window.__v010 = {
   runAiStream: runAiStream,
   aiQuickCommand: aiQuickCommand,
 };
+
+/* ==================== v0.14.0：设置弹窗「帮助与反馈」 ==================== */
+
+// 反馈截图 dataURL（>2MB 直接拒绝）；提交锁 = 请求进行中 + 提交后 10 秒冷却
+let feedbackImageData = "";
+let feedbackSubmitting = false;
+let feedbackLockUntil = 0;
+let feedbackTimer = null;
+const FEEDBACK_LOCK_MS = 10000;
+const FEEDBACK_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+/** 反馈提交用的当前用户：state.user → auth-v012 本地会话 → /api/auth/me 兜底 */
+async function resolveFeedbackUser() {
+  if (state.user && ((state.user.id !== undefined && state.user.id !== null) || state.user.email)) {
+    return state.user;
+  }
+  if (window.dshAuth && typeof window.dshAuth.user === "function") {
+    const cached = window.dshAuth.user();
+    if (cached && (cached.id !== undefined || cached.email)) {
+      state.user = cached;
+      return cached;
+    }
+  }
+  try {
+    const data = await api("/api/auth/me");
+    if (data && data.user) {
+      state.user = data.user;
+      return data.user;
+    }
+  } catch (error) {
+    // 兜底失败不打断反馈：email/nickname/uid 传空，后端会按当前登录用户补
+  }
+  return state.user || {};
+}
+
+// 帮助内容拉取中标记：避免设置弹窗连点 / init 与 shown 事件并发重复请求
+let helpLoading = false;
+
+/** 拉一次帮助内容；失败静默（FAQ 显示兜底文案），下次打开设置弹窗再试 */
+function loadHelpContent() {
+  if (helpLoading) {
+    return;
+  }
+  helpLoading = true;
+  api("/api/help")
+    .then(function (data) {
+      if (data && data.help && typeof data.help === "object") {
+        state.help = data.help;
+      }
+      renderHelpContent();
+    })
+    .catch(function () {
+      // 失败静默：不弹 toast 打扰用户，列表区显示兜底文案
+      renderHelpContent();
+    })
+    .then(function () {
+      helpLoading = false;
+    });
+}
+
+/** 渲染帮助页：FAQ（问题加粗 + 答案）、快捷键 kbd、联系方式浮层、反馈 placeholder */
+function renderHelpContent() {
+  const help = state.help || {};
+  const faqList = $("help-faq-list");
+  if (faqList) {
+    const faq = Array.isArray(help.faq) ? help.faq : [];
+    faqList.innerHTML = faq.length
+      ? faq
+          .map(function (item) {
+            return (
+              '<div class="help-faq-item">' +
+              '<p class="help-faq-q">' + escapeHtml(item && item.q) + "</p>" +
+              '<p class="help-faq-a">' + escapeHtml(item && item.a) + "</p></div>"
+            );
+          })
+          .join("")
+      : '<p class="help-empty">暂时无法加载帮助内容，请稍后再试</p>';
+  }
+  // v0.14.1：FAQ 渲染完立刻同步「查看更多 ∨」按钮的可见性与文案
+  syncFaqMoreButton();
+
+  const shortcutList = $("help-shortcut-list");
+  if (shortcutList) {
+    const shortcuts = Array.isArray(help.shortcuts) ? help.shortcuts : [];
+    // v0.14.0-FIX：标题已由静态结构（第 4 个 .help-block h4）承担，这里不再插 h5
+    shortcutList.innerHTML = shortcuts.length
+      ? shortcuts
+          .map(function (item) {
+            return (
+              '<div class="help-shortcut-row"><kbd>' + escapeHtml(item && item.keys) +
+              "</kbd><span>" + escapeHtml(item && item.desc) + "</span></div>"
+            );
+          })
+          .join("")
+      : "";
+  }
+
+  const contactPop = $("help-contact-pop");
+  if (contactPop) {
+    const contact = Array.isArray(help.contact) ? help.contact : [];
+    contactPop.innerHTML = contact.length
+      ? contact
+          .map(function (item) {
+            return (
+              '<div class="help-contact-row"><span class="help-contact-label">' +
+              escapeHtml(item && item.label) + '</span><span class="help-contact-value">' +
+              escapeHtml(item && item.value) + "</span></div>"
+            );
+          })
+          .join("")
+      : '<p class="help-empty">暂时无法加载联系方式，请稍后再试</p>';
+  }
+
+  // 反馈输入框 placeholder 由后台配置覆盖（为空则保留 index.html 里的默认文案）
+  const issueInput = $("feedback-issue");
+  if (issueInput && help.feedback_placeholder) {
+    issueInput.placeholder = String(help.feedback_placeholder);
+  }
+}
+
+/* v0.14.1：FAQ 默认只显示前 3 条（藏在 style.css 的 nth-child(n+4) 规则里），
+ * 其余由底部「查看更多 ∨」控制展开 / 收起；≤3 条时按钮整个隐藏。 */
+function syncFaqMoreButton() {
+  const list = $("help-faq-list");
+  const button = $("help-faq-more");
+  if (!list || !button) {
+    return;
+  }
+  const count = list.querySelectorAll(".help-faq-item").length;
+  if (count <= 3) {
+    list.classList.remove("is-expanded");
+    button.classList.remove("is-expanded");
+    button.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    return;
+  }
+  button.hidden = false;
+  const expanded = list.classList.contains("is-expanded");
+  const label = $("help-faq-more-label");
+  if (label) {
+    label.textContent = expanded ? "收起" : "查看更多";
+  }
+  const arrow = button.querySelector(".help-faq-more-arrow");
+  if (arrow) {
+    arrow.textContent = expanded ? "∧" : "∨";
+  }
+  button.classList.toggle("is-expanded", expanded);
+  button.setAttribute("aria-expanded", expanded ? "true" : "false");
+}
+
+function bindFaqMore() {
+  const list = $("help-faq-list");
+  const button = $("help-faq-more");
+  if (!list || !button) {
+    return;
+  }
+  button.addEventListener("click", function () {
+    list.classList.toggle("is-expanded");
+    syncFaqMoreButton();
+  });
+  syncFaqMoreButton();
+}
+
+/** 「联系我们」按钮：点击 toggle 联系方式浮层，同步 aria-expanded */
+function bindHelpUi() {
+  bindFaqMore();
+  const button = $("help-contact-btn");
+  const pop = $("help-contact-pop");
+  if (!button || !pop) {
+    return;
+  }
+  button.addEventListener("click", function () {
+    const willOpen = pop.hidden;
+    pop.hidden = !willOpen;
+    button.setAttribute("aria-expanded", willOpen ? "true" : "false");
+  });
+}
+
+/** 页面内反馈状态条：失败红字、成功绿字（严禁 alert） */
+function feedbackStatus(message, kind) {
+  const box = $("feedback-status");
+  if (!box) {
+    return;
+  }
+  const text = String(message || "").trim();
+  box.textContent = text;
+  box.hidden = !text;
+  box.classList.toggle("is-ok", !!text && kind === "success");
+  box.classList.toggle("is-error", !!text && kind === "error");
+}
+
+/** 清空截图选择 / dataURL / 90×90 预览 */
+function clearFeedbackImage() {
+  feedbackImageData = "";
+  const input = $("feedback-image");
+  if (input) {
+    input.value = "";
+  }
+  const preview = $("feedback-image-preview");
+  if (preview) {
+    preview.innerHTML = "";
+    preview.hidden = true;
+  }
+}
+
+/** 90×90 截图预览：DOM 方式挂 src（2MB dataURL 不经过字符串转义，避免卡顿） */
+function renderFeedbackImagePreview() {
+  const preview = $("feedback-image-preview");
+  if (!preview || !feedbackImageData) {
+    clearFeedbackImage();
+    return;
+  }
+  preview.hidden = false;
+  preview.innerHTML = "";
+  const thumb = document.createElement("span");
+  thumb.className = "feedback-image-thumb";
+  const img = document.createElement("img");
+  img.src = feedbackImageData;
+  img.alt = "反馈截图预览";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "feedback-image-remove";
+  remove.setAttribute("aria-label", "删除截图");
+  remove.textContent = "×";
+  remove.addEventListener("click", clearFeedbackImage);
+  thumb.appendChild(img);
+  thumb.appendChild(remove);
+  preview.appendChild(thumb);
+}
+
+/** 截图选择：FileReader 读 dataURL，超过 2MB 提示并清空 */
+function bindFeedbackImage() {
+  const input = $("feedback-image");
+  if (!input) {
+    return;
+  }
+  input.addEventListener("change", function () {
+    const file = input.files && input.files[0];
+    if (!file) {
+      return;
+    }
+    if (file.size > FEEDBACK_IMAGE_MAX_BYTES) {
+      feedbackStatus("截图太大，请压到 2MB 以内", "error");
+      clearFeedbackImage();
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function () {
+      feedbackImageData = String(reader.result || "");
+      renderFeedbackImagePreview();
+    };
+    reader.onerror = function () {
+      feedbackStatus("截图读取失败，请换一张试试", "error");
+      clearFeedbackImage();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+/** 按钮状态机：请求中 / 10 秒冷却中都 disabled；冷却中显示「重新发送(Ns)」 */
+function syncFeedbackSubmitButton() {
+  const button = $("feedback-submit");
+  if (!button) {
+    return;
+  }
+  const remain = Math.max(0, Math.ceil((feedbackLockUntil - Date.now()) / 1000));
+  button.disabled = remain > 0 || feedbackSubmitting;
+  if (remain > 0) {
+    button.textContent = "重新发送(" + remain + "s)";
+  } else if (feedbackSubmitting) {
+    button.textContent = "提交中…";
+  } else {
+    button.textContent = "提交反馈";
+  }
+}
+
+/** 提交后立刻禁用按钮并开始 10 秒倒计时（10s → 1s，结束后恢复「提交反馈」） */
+function startFeedbackCooldown() {
+  feedbackLockUntil = Date.now() + FEEDBACK_LOCK_MS;
+  syncFeedbackSubmitButton();
+  if (feedbackTimer) {
+    window.clearInterval(feedbackTimer);
+  }
+  feedbackTimer = window.setInterval(function () {
+    syncFeedbackSubmitButton();
+    if (Date.now() >= feedbackLockUntil && !feedbackSubmitting) {
+      window.clearInterval(feedbackTimer);
+      feedbackTimer = null;
+    }
+  }, 1000);
+}
+
+/** 重置反馈表单（含截图预览与文件选择） */
+function resetFeedbackForm() {
+  const form = $("feedback-form");
+  if (form) {
+    form.reset();
+  }
+  clearFeedbackImage();
+}
+
+/** 提交反馈：页面内校验 + 10 秒真防刷 + 自动带 email/uid/nickname */
+async function submitFeedback(event) {
+  if (event) {
+    event.preventDefault();
+  }
+  // 10 秒冷却内（含请求进行中）一律直接 return：重复点击 / 回车都不会发第二次请求
+  if (feedbackSubmitting || Date.now() < feedbackLockUntil) {
+    return;
+  }
+  const issueInput = $("feedback-issue");
+  const issue = issueInput ? String(issueInput.value || "").trim() : "";
+  if (!issue) {
+    feedbackStatus("请先填写问题描述", "error");
+    if (issueInput) {
+      issueInput.focus();
+    }
+    return;
+  }
+  feedbackSubmitting = true;
+  feedbackStatus("正在提交反馈，请稍候…", "");
+  startFeedbackCooldown();
+  try {
+    const user = await resolveFeedbackUser();
+    const dateInput = $("feedback-date");
+    const contactType = $("feedback-contact-type");
+    const contactInfo = $("feedback-contact-info");
+    const payload = {
+      issue_description: issue,
+      occur_date: dateInput ? dateInput.value || "" : "",
+      image: feedbackImageData || "",
+      contact_type: contactType ? contactType.value || "" : "",
+      contact_info: contactInfo ? String(contactInfo.value || "").trim() : "",
+      email: (user && user.email) || "",
+      nickname: (user && user.nickname) || "",
+      uid: user && user.id !== undefined && user.id !== null ? user.id : "",
+    };
+    // v0.14.0：用户反馈走独立接口（老的 /api/feedback 是 v0.10 AI 反馈，body.raw_text，不能复用）
+    await api("/api/user-feedback", jsonOptions("POST", payload));
+    resetFeedbackForm();
+    toast("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
+    feedbackStatus("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
+  } catch (error) {
+    feedbackStatus((error && error.message) || "提交失败，请稍后再试", "error");
+  } finally {
+    feedbackSubmitting = false;
+    syncFeedbackSubmitButton();
+    if (Date.now() >= feedbackLockUntil && feedbackTimer) {
+      window.clearInterval(feedbackTimer);
+      feedbackTimer = null;
+    }
+  }
+}
+
+/** 绑定反馈表单（init 调用一次；帮助页没渲染时安全跳过） */
+function bindFeedbackForm() {
+  const form = $("feedback-form");
+  if (!form) {
+    return;
+  }
+  bindFeedbackImage();
+  form.addEventListener("submit", submitFeedback);
+}
+
+/* =====================================================================
+ * v0.14.0-FIX：意见反馈磨砂 Modal（复用全局 .app-modal 组件，页面内不嵌套 Bootstrap Modal）
+ * 打开：帮助页「意见反馈」大按钮（[data-feedback-open]）
+ * 关闭：× / 取消 / 点遮罩 / Esc（捕获阶段拦下，避免连带关闭底层「系统设置」弹窗）
+ * ===================================================================== */
+let feedbackModalLastFocus = null;
+
+function openFeedbackModal() {
+  const modal = $("feedback-modal");
+  if (!modal) {
+    return;
+  }
+  feedbackModalLastFocus = document.activeElement;
+  // 日期默认今天，用户可改；已有值（例如提交失败后重开）则保留
+  const dateInput = $("feedback-date");
+  if (dateInput && !dateInput.value) {
+    const now = new Date();
+    const pad = function (n) {
+      return String(n).padStart(2, "0");
+    };
+    dateInput.value =
+      now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+  }
+  modal.hidden = false;
+  // 强制一次重排，保证每次打开都重新播放淡入位移动画
+  void modal.offsetWidth;
+  modal.classList.add("is-open");
+  document.body.classList.add("feedback-modal-open");
+  const issueInput = $("feedback-issue");
+  if (issueInput) {
+    window.setTimeout(function () {
+      try {
+        issueInput.focus({ preventScroll: true });
+      } catch (error) {
+        issueInput.focus();
+      }
+    }, 60);
+  }
+}
+
+function closeFeedbackModal() {
+  const modal = $("feedback-modal");
+  if (!modal || modal.hidden) {
+    return;
+  }
+  modal.classList.remove("is-open");
+  modal.hidden = true;
+  document.body.classList.remove("feedback-modal-open");
+  if (feedbackModalLastFocus && typeof feedbackModalLastFocus.focus === "function") {
+    try {
+      feedbackModalLastFocus.focus({ preventScroll: true });
+    } catch (error) {
+      feedbackModalLastFocus.focus();
+    }
+  }
+  feedbackModalLastFocus = null;
+}
+
+function bindFeedbackModal() {
+  const modal = $("feedback-modal");
+  if (!modal) {
+    return;
+  }
+  document.querySelectorAll("[data-feedback-open]").forEach(function (button) {
+    button.addEventListener("click", openFeedbackModal);
+  });
+  // 事件委托：× / 取消 / 遮罩都带 data-feedback-close
+  modal.addEventListener("click", function (event) {
+    if (event.target.closest("[data-feedback-close]")) {
+      event.preventDefault();
+      closeFeedbackModal();
+    }
+  });
+  // 捕获阶段拦 Esc：只关最上层反馈弹窗，不触发底层设置弹窗的关闭
+  document.addEventListener(
+    "keydown",
+    function (event) {
+      if (event.key !== "Escape" || modal.hidden) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      closeFeedbackModal();
+    },
+    true
+  );
+  // 焦点圈定：Tab / Shift+Tab 在弹窗内循环，不跑到背后的设置页
+  modal.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") {
+      return;
+    }
+    const focusables = modal.querySelectorAll(
+      'button:not([disabled]), [href], input:not([type="hidden"]):not([disabled]), ' +
+        'select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    if (!focusables.length) {
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+}

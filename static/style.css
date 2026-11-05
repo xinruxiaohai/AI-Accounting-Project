@@ -1185,7 +1185,7 @@ body {
   color: var(--text-muted);
 }
 
-/* ==================== v0.06：Toast 轻提示 ==================== */
+/* ==================== v0.06：Toast 轻提示（v0.14.0：深色磨砂 + 颜文字） ==================== */
 .toast-stack {
   position: fixed;
   top: 18px;
@@ -1200,15 +1200,25 @@ body {
 }
 
 .toast-item {
-  min-width: 220px;
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 240px;
   max-width: 460px;
-  padding: 10px 18px;
-  border-radius: 8px;
-  color: #ffffff;
+  padding: 11px 16px 11px 18px;
+  border-radius: 12px;
+  color: #f8fafc;
   font-size: 13px;
-  line-height: 1.5;
-  text-align: center;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+  line-height: 1.55;
+  text-align: left;
+  overflow: hidden;
+  /* 需求：深色磨砂半透明，取代原来整块纯绿 / 纯红 */
+  background: rgba(19, 28, 43, 0.85);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.42);
   opacity: 0;
   transform: translateY(-16px);
   transition: opacity 0.22s ease, transform 0.22s ease;
@@ -1219,17 +1229,73 @@ body {
   transform: translateY(0);
 }
 
-.toast-success {
-  background: #16a34a;
+/* 状态色只做「左侧细色条 + 图标」强调，文字保持高对比度 */
+.toast-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
 }
 
-.toast-error {
-  background: #dc2626;
+.toast-success::before { background: #34d399; }
+.toast-error::before { background: #f87171; }
+.toast-info::before { background: #60a5fa; }
+.toast-warn::before { background: #fbbf24; }
+
+/* 左侧状态小图标（内联 SVG，继承 currentColor） */
+.toast-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+}
+.toast-success .toast-icon { color: #34d399; }
+.toast-error .toast-icon { color: #f87171; }
+.toast-info .toast-icon { color: #60a5fa; }
+.toast-warn .toast-icon { color: #fbbf24; }
+
+.toast-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.toast-body p {
+  margin: 0;
 }
 
-/* v0.11.4：提醒类提示（取消记账、请核对）用黄色，别和成功/失败混淆 */
-.toast-warn {
-  background: #d97706;
+/* 颜文字主行 / 原始 message 副行 */
+.toast-copy {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+  word-break: break-word;
+}
+.toast-text {
+  font-size: 12px;
+  color: #cbd5e1;
+  word-break: break-word;
+}
+
+/* 错误 / 提醒类：原始 message 是主行（错误原因不能被颜文字盖住），配色提亮 */
+.toast-item.toast-error .toast-text,
+.toast-item.toast-warn .toast-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f8fafc;
+}
+.toast-item.toast-error .toast-copy,
+.toast-item.toast-warn .toast-copy {
+  font-size: 12px;
+  font-weight: 400;
+  color: #cbd5e1;
 }
 
 /* ==================== v0.06：公式实时结果 ==================== */
@@ -3770,7 +3836,7 @@ body {
   font-size: 13px;
 }
 
-/* ---------- v0.09 报销 ---------- */
+/* ---------- 旧版 报销 ---------- */
 .reimb-cards {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3933,7 +3999,7 @@ body {
   }
 }
 
-/* ==================== v0.09 Step 1：我的页卡片统一 + 通讯录弹窗 ==================== */.profile-grid {
+/* ==================== 旧版 Step 1：我的页卡片统一 + 通讯录弹窗 ==================== */.profile-grid {
   /* 四张卡片同高同宽：两列两行，行高由最高的导出卡决定 */
   grid-auto-rows: 1fr;
   align-items: stretch;
@@ -3991,7 +4057,7 @@ body {
   }
 }
 
-/* ==================== v0.09.1：侧栏锁宽 / 日历等分 / 资产页重构 / 回收站与预算弹窗 ==================== */
+/* ==================== 旧版：侧栏锁宽 / 日历等分 / 资产页重构 / 回收站与预算弹窗 ==================== */
 
 /* ---- 1. 侧栏：硬锁 176px，文字不截断也不撑宽 ---- */
 .sidebar {
@@ -4318,7 +4384,7 @@ body {
   }
 }
 
-/* v0.09.1 补丁：资产页左右分块（左 4 成账户 / 右 6 成流水），<1024px 上下堆叠 */
+/* 旧版 补丁：资产页左右分块（左 4 成账户 / 右 6 成流水），<1024px 上下堆叠 */
 .assets-split {
   display: grid;
   grid-template-columns: minmax(0, 4fr) minmax(0, 6fr);
@@ -4368,7 +4434,7 @@ body {
   }
 }
 
-/* ==================== v0.09.2：账单流 / 资产页 / 悬浮球 ==================== */
+/* ==================== 旧版：账单流 / 资产页 / 悬浮球 ==================== */
 
 /* ---- 金额语义色：只有真收入绿、真支出红；转账 / 借贷 / 报销一律深灰 ---- */
 .amt-income {
@@ -8643,6 +8709,171 @@ body.auth-locked {
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.28);
 }
 
+/* ==================== v0.14.0：图标实时预览（左网格 + 右固定预览面板） ==================== */
+.icon-picker-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* 左侧网格自适应剩余宽度；右侧预览面板固定宽度，不被网格项撑开 */
+.icon-picker-body > .icon-choice-grid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.icon-preview-panel {
+  flex: 0 0 236px;
+  width: 236px;
+  padding: 12px;
+  border: 1px solid var(--border-soft, #e6e8ee);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.icon-preview-title {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.icon-preview-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.icon-preview-frame {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+/* 需求：列表左侧实际按 30 × 30 px 渲染 */
+.icon-preview-frame-list {
+  width: 46px;
+  height: 46px;
+}
+.icon-preview-frame-list .icon-preview-thumb {
+  width: 30px;
+  height: 30px;
+}
+.icon-preview-frame-list .icon-preview-thumb img {
+  width: 30px;
+  height: 30px;
+}
+.icon-preview-frame-list .icon-preview-thumb .icon-choice-fallback {
+  width: 26px;
+  height: 26px;
+}
+
+/* 需求：大号展示实际按 64 × 64 px 渲染 */
+.icon-preview-frame-large {
+  width: 80px;
+  height: 80px;
+}
+.icon-preview-frame-large .icon-preview-thumb {
+  width: 64px;
+  height: 64px;
+}
+.icon-preview-frame-large .icon-preview-thumb img {
+  width: 64px;
+  height: 64px;
+}
+.icon-preview-frame-large .icon-preview-thumb .icon-choice-fallback {
+  width: 56px;
+  height: 56px;
+}
+
+.icon-preview-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.icon-preview-meta strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.icon-preview-meta span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* 示例行：模拟「列表左侧图标 + 名称」的真实排版 */
+.icon-preview-sample {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 13px;
+  color: var(--text);
+}
+.icon-preview-sample .icon-preview-thumb {
+  width: 30px;
+  height: 30px;
+}
+.icon-preview-sample .icon-preview-thumb img {
+  width: 30px;
+  height: 30px;
+}
+.icon-preview-sample .icon-choice-fallback {
+  width: 26px;
+  height: 26px;
+}
+
+.icon-preview-default {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.icon-preview-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  word-break: break-word;
+}
+
+[data-theme="dark"] .icon-preview-panel {
+  background: rgba(30, 41, 59, 0.55);
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+[data-theme="dark"] .icon-preview-frame {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+/* 窄屏：预览面板收到网格下方，避免挤成一条 */
+@media (max-width: 640px) {
+  .icon-picker-body {
+    flex-direction: column;
+  }
+  .icon-preview-panel {
+    flex: 1 1 auto;
+    width: 100%;
+  }
+}
+
 /* v0.12.5：侧栏昵称与 UID */
 .sidebar-user {
   display: inline-flex;
@@ -12555,3 +12786,1971 @@ body.has-avatar-lightbox {
 .chart-canvas {
   background: transparent;
 }
+
+/* =====================================================================
+ * v0.14.0-DEV 终极整合包：顽固 UI 强杀 + 帮助与反馈新样式
+ * ---------------------------------------------------------------------
+ * 本段统一追加在 style.css 文件最末尾：同权重靠后覆盖，顽固旧规则一律
+ * !important 强杀。颜色只走主题变量，浅色 / 深色（[data-theme="dark"]）
+ * 自动兼容；不改动文件前面任何一条既有规则。
+ * ===================================================================== */
+
+/* 0) 兼容别名：历史规则已引用 var(--text)（如 .stat-card-remain），但
+ *    :root 从未定义过 --text，声明会静默失效。这里补一个指向 --text-main
+ *    的别名：浅色下是深色、深色下是浅色，保证 var(--text, #e2e8f0) 可读。 */
+:root {
+  --text: var(--text-main);
+}
+[data-theme="dark"] {
+  --text: var(--text-main);
+}
+
+/* ---- 1) 侧栏工具区：汉堡按钮右对齐，折叠态居中 ---- */
+.sidebar-tools {
+  justify-content: flex-end !important;
+  padding: 8px 14px 4px !important;
+}
+/* v0.14.0-FIX：折叠态也靠右（父容器 flex-end），文字「展开」不被裁掉 */
+.app.is-collapsed .sidebar-tools {
+  justify-content: flex-end !important;
+  padding: 8px 8px 4px !important;
+}
+.app.is-collapsed .sidebar-toggle svg {
+  width: 16px !important;
+  height: 16px !important;
+}
+.sidebar-toggle {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px !important;
+  border-radius: 8px !important;
+}
+.sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+.sidebar-toggle-label {
+  font-size: 12px;
+  letter-spacing: .5px;
+  color: rgba(255, 255, 255, .72);
+  white-space: nowrap;
+}
+/* v0.14.0-FIX：折叠态也必须看到「展开」二字（76px 侧栏内收紧排版，不换行） */
+.app.is-collapsed .sidebar-toggle-label {
+  display: inline !important;
+  font-size: 11px;
+  letter-spacing: 0;
+}
+.app.is-collapsed .sidebar-toggle {
+  gap: 4px !important;
+  padding: 5px 6px !important;
+}
+
+/* ---- 2) 全局纯蓝实心 .btn-primary 强杀为磨砂灰（资产页 / 我的页 / 弹窗）---- */
+.btn-primary,
+.btn-primary:focus,
+.btn-primary:active,
+.btn-primary.active,
+#page-assets .btn-primary,
+#page-profile .btn-primary,
+.modal .btn-primary {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: var(--text, #e2e8f0) !important;
+  box-shadow: none !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+.btn-primary:hover,
+#page-assets .btn-primary:hover,
+#page-profile .btn-primary:hover,
+.modal .btn-primary:hover {
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: var(--text, #e2e8f0) !important;
+}
+
+/* ---- 3) 「我的」页卡片贴底强化 ---- */
+#page-profile .profile-grid > .panel {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+#page-profile .profile-grid > .panel > .profile-actions,
+#page-profile .profile-grid > .panel > .export-actions,
+#page-profile .profile-grid > .panel > .settings-actions {
+  margin-top: auto !important;
+}
+
+/* ---- 4) 图标预览真实图形样式 ---- */
+.icon-preview-thumb img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+.icon-preview-fallback {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100%;
+  max-height: 100%;
+  color: var(--text-dim, #94a3b8);
+  fill: currentColor;
+}
+.icon-preview-frame-list .icon-preview-thumb {
+  width: 30px !important;
+  height: 30px !important;
+}
+.icon-preview-frame-large .icon-preview-thumb {
+  width: 64px !important;
+  height: 64px !important;
+}
+
+/* ---- 5) 设置弹窗「帮助与反馈」 ---- */
+.settings-help {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: var(--text-main);
+}
+#settings-pane-help {
+  color: var(--text-main);
+}
+.help-block {
+  margin-bottom: 16px;
+}
+.help-block:last-child {
+  margin-bottom: 0;
+}
+.help-block h4 {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  color: var(--text-main);
+}
+
+/* FAQ：每条一张小卡片，问题加粗、答案次要色 */
+#help-faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.help-faq-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-muted, #64748b);
+}
+.help-faq-item strong,
+.help-faq-item .help-faq-q {
+  display: block;
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--text-main, #1f2937);
+}
+.help-faq-item p,
+.help-faq-item .help-faq-a {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-muted, #64748b);
+}
+
+/* 快捷键：kbd 键帽 + 说明 */
+#help-shortcut-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.help-shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-main, #1f2937);
+}
+.help-shortcut-row kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 56px;
+  padding: 2px 9px;
+  border: 1px solid var(--line-strong, #d6dee9);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--surface-3, #f1f5f9);
+  color: var(--text-main, #1f2937);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.5;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.08);
+}
+.help-shortcut-row > span {
+  color: var(--text-muted, #64748b);
+}
+
+/* 联系我们浮层卡片 */
+.help-contact-pop {
+  position: relative;
+  margin-top: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 12px;
+  background: var(--surface, #ffffff);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.14);
+}
+.help-contact-pop[hidden] {
+  display: none !important;
+}
+[data-theme="dark"] .help-contact-pop {
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+}
+.help-contact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  font-size: 13px;
+}
+.help-contact-row + .help-contact-row {
+  border-top: 1px dashed var(--line, #e6ebf2);
+}
+.help-contact-row > span:first-child,
+.help-contact-row .help-contact-label {
+  color: var(--text-muted, #64748b);
+}
+.help-contact-row > span:last-child,
+.help-contact-row .help-contact-value {
+  color: var(--text-main, #1f2937);
+  font-weight: 600;
+  word-break: break-all;
+  text-align: right;
+}
+
+/* 反馈表单 */
+.feedback-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 14px;
+  background: var(--surface-2, #f8fafc);
+}
+.feedback-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+}
+.feedback-form > label,
+.feedback-field > label:not(.feedback-upload-btn),
+.feedback-field-label {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+}
+.feedback-form textarea,
+.feedback-form input[type="date"],
+.feedback-form input[type="text"],
+.feedback-form input.form-control,
+.feedback-form select {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong, #d6dee9);
+  border-radius: 10px;
+  background: var(--surface, #ffffff);
+  color: var(--text-main, #1f2937);
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+.feedback-form textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.feedback-form textarea::placeholder,
+.feedback-form input::placeholder {
+  color: var(--text-dim, #94a3b8);
+}
+.feedback-form textarea:focus,
+.feedback-form input[type="date"]:focus,
+.feedback-form input[type="text"]:focus,
+.feedback-form input.form-control:focus,
+.feedback-form select:focus {
+  border-color: var(--brand-blue, #2563eb);
+  box-shadow: 0 0 0 3px var(--brand-soft, rgba(37, 99, 235, 0.1));
+}
+
+/* 选择截图：磨砂按钮风格（它是 label[for]，不是 <button>） */
+.feedback-upload-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 14px;
+  border: 1px dashed var(--line-strong, #d6dee9);
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.10);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: var(--text-main, #1f2937);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+  transition: background .18s ease, border-color .18s ease;
+}
+.feedback-upload-btn:hover {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.5);
+}
+[data-theme="dark"] .feedback-upload-btn {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* 截图预览：90 × 90 缩略图 + 右上角删除叉 */
+.feedback-image-preview {
+  position: relative;
+  display: inline-flex;
+  width: 90px;
+  height: 90px;
+  flex: 0 0 auto;
+}
+.feedback-image-preview:empty {
+  display: none;
+}
+.feedback-image-preview img {
+  width: 90px;
+  height: 90px;
+  object-fit: cover;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 10px;
+  background: var(--surface, #ffffff);
+}
+.feedback-image-preview .feedback-image-remove,
+.feedback-image-preview .feedback-image-del,
+.feedback-image-preview > button {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.85);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+}
+.feedback-image-preview .feedback-image-remove:hover,
+.feedback-image-preview .feedback-image-del:hover,
+.feedback-image-preview > button:hover {
+  background: var(--color-expense, #dc2626);
+}
+
+/* 联系方式：渠道 select + 号码 input 并排 */
+.feedback-contact-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.feedback-contact-row select {
+  flex: 0 0 96px;
+  width: 96px;
+}
+.feedback-contact-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 醒目小字提示 */
+.feedback-hint {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: .02em;
+  color: #fbbf24;
+}
+
+/* 提交状态：成功绿 / 失败红（JS 也可能直接写内联 color，这里不强制 !important） */
+.feedback-status {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.feedback-status.is-error,
+.feedback-status.is-danger,
+.feedback-status.error,
+.feedback-status[data-state="error"] {
+  color: var(--color-expense, #dc2626);
+}
+.feedback-status.is-success,
+.feedback-status.is-ok,
+.feedback-status.success,
+.feedback-status[data-state="success"] {
+  color: var(--color-income, #047857);
+}
+
+/* 设置弹窗三个 Tab：窄屏不换行，允许横向滚动 */
+.settings-tabs {
+  flex-wrap: nowrap !important;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.settings-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.settings-tabs::-webkit-scrollbar-thumb {
+  background: var(--line-strong, #d6dee9);
+  border-radius: 2px;
+}
+.settings-tab {
+  flex: 0 0 auto;
+  white-space: nowrap !important;
+}
+
+/* =====================================================================
+ * v0.14.0-DEV-FIX（终极强杀）：资产页双栏滚动 / 帮助页顺序与弹窗化
+ * 全部放在文件最末尾，用 !important 压过前面 13000 行里的历史规则
+ * ===================================================================== */
+
+/* ---------- 〇、全局自定义深色滚动条（所有滚动容器统一，含资产页两栏） ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.38) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.38);
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.66);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+[data-theme="dark"] *::-webkit-scrollbar-thumb {
+  background: rgba(203, 213, 225, 0.30);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+[data-theme="dark"] *::-webkit-scrollbar-thumb:hover {
+  background: rgba(203, 213, 225, 0.52);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ---------- 一、资产页：锁死一屏，左右两栏各自滚动（桌面端） ---------- */
+@media (min-width: 1024px) {
+  #page-assets.active {
+    height: calc(100vh - 64px) !important;
+    max-height: calc(100vh - 64px) !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  #page-assets .assets-split {
+    flex: 1 1 auto !important;
+    height: 100% !important;
+    min-height: 0 !important;
+    margin-top: 0 !important;
+    overflow: hidden !important;
+    align-items: stretch !important;
+  }
+
+  /* 左栏（账户区）与右栏（流水区）各自出现独立滚动条 */
+  #page-assets .assets-left,
+  #page-assets .assets-right {
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+  }
+
+  #page-assets .assets-right {
+    overflow-x: hidden !important;
+  }
+
+  /* 全局自定义深色滚动条：栏体 + 栏内真实滚动层 */
+  #page-assets .assets-left,
+  #page-assets .assets-right,
+  #page-assets .account-groups,
+  #page-assets .bill-feed-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.42) transparent;
+  }
+
+  #page-assets .assets-left::-webkit-scrollbar,
+  #page-assets .assets-right::-webkit-scrollbar,
+  #page-assets .account-groups::-webkit-scrollbar,
+  #page-assets .bill-feed-scroll::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  #page-assets .assets-left::-webkit-scrollbar-track,
+  #page-assets .assets-right::-webkit-scrollbar-track,
+  #page-assets .account-groups::-webkit-scrollbar-track,
+  #page-assets .bill-feed-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  #page-assets .assets-left::-webkit-scrollbar-thumb,
+  #page-assets .assets-right::-webkit-scrollbar-thumb,
+  #page-assets .account-groups::-webkit-scrollbar-thumb,
+  #page-assets .bill-feed-scroll::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.38);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+  }
+
+  #page-assets .assets-left::-webkit-scrollbar-thumb:hover,
+  #page-assets .assets-right::-webkit-scrollbar-thumb:hover,
+  #page-assets .account-groups::-webkit-scrollbar-thumb:hover,
+  #page-assets .bill-feed-scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.66);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  [data-theme="dark"] #page-assets .assets-left::-webkit-scrollbar-thumb,
+  [data-theme="dark"] #page-assets .assets-right::-webkit-scrollbar-thumb,
+  [data-theme="dark"] #page-assets .account-groups::-webkit-scrollbar-thumb,
+  [data-theme="dark"] #page-assets .bill-feed-scroll::-webkit-scrollbar-thumb {
+    background: rgba(203, 213, 225, 0.30);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}
+
+/* ---------- 二、帮助与反馈：四个区块顺序 / 标题 16px·600 / 正文 14px ---------- */
+#settings-pane-help {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+}
+
+#settings-pane-help .help-block {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#settings-pane-help .help-block h4 {
+  margin: 0 0 10px !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+  letter-spacing: 0.2px;
+  color: var(--text-main, #0f172a);
+}
+
+#settings-pane-help .help-faq-item,
+#settings-pane-help .help-faq-q,
+#settings-pane-help .help-faq-a,
+#settings-pane-help .help-shortcut-row,
+#settings-pane-help .help-contact-row {
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+
+#settings-pane-help .help-faq-q {
+  font-weight: 600 !important;
+}
+
+#settings-pane-help .help-sub-title {
+  display: none !important;
+}
+
+/* 意见反馈：大号磨砂入口按钮（非纯蓝实心） */
+.help-feedback-entry {
+  width: 100%;
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  backdrop-filter: blur(14px) saturate(140%);
+  color: var(--text-main, #0f172a) !important;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.help-feedback-entry:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.12);
+}
+
+.help-feedback-entry:active {
+  transform: translateY(0);
+}
+
+.help-feedback-entry:focus-visible {
+  outline: 2px solid var(--accent, #3b82f6);
+  outline-offset: 2px;
+}
+
+.help-feedback-icon {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--accent, #2563eb);
+}
+
+.help-feedback-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.help-feedback-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.help-feedback-text strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.help-feedback-text small {
+  font-size: 12.5px;
+  color: var(--text-sub, #64748b);
+}
+
+.help-feedback-arrow {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-sub, #94a3b8);
+}
+
+[data-theme="light"] .help-feedback-entry {
+  background: rgba(15, 23, 42, 0.035) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+[data-theme="light"] .help-feedback-entry:hover {
+  background: rgba(15, 23, 42, 0.06) !important;
+  border-color: rgba(15, 23, 42, 0.18) !important;
+}
+
+/* 磨砂 Modal：可复用组件（意见反馈等） */
+.app-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1090;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.app-modal[hidden] {
+  display: none !important;
+}
+
+.app-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 15, 30, 0.46);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.app-modal-dialog {
+  position: relative;
+  z-index: 1;
+  width: min(600px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(248, 250, 252, 0.82);
+  -webkit-backdrop-filter: blur(26px) saturate(170%);
+  backdrop-filter: blur(26px) saturate(170%);
+  box-shadow: 0 32px 90px rgba(2, 6, 23, 0.42);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(12px) scale(0.985);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+[data-theme="dark"] .app-modal-dialog {
+  background: rgba(15, 23, 42, 0.82);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 32px 90px rgba(0, 0, 0, 0.6);
+}
+
+.app-modal.is-open .app-modal-dialog {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.app-modal-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.app-modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main, #0f172a);
+}
+
+.app-modal-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-sub, #64748b);
+}
+
+.app-modal-close {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.app-modal-close:hover {
+  background: rgba(239, 68, 68, 0.12) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: #ef4444;
+}
+
+.app-modal-close svg {
+  width: 16px;
+  height: 16px;
+}
+
+.app-modal-body {
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.app-modal-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.app-modal-body::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 999px;
+}
+
+/* 表单进入 Modal 后去掉自身的卡片底，只留字段 */
+.app-modal .feedback-form {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.app-modal .feedback-hint {
+  margin: 12px 0 0 !important;
+}
+
+.feedback-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.app-modal .feedback-actions .btn,
+.app-modal .feedback-actions .btn-light,
+.app-modal .feedback-actions .btn-primary {
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: var(--text-main, #0f172a) !important;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.app-modal .feedback-actions .btn:hover {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: var(--text-main, #0f172a) !important;
+}
+
+[data-theme="light"] .app-modal .feedback-actions .btn,
+[data-theme="light"] .app-modal .feedback-actions .btn-light,
+[data-theme="light"] .app-modal .feedback-actions .btn-primary {
+  background: rgba(15, 23, 42, 0.04) !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+}
+
+[data-theme="light"] .app-modal .feedback-actions .btn:hover {
+  background: rgba(15, 23, 42, 0.07) !important;
+  border-color: rgba(15, 23, 42, 0.2) !important;
+}
+
+@media (max-width: 640px) {
+  .app-modal {
+    padding: 12px;
+  }
+
+  .app-modal-dialog {
+    max-height: calc(100vh - 24px);
+  }
+
+  .app-modal-head,
+  .app-modal-body {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+/* =====================================================================
+ * v0.14.0-TST 终极纠错大包 · 最终覆盖层
+ * ---------------------------------------------------------------------
+ * 纪律：本段必须永远保持在 style.css 最末尾。历史规则同权重靠后覆盖，
+ * 所有顽固样式一律 !important 强杀；颜色只走主题变量，浅 / 深自适应。
+ * 模块一 三页双栏独立滚动 / 模块二 顽固组件强杀 / 模块三 帮助页重排。
+ * ===================================================================== */
+
+/* ========== 模块一：资产 / 账单 / 图表 三页双栏独立滚动（桌面 ≥1024px） ========== */
+@media (min-width: 1024px) {
+  /* 1) 外层容器锁死高度：整页不再滚动，滚动权限全部下放给左右两栏 */
+  #page-assets.active,
+  #page-bills.active,
+  #page-charts.active {
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* 2) 中间骨架吃掉外层剩余高度，自身不滚 */
+  #page-assets .assets-split,
+  #page-bills .bills-layout,
+  #page-charts .chart-shell {
+    flex: 1 1 auto !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    align-items: stretch !important;
+  }
+
+  /* 3) 左右两栏：真正的独立滚动条（height / overflow 全部 !important） */
+  #page-assets .assets-left,
+  #page-assets .assets-right,
+  #page-bills .bills-tree-panel,
+  #page-bills .bills-main,
+  #page-charts .chart-subnav,
+  #page-charts .chart-main {
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(148, 163, 184, 0.42) transparent !important;
+  }
+
+  /* 4) 图表左栏原为 sticky，放进独立滚动容器会黏顶错位，改回静态 */
+  #page-charts .chart-subnav {
+    position: static !important;
+    align-self: start !important;
+  }
+
+  /* 5) 栏内真实滚动层：补 min-height:0 闭合高度链，滚动不串到整页 */
+  #page-assets .account-groups,
+  #page-assets .bill-feed-scroll,
+  #page-bills .bills-tree {
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+  }
+
+  /* 6) 六栏统一深色滚动条（webkit 明细由前面全局 * 规则接管，这里压深色调） */
+  [data-theme="dark"] #page-assets .assets-left,
+  [data-theme="dark"] #page-assets .assets-right,
+  [data-theme="dark"] #page-bills .bills-tree-panel,
+  [data-theme="dark"] #page-bills .bills-main,
+  [data-theme="dark"] #page-charts .chart-subnav,
+  [data-theme="dark"] #page-charts .chart-main {
+    scrollbar-color: rgba(203, 213, 225, 0.30) transparent !important;
+  }
+}
+
+/* ========== 模块二 · 1：侧边栏折叠按钮（汉堡 + 文字并排、靠右、hover 微背景） ========== */
+.sidebar-tools {
+  justify-content: flex-end !important;
+}
+#sidebar-toggle {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  width: auto !important;
+  border-radius: 8px !important;
+  transition: background 0.18s ease !important;
+}
+/* 「找回汉堡图标」：历史 .icon-btn svg 的隐藏 / 尺寸规则一律强杀 */
+#sidebar-toggle > svg {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  flex: 0 0 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+  max-width: none !important;
+  max-height: none !important;
+}
+#sidebar-toggle .sidebar-toggle-label {
+  display: inline-block !important;
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+}
+#sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+#sidebar-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+/* 折叠态 76px 侧栏内仍保持「图标 + 文字」并排，不裁字 */
+.app.is-collapsed #sidebar-toggle {
+  gap: 4px !important;
+  padding: 5px 6px !important;
+}
+.app.is-collapsed #sidebar-toggle > svg {
+  display: block !important;
+  flex: 0 0 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+.app.is-collapsed #sidebar-toggle .sidebar-toggle-label {
+  display: inline-block !important;
+  font-size: 11px !important;
+}
+
+/* ========== 模块二 · 2：导航激活态去蓝（半透明浅蓝 + 左侧蓝条） ========== */
+.nav-item.active,
+.nav-item.active:hover,
+.nav-item.active:focus,
+.nav-item.active:focus-visible {
+  background: rgba(59, 130, 246, 0.15) !important;
+  border-left: 3px solid #3b82f6 !important;
+  color: #fff !important;
+  box-shadow: none !important;
+  /* 补回 border 吃掉的 3px，选中时图标 / 文字不左右跳 */
+  padding-left: 9px !important;
+}
+/* 干掉 v0.13.x 遗留的橙色 ::before 竖条，避免和蓝条叠成双条 */
+.nav-item.active::before,
+#app.is-collapsed .nav-item.active::before {
+  content: none !important;
+  display: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* ========== 模块二 · 3：全局纯蓝实心按钮强杀为磨砂半透明 ========== */
+.btn-primary,
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active,
+.btn-primary.active,
+.btn-primary:disabled,
+.btn.btn-primary.btn-add,
+.btn.btn-primary.btn-sm,
+#page-assets .btn-primary,
+#page-profile .btn-primary,
+.modal .btn-primary,
+.app-modal .btn-primary {
+  background: rgba(255, 255, 255, 0.06) !important;
+  background-image: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: var(--text, #e2e8f0) !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: blur(12px) saturate(140%) !important;
+  backdrop-filter: blur(12px) saturate(140%) !important;
+}
+.btn-primary:hover,
+.btn.btn-primary.btn-add:hover,
+#page-assets .btn-primary:hover,
+#page-profile .btn-primary:hover,
+.modal .btn-primary:hover,
+.app-modal .btn-primary:hover {
+  background: rgba(255, 255, 255, 0.11) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: var(--text, #e2e8f0) !important;
+  box-shadow: none !important;
+}
+/* 浅色主题下白色磨砂几乎不可见，换成深色半透明底 + 深色描边 */
+[data-theme="light"] .btn-primary,
+[data-theme="light"] .btn-primary:hover,
+[data-theme="light"] .btn-primary:focus,
+[data-theme="light"] .btn-primary:active,
+[data-theme="light"] .btn.btn-primary.btn-add,
+[data-theme="light"] #page-assets .btn-primary,
+[data-theme="light"] #page-profile .btn-primary,
+[data-theme="light"] .modal .btn-primary,
+[data-theme="light"] .app-modal .btn-primary {
+  background: rgba(15, 23, 42, 0.045) !important;
+  background-image: none !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+  color: var(--text-main, #0f172a) !important;
+}
+[data-theme="light"] .btn-primary:hover,
+[data-theme="light"] .btn.btn-primary.btn-add:hover,
+[data-theme="light"] #page-assets .btn-primary:hover,
+[data-theme="light"] #page-profile .btn-primary:hover,
+[data-theme="light"] .modal .btn-primary:hover {
+  background: rgba(15, 23, 42, 0.08) !important;
+  border-color: rgba(15, 23, 42, 0.20) !important;
+  color: var(--text-main, #0f172a) !important;
+}
+
+/* ========== 模块二 · 4：「我的」卡片纵向 Flex + 底部按钮贴底 ========== */
+#page-profile .profile-grid > .panel {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+#page-profile .profile-grid > .panel > .profile-actions,
+#page-profile .profile-grid > .panel > .export-actions,
+#page-profile .profile-grid > .panel > .settings-actions {
+  margin-top: auto !important;
+  flex: 0 0 auto !important;
+}
+
+/* ========== 模块二 · 5：图标实时预览槽强制显示真实 <img> / <svg> ========== */
+.icon-preview-panel .icon-preview-thumb {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+}
+.icon-preview-panel .icon-preview-thumb img,
+.icon-preview-panel .icon-preview-thumb svg {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+/* 网格「系统默认」格：用真实占位图形替代纯文字「默认」 */
+.icon-choice-thumb.is-default .icon-choice-default {
+  display: none !important;
+}
+.icon-choice-thumb.is-default .icon-choice-fallback {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ========== 模块三 · 1：帮助与反馈 —— 快捷键置顶 + 双列网格 ========== */
+#settings-pane-help .settings-help {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+}
+/* CSS order 兜底：即便 Jinja 模板缓存没重启、DOM 还是旧顺序，快捷键也稳居最上 */
+#settings-pane-help #help-block-shortcuts {
+  order: -1 !important;
+}
+#settings-pane-help #help-block-faq {
+  order: 0 !important;
+}
+#settings-pane-help #help-block-contact,
+#settings-pane-help #help-block-feedback {
+  order: 1 !important;
+}
+#help-shortcut-list {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 8px 14px !important;
+}
+#help-shortcut-list .help-shortcut-row {
+  min-width: 0 !important;
+}
+#help-shortcut-list .help-shortcut-row > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  #help-shortcut-list {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* ========== 模块三 · 2：FAQ 默认只显前 3 条 + 「查看更多 ∨」 ========== */
+#help-faq-list > .help-faq-item:nth-child(n + 4) {
+  display: none !important;
+}
+#help-faq-list.is-expanded > .help-faq-item:nth-child(n + 4) {
+  display: block !important;
+}
+.help-faq-more {
+  width: 100% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  margin-top: 10px !important;
+  padding: 9px 14px !important;
+  border: 1px solid rgba(148, 163, 184, 0.28) !important;
+  border-radius: 10px !important;
+  background: rgba(148, 163, 184, 0.10) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
+  backdrop-filter: blur(10px) !important;
+  color: var(--text-main, #0f172a) !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: background 0.18s ease, border-color 0.18s ease !important;
+}
+.help-faq-more:hover {
+  background: rgba(59, 130, 246, 0.12) !important;
+  border-color: rgba(59, 130, 246, 0.42) !important;
+}
+.help-faq-more .help-faq-more-arrow {
+  display: inline-block !important;
+  transition: transform 0.2s ease !important;
+}
+.help-faq-more.is-expanded .help-faq-more-arrow {
+  transform: rotate(180deg) !important;
+}
+.help-faq-more[hidden] {
+  display: none !important;
+}
+[data-theme="dark"] .help-faq-more {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  color: var(--text-main, #e2e8f0) !important;
+}
+
+/* 悬浮球跳转后 scrollIntoView 落点：给快捷键区留出吸顶余量，标题不被切 */
+#help-block-shortcuts {
+  scroll-margin-top: 12px !important;
+}
+
+/* ========== 例外：登录 / 注册遮罩主按钮，不属于应用内「纯蓝实心按钮」 ==========
+ * v0.13.5 特意做的 Glassmorphism 渐变主按钮 + 锁定态灰化，是本版不该回归的封版设计。
+ * 上面 .btn-primary 全局磨砂是宽匹配，这里用更高特异性精确恢复（必须留在最末尾）。 */
+.auth-gate .btn-primary.auth-submit,
+.auth-gate .btn-primary.auth-submit:hover,
+.auth-gate .btn-primary.auth-submit:focus,
+.auth-gate .btn-primary.auth-submit:active {
+  background: transparent !important;
+  background-image: linear-gradient(135deg, #4f8cff 0%, #2563eb 55%, #1d4ed8 100%) !important;
+  border: 0 !important;
+  color: #fff !important;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.32) !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+.auth-gate .btn-primary.auth-submit:disabled,
+.auth-gate .btn-primary.auth-submit.is-locked {
+  opacity: 0.55 !important;
+  filter: grayscale(0.25) !important;
+  box-shadow: none !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+
+/* =====================================================================
+ * v0.14.0-TST 终极修复大包 · 最终覆盖层
+ * 必须永远保持在 style.css 最末尾：同权重靠后覆盖，顽固样式一律 !important 强杀。
+ * 模块三：三页双栏独立滚动 / 卡片贴底 / 折叠按钮 / 纯蓝按钮精确磨砂 / 图标预览
+ * 模块四：帮助与反馈顺序复位 / 双列网格 / FAQ 折叠 / 字体统一 / 反馈弹窗磨砂
+ * ===================================================================== */
+
+/* ========== 模块三 · A：三页外层锁高 + 左右两栏独立滚动（桌面 ≥1024px） ========== */
+@media (min-width: 1024px) {
+  #page-assets.active,
+  #page-bills.active,
+  #page-charts.active {
+    height: calc(100vh - 64px) !important;
+    max-height: calc(100vh - 64px) !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  #page-assets .assets-split,
+  #page-bills .bills-layout,
+  #page-charts .chart-shell {
+    flex: 1 1 auto !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    align-items: stretch !important;
+  }
+
+  #page-assets .assets-left,
+  #page-assets .assets-right,
+  #page-bills .bills-tree-panel,
+  #page-bills .bills-main,
+  #page-charts .chart-subnav,
+  #page-charts .chart-main {
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior: contain !important;
+    scrollbar-width: thin !important;
+    scrollbar-color: rgba(148, 163, 184, 0.42) transparent !important;
+  }
+
+  /* 图表左栏原为 sticky，进独立滚动容器会黏顶错位 */
+  #page-charts .chart-subnav {
+    position: static !important;
+    align-self: start !important;
+  }
+
+  /* 栏内真实滚动层补 min-height:0，闭合高度链 */
+  #page-assets .account-groups,
+  #page-assets .bill-feed-scroll,
+  #page-bills .bills-tree {
+    min-height: 0 !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+  }
+}
+
+/* ========== 模块三 · B：纯蓝实心按钮强杀（验收稿精确值） ========== */
+.btn-primary,
+.btn-primary:hover,
+.btn-primary:focus,
+.btn-primary:active,
+.btn-primary.active,
+.btn-primary:disabled,
+.btn.btn-primary.btn-add,
+.btn.btn-primary.btn-sm,
+#page-assets .btn-primary,
+#page-assets .btn-primary:hover,
+#page-profile .btn-primary,
+#page-profile .btn-primary:hover,
+.modal .btn-primary,
+.modal .btn-primary:hover,
+.app-modal .btn-primary,
+.app-modal .btn-primary:hover {
+  background: rgba(255, 255, 255, 0.05) !important;
+  background-image: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  color: var(--text, #e2e8f0) !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: blur(12px) saturate(140%) !important;
+  backdrop-filter: blur(12px) saturate(140%) !important;
+}
+.btn-primary:hover,
+.btn.btn-primary.btn-add:hover,
+#page-profile .btn-primary:hover,
+.modal .btn-primary:hover,
+.app-modal .btn-primary:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+  border-color: rgba(255, 255, 255, 0.24) !important;
+  color: var(--text, #e2e8f0) !important;
+}
+/* 浅色主题下白色磨砂几乎不可见，换成深色半透明底 + 深色描边 */
+[data-theme="light"] .btn-primary,
+[data-theme="light"] .btn-primary:hover,
+[data-theme="light"] .btn-primary:focus,
+[data-theme="light"] .btn-primary:active,
+[data-theme="light"] .btn.btn-primary.btn-add,
+[data-theme="light"] #page-assets .btn-primary,
+[data-theme="light"] #page-profile .btn-primary,
+[data-theme="light"] .modal .btn-primary,
+[data-theme="light"] .app-modal .btn-primary {
+  background: rgba(15, 23, 42, 0.045) !important;
+  background-image: none !important;
+  border-color: rgba(15, 23, 42, 0.12) !important;
+  color: var(--text-main, #0f172a) !important;
+}
+[data-theme="light"] .btn-primary:hover,
+[data-theme="light"] #page-assets .btn-primary:hover,
+[data-theme="light"] #page-profile .btn-primary:hover,
+[data-theme="light"] .modal .btn-primary:hover {
+  background: rgba(15, 23, 42, 0.08) !important;
+  border-color: rgba(15, 23, 42, 0.20) !important;
+  color: var(--text-main, #0f172a) !important;
+}
+
+/* ========== 模块三 · C：「我的」卡片纵向 Flex + 按钮父容器贴底 ========== */
+#page-profile .profile-grid > .panel {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+}
+#page-profile .profile-grid > .panel > .profile-actions,
+#page-profile .profile-grid > .panel > .export-actions,
+#page-profile .profile-grid > .panel > .settings-actions {
+  margin-top: auto !important;
+  flex: 0 0 auto !important;
+}
+
+/* ========== 模块三 · D：侧栏折叠按钮（父容器靠右 / 图标+动态文字 / Hover 背景） ========== */
+.sidebar-tools {
+  justify-content: flex-end !important;
+  padding: 8px 14px 4px !important;
+}
+.app.is-collapsed .sidebar-tools {
+  justify-content: flex-end !important;
+}
+#sidebar-toggle {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 6px !important;
+  width: auto !important;
+  border-radius: 8px !important;
+  transition: background 0.18s ease !important;
+}
+#sidebar-toggle > svg {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  flex: 0 0 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+}
+/* 动态文字「折叠 / 展开」由 applySidebar() 按折叠态写入，这里只保证始终可见 */
+#sidebar-toggle .sidebar-toggle-label {
+  display: inline-block !important;
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+  font-size: 12px !important;
+}
+#sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+#sidebar-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+.app.is-collapsed #sidebar-toggle > svg {
+  display: block !important;
+  flex: 0 0 16px !important;
+  width: 16px !important;
+  height: 16px !important;
+}
+.app.is-collapsed #sidebar-toggle .sidebar-toggle-label {
+  display: inline-block !important;
+  font-size: 11px !important;
+}
+
+/* ========== 模块三 · E：图标实时预览必须是真实 <img> / 内联 <svg> ========== */
+.icon-preview-panel .icon-preview-thumb {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  overflow: hidden !important;
+}
+.icon-preview-panel .icon-preview-thumb img,
+.icon-preview-panel .icon-preview-thumb svg {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain !important;
+}
+.icon-choice-thumb.is-default .icon-choice-default {
+  display: none !important;
+}
+.icon-choice-thumb.is-default .icon-choice-fallback {
+  display: block !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ========== 模块四 · A：帮助与反馈「按 DOM 顺序」显示，撤销上一轮 order 置顶 ========== */
+#settings-pane-help .settings-help {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+}
+#settings-pane-help .help-block {
+  order: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+/* 上一轮用了双 id 特异性把快捷键钉在 order:-1、联系/反馈钉在 order:1，
+ * 单靠上面的 .help-block 压不住（(1,1,0) < (2,0,0)）。这里用同特异性
+ * 且位置更靠后的规则把四块全部归零，让 DOM 顺序真正决定视觉顺序。 */
+#settings-pane-help #help-block-contact,
+#settings-pane-help #help-block-feedback,
+#settings-pane-help #help-block-faq,
+#settings-pane-help #help-block-shortcuts {
+  order: 0 !important;
+}
+#settings-pane-help .help-block h4 {
+  margin: 0 0 10px !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  color: var(--text-main, #0f172a) !important;
+}
+#settings-pane-help .help-faq-item,
+#settings-pane-help .help-faq-q,
+#settings-pane-help .help-faq-a,
+#settings-pane-help .help-shortcut-row,
+#settings-pane-help .help-contact-row,
+#settings-pane-help .help-feedback-text small,
+#settings-pane-help .help-faq-more {
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+
+/* ========== 模块四 · B：快捷键双列网格 + FAQ 前 3 条折叠 ========== */
+#help-shortcut-list {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 8px 14px !important;
+}
+#help-shortcut-list .help-shortcut-row {
+  min-width: 0 !important;
+}
+@media (max-width: 640px) {
+  #help-shortcut-list {
+    grid-template-columns: 1fr !important;
+  }
+}
+#help-faq-list > .help-faq-item:nth-child(n + 4) {
+  display: none !important;
+}
+#help-faq-list.is-expanded > .help-faq-item:nth-child(n + 4) {
+  display: block !important;
+}
+.help-faq-more[hidden] {
+  display: none !important;
+}
+.help-faq-more.is-expanded .help-faq-more-arrow {
+  transform: rotate(180deg) !important;
+}
+
+/* ========== 模块四 · C：意见反馈磨砂弹窗（表单在 .app-modal-body 内） ========== */
+#feedback-modal .app-modal-dialog {
+  -webkit-backdrop-filter: blur(26px) saturate(170%) !important;
+  backdrop-filter: blur(26px) saturate(170%) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+}
+#feedback-modal .app-modal-body .feedback-form {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+#feedback-modal .app-modal-title {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+}
+#feedback-modal .feedback-form,
+#feedback-modal .feedback-hint,
+#feedback-modal .form-label {
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+#help-block-shortcuts {
+  scroll-margin-top: 12px !important;
+}
+
+/* =====================================================================
+ * v0.14.0-TST UI 灾难修复层（必须永远保持在 style.css 最末尾）
+ * 模块一 Tab 隔离 / 模块二 折叠按钮字体与对齐 / 模块三 卡片按钮贴底
+ * ===================================================================== */
+
+/* 全局无衬线字体：历史规则引用了 var(--font-sans) 但 :root 从未定义过 */
+:root {
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+
+/* ========== 模块一：系统设置弹窗 Tab 隔离 ==========
+ * 灾难根因：style.css:13370 的 #settings-pane-help { display:flex !important }
+ * 压过了 HTML hidden 属性自带的 display:none，帮助四块常驻、把整个弹窗撑爆，
+ * 并出现在「个性化与皮肤」「账户与密码」下面。
+ * 这里用带 [hidden] 的属性选择器（特异性 (1,1,0) > (1,0,0)）把隐藏态钉死。 */
+.settings-pane[hidden],
+[id^="settings-pane-"][hidden],
+#settings-pane-help[hidden] {
+  display: none !important;
+}
+/* 只有点了顶部「帮助与反馈」标签（JS 去掉 hidden）才显示 */
+#settings-pane-help:not([hidden]) {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 18px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+}
+.settings-pane {
+  box-sizing: border-box !important;
+  width: 100% !important;
+}
+
+/* ========== 模块二：侧边栏折叠按钮字体 + 垂直居中 + 右对齐 ========== */
+#sidebar-toggle,
+#sidebar-toggle .sidebar-toggle-label {
+  font-family: var(--font-sans, system-ui, -apple-system, sans-serif) !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  line-height: 1.4 !important;
+}
+#sidebar-toggle {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  justify-content: flex-end !important;
+  width: auto !important;
+  padding: 6px 10px !important;
+  border-radius: 8px !important;
+  white-space: nowrap !important;
+}
+.sidebar-tools {
+  justify-content: flex-end !important;
+  padding: 8px 12px 4px !important;
+}
+.app.is-collapsed .sidebar-tools {
+  justify-content: flex-end !important;
+  padding: 8px 8px 4px !important;
+}
+#sidebar-toggle > svg {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  flex: 0 0 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+  margin: 0 !important;
+}
+#sidebar-toggle .sidebar-toggle-label {
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+  white-space: nowrap !important;
+}
+#sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* ========== 模块三：「我的」页卡片按钮强制贴底 ========== */
+#page-profile .panel {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+#page-profile .panel > div:last-child {
+  margin-top: auto !important;
+}
+/* 兜底：即使某张卡片末尾多了提示文字 / 徽章，按钮容器也照样贴底 */
+#page-profile .panel > .profile-actions,
+#page-profile .panel > .export-actions,
+#page-profile .panel > .settings-actions {
+  margin-top: auto !important;
+  flex: 0 0 auto !important;
+}
+
+/* =====================================================================
+ * v0.14.0-TST 终极修复：第一排左右卡片高度对齐 + 折叠按钮字体对齐
+ * 必须保持在 style.css 最末尾，全部 !important 强杀历史规则。
+ * 根因：.profile-grid 早期是 align-items:start(3320)，叠加后来加的
+ * #page-profile .panel{height:100%!important}，内容更长的「我的账本」
+ * 会按自身内容撑高，右侧却停在较矮的高度 → 第一排左右底边不齐。
+ * ===================================================================== */
+
+/* 1. 确保大网格容器是按比例对齐的 */
+#page-profile .profile-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  align-items: stretch !important; /* 确保同行左右高度完全一致 */
+  gap: 20px !important;
+}
+
+/* 2. 去除卡片自身的强制高度限制（让 stretch 接管行高）
+ *    关键补充：历史规则给 .import-export-card 留了 margin-top:16px，
+ *    把右侧卡片顶下 16px 并让 stretch 少拉伸 16px —— 这才是「左高右低」的真凶，
+ *    只清 margin-bottom 不够，必须把 margin-top 也强杀为 0。 */
+#page-profile .profile-grid > .panel {
+  height: auto !important;
+  min-height: 0 !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+/* 3. 强制压缩左侧第一个卡片内部的多余留白 */
+#page-profile .profile-grid > .panel:first-child {
+  padding-bottom: 20px !important;
+}
+
+/* 4. 左侧卡片末子元素（快捷键提示 ul）的 bottom 间距强制归零 */
+#page-profile .profile-grid > .panel:first-child > *:last-child {
+  margin-bottom: 0 !important;
+  padding-bottom: 0 !important;
+}
+
+/* 侧边栏折叠按钮：字体与图标 / 文字水平对齐 */
+#sidebar-toggle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+#sidebar-toggle .sidebar-toggle-label {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+/* =====================================================================
+ * v0.14.0-TST 终极合并：侧边栏折叠按钮双状态修复（必须保持在文件最末尾）
+ * 展开态：图标 + 文字整体靠右；折叠态：隐藏文字、图标居中。
+ * 项目真实折叠类是 #app.is-collapsed，验收稿用的是 body.is-sidebar-collapsed /
+ * .sidebar.collapsed —— JS 已同步补这两个类名，两套选择器都真实生效。
+ * ===================================================================== */
+
+/* 1. 基础字体与颜色对齐 nav-item */
+#sidebar-toggle {
+  font-family: var(--font-sans, system-ui, -apple-system, sans-serif) !important;
+  font-size: 14px !important;
+  color: var(--text-muted) !important;
+  padding: 10px 16px !important;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+/* 2. 展开状态：图标与文字整体靠右 */
+#sidebar-toggle {
+  flex-direction: row !important;
+  justify-content: flex-end !important;
+  gap: 8px !important;
+}
+
+/* 3. 折叠状态：隐藏文字，图标居中 */
+body.is-sidebar-collapsed #sidebar-toggle,
+.sidebar.collapsed #sidebar-toggle,
+#app.is-collapsed #sidebar-toggle,
+.app.is-collapsed #sidebar-toggle {
+  justify-content: center !important;
+  padding: 10px 0 !important;
+}
+body.is-sidebar-collapsed #sidebar-toggle .toggle-text,
+.sidebar.collapsed #sidebar-toggle .toggle-text,
+#app.is-collapsed #sidebar-toggle .toggle-text,
+.app.is-collapsed #sidebar-toggle .toggle-text,
+#app.is-collapsed #sidebar-toggle .sidebar-toggle-label,
+.app.is-collapsed #sidebar-toggle .sidebar-toggle-label {
+  display: none !important;
+}
+/* 折叠态汉堡图标尺寸稳定，配合 justify-content:center 真正居中 */
+#app.is-collapsed #sidebar-toggle > svg,
+.app.is-collapsed #sidebar-toggle > svg {
+  display: block !important;
+  flex: 0 0 18px !important;
+  width: 18px !important;
+  height: 18px !important;
+  margin: 0 !important;
+}
+/* 侧栏是深色底，--text-muted 对比度偏低，hover 时提亮到 nav-item 同色 */
+#sidebar-toggle:hover {
+  color: #cbd5e1 !important;
+  background: rgba(255, 255, 255, 0.10) !important;
+}
+
+/* ==================================================================
+   v0.14.0-TST 终极合并修复层
+   1) 折叠按钮极简重构（纯图标，展开左对齐 / 折叠居中）
+   2) 账户行与大卡片的「快捷改余额」入口
+   3) 改余额磨砂 Modal
+   ================================================================== */
+
+/* ---------- 1. 折叠按钮极简 ---------- */
+/* 容器左右内边距归零，让按钮自身的 padding-left 决定图标位置，才能和导航图标对齐 */
+.sidebar-tools {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  justify-content: flex-start !important;
+}
+#app.is-collapsed .sidebar-tools,
+.app.is-collapsed .sidebar-tools,
+body.is-sidebar-collapsed .sidebar-tools,
+.sidebar.collapsed .sidebar-tools {
+  justify-content: center !important;
+}
+
+#sidebar-toggle {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  padding: 10px 16px !important;
+  padding-left: 20px !important;
+  background: transparent !important;
+  border: none !important;
+  cursor: pointer !important;
+}
+
+/* 折叠态居中：与展开态同特异性且在后面，才压得住 flex-start */
+#app.is-collapsed #sidebar-toggle,
+.app.is-collapsed #sidebar-toggle,
+.sidebar.collapsed #sidebar-toggle,
+body.is-sidebar-collapsed #sidebar-toggle {
+  justify-content: center !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+#sidebar-toggle svg {
+  width: 20px !important;
+  height: 20px !important;
+  display: block !important;
+  flex: 0 0 20px !important;
+  margin: 0 !important;
+}
+
+/* 上面的 background: transparent 会盖掉旧 hover 规则，这里单独补回来 */
+#sidebar-toggle:hover {
+  background: rgba(255, 255, 255, 0.10) !important;
+  color: #cbd5e1 !important;
+}
+
+/* ---------- 2. 账户行「快捷改余额」按钮 ---------- */
+.account-row-adjust {
+  display: grid;
+  place-items: center;
+  /* 与卡片上的按钮同步放大一档，三处入口视觉重量一致 */
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  /* 0.5 在浅底上几乎看不见，抬到 0.62：默认能看见、hover 全亮 */
+  opacity: 0.62;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.account-row-adjust svg {
+  width: 17px;
+  height: 17px;
+}
+.account-row:hover .account-row-adjust,
+.account-row-adjust:focus-visible {
+  opacity: 1;
+}
+.account-row-adjust:hover {
+  background: var(--surface-2);
+  color: var(--brand-blue);
+  opacity: 1;
+}
+
+/* ---------- 3. 大卡片「账户余额」标签后的改余额按钮 ---------- */
+/* v0.14.0-TST 修正：原来绝对定位在右上角，会压住右对齐的账户名（信用卡三个字被盖住）。
+   现在跟 label 同一行内联，head 仍是 space-between，账户名回到最右侧不重叠。 */
+.account-balance-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  /* head 是 align-items:baseline，这里单独居中，避免按钮被基线推到文字下方 */
+  align-self: center;
+}
+.balance-card-adjust {
+  position: static !important;
+  top: auto;
+  right: auto;
+  z-index: auto;
+  display: inline-grid;
+  place-items: center;
+  /* v0.14.0-TST：22px 在卡片上偏小，点不准；放大到 28px，图标同步 16px */
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.34);
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+.balance-card-adjust[hidden] {
+  display: none !important;
+}
+.balance-card-adjust:hover {
+  background: rgba(255, 255, 255, 0.58);
+  transform: translateY(-1px);
+}
+.balance-card-adjust svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 投资看板 hero 是浅色卡片，白 34% 的底几乎看不见，单独给一套描边样式 */
+.invest-cash-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.invest-hero-stat .balance-card-adjust {
+  /* 投资 hero 里跟着放大到 26px（比资产页大卡片略小一档，匹配这里的字号层级） */
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.invest-hero-stat .balance-card-adjust svg {
+  width: 15px;
+  height: 15px;
+}
+.invest-hero-stat .balance-card-adjust:hover {
+  background: var(--surface-2);
+  border-color: var(--brand-blue);
+  color: var(--brand-blue);
+}
+
+/* ---------- 4. 改余额磨砂 Modal ---------- */.balance-adjust-modal .modal-content {
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: blur(18px) saturate(165%);
+  backdrop-filter: blur(18px) saturate(165%);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24);
+}
+[data-theme="dark"] .balance-adjust-modal .modal-content {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(23, 32, 48, 0.82);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.58);
+}
+.balance-adjust-summary {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.balance-adjust-modal .modal-body .form-check-label {
+  font-size: 14px;
+}
+
+/* ---------- 5. 近 7 天账单折叠 ---------- */
+/* .recent-groups 本身是 display:flex，会盖掉 hidden 属性的默认 display:none，
+   必须用属性选择器 + !important 才能真的收起来（本项目踩过的老坑）。 */
+.recent-groups[hidden] {
+  display: none !important;
+}
+.recent-toggle {
+  flex: 0 0 auto;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.recent-toggle:hover {
+  color: var(--brand-blue);
+  border-color: var(--brand-blue);
+}
+@media (max-width: 768px) {
+  /* 手机端标题行容易挤，副标题让位给按钮 */
+  #home-recent-panel .panel-tools .panel-sub {
+    display: none;
+  }
+}
+
+

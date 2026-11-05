@@ -1656,27 +1656,33 @@
   }
 
   function bindSettingsTabs() {
+    // v0.14.0：通用 pane 切换——所有 [data-settings-tab] 对应
+    // #settings-pane-<name>，不再写死 personal/account，help 也能正常显示。
     var tabs = Array.prototype.slice.call(
       document.querySelectorAll("[data-settings-tab]")
     );
     if (!tabs.length) {
       return;
     }
-    var personalPane = document.getElementById("settings-pane-personal");
-    var accountPane = document.getElementById("settings-pane-account");
+    var panes = Array.prototype.slice.call(
+      document.querySelectorAll('[id^="settings-pane-"]')
+    );
     var personalFooter = document.getElementById("settings-footer-personal");
     var accountClose = document.getElementById("settings-account-close");
 
     function showPane(name) {
+      var isPersonal = name === "personal";
       var isAccount = name === "account";
       tabs.forEach(function (tab) {
         var active = tab.getAttribute("data-settings-tab") === name;
         tab.classList.toggle("is-active", active);
         tab.setAttribute("aria-selected", active ? "true" : "false");
       });
-      if (personalPane) { personalPane.hidden = isAccount; }
-      if (accountPane) { accountPane.hidden = !isAccount; }
-      if (personalFooter) { personalFooter.classList.toggle("d-none", isAccount); }
+      panes.forEach(function (pane) {
+        pane.hidden = pane.id !== "settings-pane-" + name;
+      });
+      // 底部按钮只属于 personal / account；help 两个都藏起来
+      if (personalFooter) { personalFooter.classList.toggle("d-none", !isPersonal); }
       if (accountClose) { accountClose.classList.toggle("d-none", !isAccount); }
       if (isAccount) {
         fillAccountPane();

@@ -520,7 +520,17 @@ function investRenderSkeleton(accountName) {
     '<strong class="invest-hero-value" id="invest-total-value">¥0.00</strong>' +
     "</div>" +
     '<div class="invest-hero-stat is-cash">' +
-    '<span class="invest-hero-label" id="invest-cash-label">可用资金</span>' +
+    // v0.14.0-TST：投资账户的可用资金也要能直接改，按钮跟在标签后面（与资产页大卡片同款交互）
+    '<span class="invest-hero-label invest-cash-label-row">' +
+    '<span id="invest-cash-label">可用资金</span>' +
+    '<button class="balance-card-adjust invest-cash-adjust" type="button"' +
+    ' data-adjust-balance="' +
+    escapeHtml(accountName) +
+    '" title="修改可用资金" aria-label="修改可用资金">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M7 5h10M7 9h10M12 9v10M8.5 13.5 12 17l3.5-3.5"></path>' +
+    "</svg></button>" +
+    "</span>" +
     '<strong class="invest-hero-cash" id="invest-cash-line">¥0.00</strong>' +
     "</div>" +
     "</div>" +
@@ -1924,6 +1934,16 @@ function investBindBoardEvents() {
   }
 
   board.addEventListener("click", function (event) {
+    // v0.14.0-TST：可用资金旁的改余额按钮，走 script.js 的通用弹窗
+    const adjustBtn = event.target.closest("[data-adjust-balance]");
+    if (adjustBtn) {
+      event.stopPropagation();
+      event.preventDefault();
+      if (typeof window.openBalanceAdjustModal === "function") {
+        window.openBalanceAdjustModal(adjustBtn.getAttribute("data-adjust-balance"));
+      }
+      return;
+    }
     const tab = event.target.closest("[data-invest-tab]");
     if (tab) {
       switchInvestTab(tab.getAttribute("data-invest-tab"));

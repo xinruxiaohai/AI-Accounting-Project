@@ -7,17 +7,17 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png">
-  <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放） -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png">
+  <link rel="manifest" href="/manifest.json?v=0.14.0-tst5">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.14.0-tst5">
+  <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.14.0-tst5">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.13.8">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.0-tst5">
 </head>
 <body>
 
@@ -52,11 +52,11 @@
       <span class="sidebar-user-name" id="sidebar-brand-name"></span>
     </div>
 
-    <!-- v0.13.7：折叠三行杠单独一行、居中，落在用户区下方 -->
+    <!-- v0.14.0-TST：极简重构，按钮只保留图标（文字节点已移除），展开态左对齐 -->
     <div class="sidebar-tools">
       <button class="icon-btn sidebar-toggle" type="button" id="sidebar-toggle"
               data-bs-toggle="tooltip" data-bs-placement="right" title="折叠 / 展开侧栏"
-              aria-label="折叠或展开侧栏">
+              aria-label="折叠或展开侧栏" aria-expanded="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
           <path d="M4 6h16M4 12h16M4 18h16"></path>
         </svg>
@@ -115,7 +115,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.13.9-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.14.0-TST</div>
     </div>
   </aside>
 
@@ -275,7 +275,12 @@
             <div class="panel recent-panel" id="home-recent-panel">
               <div class="panel-head">
                 <span class="panel-title">近 7 天账单</span>
-                <span class="panel-sub" id="recent-summary">按天分组，点任意一条看详情</span>
+                <div class="panel-tools">
+                  <span class="panel-sub" id="recent-summary">按天分组，点任意一条看详情</span>
+                  <!-- v0.14.0-TST：折叠开关，默认展开 -->
+                  <button class="btn btn-sm btn-light recent-toggle" type="button" id="recent-toggle"
+                          aria-expanded="true" aria-controls="recent-groups">收起</button>
+                </div>
               </div>
               <div class="recent-groups" id="recent-groups">
                 <p class="empty-cell">正在加载账单…</p>
@@ -297,7 +302,7 @@
                   </select>
                 </div>
               </div>
-              <!-- v0.09.2：去表格化，App 账单流（月表头 / 日表头 / 时间 · 分类 · 金额+余额） -->
+              <!-- 历史重构：去表格化，App 账单流（月表头 / 日表头 / 时间 · 分类 · 金额+余额） -->
               <div class="bill-feed" id="record-list" role="list" aria-live="polite">
                 <div class="feed-empty">还没有记录，点右上角「+ 记一笔」开始吧</div>
               </div>
@@ -381,7 +386,7 @@
                 <span class="panel-title" id="day-title">账单明细</span>
                 <span class="panel-sub" id="day-sub">点日历上的某一天</span>
               </div>
-              <!-- v0.09.2：当日明细同样用 App 列表流 -->
+              <!-- 历史重构：当日明细同样用 App 列表流 -->
               <div class="bill-feed bill-feed-sm" id="day-records" role="list">
                 <div class="feed-empty">还没有选择日期</div>
               </div>
@@ -475,7 +480,16 @@
             <!-- v0.11.6：选中账户的余额卡片（金色渐变，零钱通风格） -->
             <div class="account-balance-card" id="account-balance-card" aria-live="polite">
               <div class="account-balance-head">
-                <span class="account-balance-label">账户余额</span>
+                <!-- v0.14.0-TST：改余额按钮跟在「账户余额」标签后面，不再压住右侧账户名 -->
+                <span class="account-balance-label-row">
+                  <span class="account-balance-label">账户余额</span>
+                  <button class="balance-card-adjust" type="button" id="account-balance-adjust"
+                          title="修改余额" aria-label="修改余额" hidden>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M7 5h10M7 9h10M12 9v10M8.5 13.5 12 17l3.5-3.5"></path>
+                    </svg>
+                  </button>
+                </span>
                 <span class="account-balance-name" id="account-balance-name">请选择账户</span>
               </div>
               <strong class="account-balance-value" id="account-balance-value">¥0.00</strong>
@@ -661,7 +675,7 @@
               <div class="profile-avatar" aria-hidden="true">¥</div>
               <div>
                 <h2 class="profile-title">我的账本</h2>
-                <p class="profile-sub" id="profile-version">版本读取中…</p>
+                <p class="profile-sub" id="profile-version">v0.14.0-TST</p>
               </div>
             </div>
             <!-- v0.13.7 终极补丁：数据早已实时入库，旧文案「只存本机 / 不联网」严重过时 -->
@@ -682,6 +696,9 @@
               <h3>导入 / 导出账单</h3>
             </div>
             <p class="export-text">支持微信 / 支付宝账单导出与导入，随时备份，换设备也能接着用。</p>
+            <p class="export-hint">导入先预览、重复项默认不勾选，确认后才会写进账本。</p>
+            <!-- v0.14.1-FIX：按钮容器必须是卡片最后一个子元素，
+                 这样 #page-profile .panel > div:last-child 的 margin-top:auto 才能把它压到底 -->
             <div class="export-actions">
               <button class="btn btn-outline-primary" type="button" id="profile-import-btn">
                 导入账单文件
@@ -690,7 +707,6 @@
                 导出全部账单
               </button>
             </div>
-            <p class="export-hint">导入先预览、重复项默认不勾选，确认后才会写进账本。</p>
           </div>
 
         <!-- ============ 通讯录：收缩成与「我的账本」同尺寸的小卡片，内容进弹窗 ============ -->
@@ -718,11 +734,10 @@
           </div>
         </div>
 
-        <!-- ============ 回收站：v0.09 骨架，先占位 ============ -->
+        <!-- ============ 回收站 ============ -->
         <div class="panel trash-card" id="trash-card">
           <div class="export-head">
             <h3>回收站</h3>
-            <span class="export-badge trash-badge">v0.09</span>
           </div>
           <p class="trash-hint">删除的账单会先进回收站，支持恢复与彻底删除；这里会显示最近删除的条目。</p>
           <div class="profile-actions">
@@ -787,11 +802,15 @@
             <div class="modal-body">
               <h6 class="help-section-title">快捷键</h6>
               <ul class="help-list">
+                <li><kbd>Alt</kbd> + <kbd>A</kbd> 打开 AI 快记弹窗</li>
+                <li><kbd>Alt</kbd> + <kbd>H</kbd> 打开系统设置 · 帮助与反馈</li>
+                <li><kbd>1</kbd> ~ <kbd>5</kbd> 快速切换主导航（首页 / 资产 / 账单 / 图表 / 我的）</li>
+                <li><kbd>?</kbd> 唤出本快捷键提示弹窗</li>
+                <li><kbd>Shift</kbd> + <kbd>D</kbd> 切换深浅主题（跟随系统时仅本次临时切换）</li>
                 <li><kbd>N</kbd> 快速记一笔</li>
                 <li><kbd>Ctrl</kbd> + <kbd>K</kbd> 聚焦全局搜索</li>
                 <li><kbd>Ctrl</kbd> + <kbd>Enter</kbd> 在 AI 快记 / 气泡输入里发送</li>
                 <li><kbd>Esc</kbd> 关闭当前弹窗</li>
-                <li><kbd>?</kbd> 打开本帮助</li>
               </ul>
               <h6 class="help-section-title">功能速览</h6>
               <ul class="help-list">
@@ -808,8 +827,8 @@
         </div>
       </div>
 
-      <!-- ============ 回收站弹窗（v0.09.1） ============ -->
-      <!-- v0.09.2：统计区明细弹窗（借入 / 借出 / 待报销 / 已报销） -->
+      <!-- ============ 回收站弹窗（旧版） ============ -->
+      <!-- 历史重构：统计区明细弹窗（借入 / 借出 / 待报销 / 已报销） -->
       <div class="modal fade" id="stat-detail-modal" tabindex="-1" aria-labelledby="stat-detail-title" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
           <div class="modal-content">
@@ -882,6 +901,47 @@
             <div class="modal-footer">
               <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
               <button type="button" class="btn btn-primary" id="reimburse-confirm">确认报销</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- v0.14.0-TST：快捷修改账户余额（磨砂 Modal） -->
+      <div class="modal fade balance-adjust-modal" id="balance-adjust-modal" tabindex="-1"
+           aria-labelledby="balance-adjust-title" aria-hidden="true" data-bs-keyboard="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="balance-adjust-title">修改余额</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+              <p class="balance-adjust-summary" id="balance-adjust-summary"></p>
+              <div class="mb-3">
+                <label class="form-label" for="balance-adjust-input">调整后余额</label>
+                <input class="form-control" id="balance-adjust-input" type="number" step="0.01"
+                       inputmode="decimal" autocomplete="off">
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="balance-adjust-record" checked>
+                <label class="form-check-label" for="balance-adjust-record">同时生成一条账单流水</label>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="balance-adjust-note">备注</label>
+                <input class="form-control" id="balance-adjust-note" type="text" maxlength="60"
+                       value="账户余额修改" autocomplete="off">
+              </div>
+              <div class="mb-2">
+                <label class="form-label" for="balance-adjust-category">分类</label>
+                <select class="form-select" id="balance-adjust-category"></select>
+              </div>
+              <p class="formula-hint" id="balance-adjust-hint">
+                差额会自动记一笔收入或支出，在「账单」页正常可见；不勾选则只改余额、不留流水。
+              </p>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+              <button type="button" class="btn btn-primary" id="balance-adjust-confirm">确认修改</button>
             </div>
           </div>
         </div>
@@ -1001,7 +1061,7 @@
         </div>
       </div>
 
-      <!-- ============ 预算弹窗（v0.09.1：取代 window.prompt） ============ -->
+      <!-- ============ 预算弹窗（旧版：取代 window.prompt） ============ -->
       <div class="modal fade budget-modal" id="budget-modal" tabindex="-1" aria-labelledby="budget-modal-title" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered">
           <div class="modal-content">
@@ -1206,7 +1266,7 @@
       <div class="modal-body">
         <!-- 内容由 script.js 按记录逐行填充 -->
         <div class="detail-grid" id="detail-body"></div>
-        <!-- v0.09 报销：只有支出账目显示，开关开启后展开报销人 / 金额 -->
+        <!-- 报销：只有支出账目显示，开关开启后展开报销人 / 金额 -->
         <div class="reimb-block" id="reimb-block" hidden>
           <label class="reimb-switch" for="reimb-toggle">
             <input type="checkbox" id="reimb-toggle">
@@ -1349,9 +1409,10 @@
                   role="tab" aria-selected="true">个性化与皮肤</button>
           <button type="button" class="settings-tab" data-settings-tab="account"
                   role="tab" aria-selected="false">账户与密码</button>
+          <button type="button" class="settings-tab" data-settings-tab="help" role="tab" aria-selected="false">帮助与反馈</button>
         </div>
 
-        <section id="settings-pane-personal">
+        <section id="settings-pane-personal" class="settings-pane">
           <div class="settings-group">
             <span class="settings-label">主题</span>
             <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题">
@@ -1385,7 +1446,36 @@
               </label>
             </div>
             <select class="d-none" id="icon-choice"></select>
-            <div class="icon-choice-grid" id="icon-choice-grid" role="listbox" aria-label="选择图标"></div>
+            <!-- v0.14.0：左边图标网格 + 右边固定实时预览面板（30x30 列表位 / 64x64 大号位） -->
+            <div class="icon-picker-body">
+              <div class="icon-choice-grid" id="icon-choice-grid" role="listbox" aria-label="选择图标"></div>
+              <aside class="icon-preview-panel" aria-label="图标实时预览">
+                <p class="icon-preview-title">实时预览</p>
+                <div class="icon-preview-slot">
+                  <div class="icon-preview-frame icon-preview-frame-list">
+                    <span class="icon-preview-thumb" id="icon-preview-list"></span>
+                  </div>
+                  <div class="icon-preview-meta">
+                    <strong>列表左侧</strong>
+                    <span>30 × 30 px</span>
+                  </div>
+                </div>
+                <div class="icon-preview-slot">
+                  <div class="icon-preview-frame icon-preview-frame-large">
+                    <span class="icon-preview-thumb" id="icon-preview-large"></span>
+                  </div>
+                  <div class="icon-preview-meta">
+                    <strong>大号展示</strong>
+                    <span>64 × 64 px</span>
+                  </div>
+                </div>
+                <p class="icon-preview-sample">
+                  <span class="icon-preview-thumb" id="icon-preview-sample-icon"></span>
+                  <span id="icon-preview-sample-text">示例分类</span>
+                </p>
+                <p class="icon-preview-hint" id="icon-preview-hint">点左侧图标即可预览实际效果</p>
+              </aside>
+            </div>
             <div class="icon-picker-actions">
               <button class="btn btn-primary btn-sm" type="button" id="icon-save">应用图标</button>
               <button class="btn btn-outline-secondary btn-sm" type="button" id="icon-reset">恢复默认</button>
@@ -1400,7 +1490,7 @@
           <p class="settings-error" id="settings-error" hidden></p>
         </section>
 
-        <section id="settings-pane-account" hidden>
+        <section id="settings-pane-account" class="settings-pane" hidden>
           <div class="settings-group">
             <span class="settings-label">昵称</span>
             <div class="settings-inline">
@@ -1424,6 +1514,54 @@
             <button class="btn btn-outline-danger w-100" type="button" data-logout>退出登录</button>
           </div>
         </section>
+
+        <!-- v0.14.1-FIX：帮助与反馈 Tab 验收顺序
+             1 联系我们 → 2 意见反馈 → 3 快捷帮助(FAQ) → 4 快捷键(双列网格) -->
+        <div id="settings-pane-help" class="settings-pane" role="tabpanel" hidden>
+          <div class="settings-help">
+            <div class="help-block" id="help-block-contact">
+              <h4>联系我们</h4>
+              <button class="btn btn-outline-secondary btn-sm" type="button" id="help-contact-btn"
+                      aria-expanded="false" aria-controls="help-contact-pop">联系我们</button>
+              <div id="help-contact-pop" class="help-contact-pop" hidden></div>
+            </div>
+
+            <div class="help-block" id="help-block-feedback">
+              <h4>意见反馈</h4>
+              <button class="help-feedback-entry" type="button" id="feedback-open-btn" data-feedback-open
+                      aria-haspopup="dialog" aria-controls="feedback-modal">
+                <span class="help-feedback-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H7l-4 3v-6.2A8.5 8.5 0 0 1 11.5 3h1A8.5 8.5 0 0 1 21 11.5Z"/>
+                    <path d="M8 10h8M8 14h5"/>
+                  </svg>
+                </span>
+                <span class="help-feedback-text">
+                  <strong>意见反馈</strong>
+                  <small>问题描述 · 截图 · 联系方式，一条说清</small>
+                </span>
+                <span class="help-feedback-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+
+            <div class="help-block" id="help-block-faq">
+              <h4>快捷帮助</h4>
+              <div id="help-faq-list" aria-label="常见问题列表"></div>
+              <!-- v0.14.1：默认只显前 3 条，点「查看更多 ∨」展开 / 收起 -->
+              <button class="help-faq-more" type="button" id="help-faq-more"
+                      aria-expanded="false" aria-controls="help-faq-list" hidden>
+                <span id="help-faq-more-label">查看更多</span>
+                <span class="help-faq-more-arrow" aria-hidden="true">∨</span>
+              </button>
+            </div>
+
+            <div class="help-block" id="help-block-shortcuts">
+              <h4>快捷键</h4>
+              <div id="help-shortcut-list" aria-label="快捷键列表"></div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <div id="settings-footer-personal" class="d-flex gap-2 ms-auto">
@@ -1435,6 +1573,67 @@
       </div>
     </div>
   </div>
+<!-- ================= v0.14.0-FIX：意见反馈（磨砂 Modal，复用全局 app-modal 组件） ================= -->
+<div class="app-modal" id="feedback-modal" role="dialog" aria-modal="true"
+     aria-labelledby="feedback-modal-title" hidden>
+  <div class="app-modal-backdrop" data-feedback-close></div>
+  <div class="app-modal-dialog" role="document">
+    <div class="app-modal-head">
+      <div>
+        <h5 class="app-modal-title" id="feedback-modal-title">意见反馈</h5>
+        <p class="app-modal-sub">留下问题和联系方式，客服会尽快联系您 (・ω・)ノ</p>
+      </div>
+      <button class="app-modal-close" type="button" data-feedback-close aria-label="关闭反馈弹窗">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" aria-hidden="true">
+          <path d="M6 6l12 12M18 6L6 18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="app-modal-body">
+      <form id="feedback-form" class="feedback-form" novalidate>
+        <div class="feedback-field">
+          <label class="form-label" for="feedback-issue">问题描述<span class="req">*</span></label>
+          <textarea class="form-control" id="feedback-issue" rows="4" maxlength="2000"
+                    placeholder="抱歉，工程师是小呆呆，有什么问题和诉求请在这里留言！(・ω・)ノ"></textarea>
+        </div>
+
+        <div class="feedback-field">
+          <label class="form-label" for="feedback-date">发生日期</label>
+          <input class="form-control" type="date" id="feedback-date">
+        </div>
+
+        <div class="feedback-field">
+          <input type="file" id="feedback-image" accept="image/*" hidden aria-label="选择反馈截图">
+          <label class="feedback-upload-btn" for="feedback-image">选择截图</label>
+          <div id="feedback-image-preview" class="feedback-image-preview"></div>
+        </div>
+
+        <div class="feedback-field">
+          <label class="form-label" for="feedback-contact-type">联系方式</label>
+          <div class="feedback-contact-row">
+            <select class="form-select" id="feedback-contact-type">
+              <option value="">不填</option>
+              <option value="qq">QQ</option>
+              <option value="wechat">微信</option>
+              <option value="phone">手机号</option>
+            </select>
+            <input class="form-control" id="feedback-contact-info" maxlength="100"
+                   placeholder="填写具体号码" aria-label="具体联系方式">
+          </div>
+        </div>
+
+        <p class="feedback-hint">留下电话或者其他联系方式客服就会来找您啦&gt;_&lt;</p>
+        <div class="feedback-actions">
+          <button class="btn btn-light" type="button" data-feedback-close>取消</button>
+          <button class="btn btn-primary" type="submit" id="feedback-submit">提交反馈</button>
+        </div>
+        <p class="feedback-status" id="feedback-status" role="status" aria-live="polite" hidden></p>
+      </form>
+    </div>
+  </div>
+</div>
+
 </div>
 
 
@@ -2215,13 +2414,13 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.13.8"></script>
-<script src="/static/access-guard.js?v=0.13.8"></script>
+<script src="/static/auth-v012.js?v=0.14.0-tst5"></script>
+<script src="/static/access-guard.js?v=0.14.0-tst5"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.13.8"></script>
-<script src="/static/charts-v013.js?v=0.13.8"></script>
+<script src="/static/script.js?v=0.14.0-tst5"></script>
+<script src="/static/charts-v013.js?v=0.14.0-tst5"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.13.8"></script>
+<script src="/static/invest-v0133.js?v=0.14.0-tst5"></script>
 
 </body>
 </html>

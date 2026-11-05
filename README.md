@@ -94,8 +94,8 @@ node --check static/charts-v013.js
 |---|---|
 | `docs/HANDOFF.md` | **最高红线规则** + 数据模型 + API 速查 + 已知坑 |
 | `docs/dev-log.md` | 每个版本的技术路径与测试结果 |
-| `docs/prd-v0131.md` | v0.13.1 增量需求 |
-| `docs/design-v0131.md` | v0.13.1 增量设计（含任务列表 T01–T05） |
+| `docs/archive/prd-v0131.md` | v0.13.1 增量需求（已归档） |
+| `docs/archive/design-v0131.md` | v0.13.1 增量设计（含任务列表 T01–T05，已归档） |
 | `docs/prompts/NN-*.md` | 每版的需求背景 / 核心 Prompt / 方案 / 踩坑结论 |
 | `docs/video-script.md` | 演示视频剧本 |
 | `docs/bugs-and-solutions/` | 历史 Bug 与解法 |

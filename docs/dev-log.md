@@ -486,7 +486,7 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - `max == min` 时「最高」「最低」两个 markLine 标签会重叠，现实数据不会出现（总有空桶），未处理
 - 同款 1×1 退化图若被指派给某分类，`entityIconHtml()` 渲染的侧栏/列表图标仍会显示色块；`guardIconImage()` 可直接复用，建议单独排一个任务
 - Bootstrap 徽标 `#dc3545` 与 `--color-expense #dc2626` 有极轻微差异，属 Bootstrap 修饰类统一，留待单独任务
-- T02~T05 原始 PRD 里的「6 套主题」「图标库扩到 40+」「月度结账单卡」「周期账单模板」未在本轮实现，设计见 `docs/design-v0131.md`
+- T02~T05 原始 PRD 里的「6 套主题」「图标库扩到 40+」「月度结账单卡」「周期账单模板」未在本轮实现，设计见 `docs/archive/design-v0131.md`
 
 ## v0.13.2（前端体验优化，未封版未打 tag）
 
@@ -591,3 +591,24 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **明细卡片重写**：`openStatDetail()` 不再拼单行文本，借入/借出拉 `/api/debts` 全量、待报销/已报销遍历 `is_reimbursable` 支出，渲染 `.stat-card`（联系人/日期/本金/剩余待还/状态徽章 + 还款结清、编辑、删除）；已结清卡片 `is-settled` 置灰 + 标题删除线且不再给还款按钮；无记录渲染 `.stat-empty`。新增三个弹窗（`#debt-repay-modal`/`#reimburse-modal`/`#debt-edit-modal`）与 `openRepayModal/submitRepay/openReimburseModal/submitReimburse/openDebtEditModal/submitDebtEdit`，操作后 `refresh()` 并 `reopenStatDetail()` 原地重绘。
 - **自测**：`D:\Project\temp\test_v0138_logic.py` 27/27（部分还款 40、超额拒绝、还清置 paid、借出收款 income、报销部分与全额、未开报销/已报完拒绝、流水备注含 ID）；`D:\Project\temp\cdp_v0138_test.mjs` 35/35（iPhone 12 Pro 下 16px 字号、安全区 padding、viewport-fit、?v=0.13.8、SW r1；卡片三按钮、还款 40 后微信 −40 且卡片剩余 60、还清置灰、报销入账、空状态、桌面回归、console 0 error）。
 - **踩坑**：① `findRecordById()` 原来用 `item.id === recordId` 严格比较，而 `data-id` 取出来是字符串——卡片上的「标记为已报销」点了毫无反应（`openReimburseModal(null)` 直接 return），改成 `String()` 比对；② `16px` 防缩放必须 `!important`，否则被 `.form-control` 的 14px 盖掉；③ 明细弹窗重绘后旧按钮节点已脱离文档，测试点击必须重新查询；④ 还款弹窗复用同一实例时，二次打开要重新读剩余金额，不能沿用上次输入值。
+
+## v0.13.9-DEV（视觉重构 + Toast 重做 + 分类清洗 + 帮助反馈落地）
+
+- **UI 视觉与体验重构**：登录页新增 Canvas 粒子背景（`auth-v012.js` 的 `#auth-bg-canvas`，`requestAnimationFrame` 驱动、`devicePixelRatio` 适配、`prefers-reduced-motion` 与低性能设备直接 `display:none` 降级），并在登录卡片磨砂化之外补齐「悬浮感」——卡片 `hover` 抬升 + 柔光、主按钮渐变高亮；首页/资产/账单/图表统一加载骨架屏（`.is-skeleton` + 灰条占位），把「先闪一下 0 再跳数字」的观感改成「结构先到位、数据再填入」；顶栏改磨砂（半透明底 + `backdrop-filter`），滚动时内容从下面透出而不是被硬切。
+- **Toast 系统重构**：废除原来的纯色实底，改半透明磨砂 + 边框描边 + 层叠阴影；文案库换成 Kaomoji（`TOAST_EMOJI`，**严禁 Emoji**，只用颜文字），业务原文保留在副行，主行只放表情与短句；关键修复是**单实例强制清理**——新提示出现前先 `clearToastStack()` 销毁旧实例与定时器，解决连续操作时多条 Toast 叠在一起、读起来像一句话被拼成两段的 Bug。
+- **数据清洗与分类重构**：重写初始分类字典（`database.py` 的 `CATEGORY_SEEDS`），删掉「早餐/午餐/晚餐」「地铁/公交」这类拍脑袋分组，改为按真实记账场景组织的更细粒度二级分类；同时新增**历史脏分类清洗**——把纯数字名、空名（典型如「213」）的孤儿分类识别出来并迁移其账单到「其他」，回收站（软删除）里的账单同样纳入引用统计，避免恢复一条旧账又把「213」带回来。
+- **帮助与反馈系统落地**：系统设置弹窗原本把「联系我们 / 意见反馈 / 快捷帮助 / 快捷键」直接铺在页面上，改造成独立 pane 并按顶部 Tab 隔离显隐；意见反馈从内嵌表单改为独立磨砂 Modal；发送按钮加 10 秒防刷（倒计时 + `disabled`，避免连点轰接口）；移动端/长内容全部收进 `<details>` 式折叠块（FAQ 手风琴），弹窗高度不再被 FAQ 顶爆。
+- **自测**：登录页粒子在 `prefers-reduced-motion` 下不启动、骨架屏在数据到达后全部移除、Toast 连发三次只剩一条、帮助内容初始 `display:none` 且切 Tab 正确、分类字典无纯数字项；`node --check` / `py_compile` 全过。
+- **缓存**：两处 `CACHE_NAME` → `ai-accounting-v0.13.9-r1`，模板 `?v=0.13.9`。
+
+## v0.14.0-TST（业务修复 + 顽固 UI 屠戮 + 文档补全，候选发布版）
+
+- **核心业务修复①：总资产漏算投资市值**。`list_accounts()` 原来只返回 `accounts.balance`，投资账户的持仓市值（`holdings.shares × price`）从来没被合并进去，于是「总净资产」比真实资产少掉一截。改为 `LEFT JOIN (holdings ⋈ invest_platforms GROUP BY p.account)` 额外下发 `market_value` 与 `total = balance + market_value`，**`balance` 语义保持不变**（仍是可用资金，行内编辑与投资看板照旧用它），只在「总资产 / 资产页账户总额」处改用 `total`。口径与 `_row_to_holding()` 完全一致：`current_price > 0` 用行情价，否则回落 `cost_price`。演示账号实测 528,257.26 → 710,607.26。
+- **核心业务修复②：快捷修改账户余额**。新增 `database.adjust_account_balance()` + `POST /api/accounts/<name>/adjust_balance`：单事务内先算 `diff = new - old`，`UPDATE` 覆盖余额，再按差额**裸插**一条 `records`（收入/支出，金额取绝对值，带用户填的备注与分类）。关键点：**不能直接调 `add_record()`**——它内部走 `_apply_effects` 会再把差额加一次余额，结果变成 `new + diff`。差额绝对值 < 0.01 时不生成 0 元流水。前端在资产页账户行、余额大卡片、「投资看板 → 可用资金」三处提供入口，共用同一个磨砂 Modal（调整后余额 / 是否生成账单 / 备注 / 分类，默认「账户余额修改」+「其他」）。
+- **顽固 UI 屠戮**：① 资产、账单、图表三个页面的左右双栏改为**各自独立滚动**（外层不再整页滚动，`overflow` 下沉到列容器），长列表不再把整页顶得乱跳；② 侧边栏折叠按钮极简重构——删除文字节点与动态 Tooltip 文案逻辑，只留 20px 图标，展开态左对齐 20px、折叠态居中（`#app.is-collapsed` 与兼容类名双套选择器并列）；③ 全局纯蓝按钮统一磨砂化（半透明底 + 描边 + 轻阴影，深色模式单独配色）；④ 修「卡片底部按钮悬空」——`.panel` 改 `flex-direction: column; height:100%` + 末子元素 `margin-top:auto`，并发现真正元凶是 `.panel + .panel { margin-top:16px }` 这条 v0.05 的通用相邻兄弟规则误伤；⑤ 图标实时预览修复（选图后立刻回填，不必保存再刷新）。
+- **后台整合**：`admin.html` 把「AI 反馈与记忆 / AI 记忆库 / AI 纠错与反馈中心」三个 Tab 合并为单一入口「AI 大脑管理」，内部左右分栏（左记忆库、右纠错审计）+ 下方反馈通栏；记忆库补示例与空态引导，反馈列表限高独立滚动。
+- **演示数据构建**：新增 `temp/generate_demo_data.py`，全部走 `database.py` 高层 API（`set_current_user(uid)` 绑定，保证余额联动与 user_id 隔离），生成 `test@test.com / test1234 / 智汇账体验官`：326 条账单（2026-10/11 占 69.9%，覆盖餐饮/交通/购物/娱乐/居住/医疗/人情/工资/兼职/理财 10 类，含真实备注、6 笔转账、4 条借贷）、2 个投资账户与 3 个持仓（005827 / 006679 / 600519）。写库前自动备份，结束后做余额勾稽与「其它用户零变化」断言。
+- **交互解耦**：手动记账（填表保存）与 AI 气泡彻底解绑——成功后只弹普通 Toast「记账成功」，气泡里那个「哪里不对直接说，比如：改成微信」的输入框只属于「AI 快记」，避免用户以为还要再跟 AI 对话一轮；同时把 `refresh()` 收敛为「所有记账入口的最后一步」，尾部强制 `refreshRecentPanel()`，并在记账成功后清空全局搜索词（残留关键词会让近 7 天按关键词过滤，看起来像没刷新）。「近 7 天账单」新增折叠开关（默认展开，状态记 localStorage）。
+- **自测**：真实 Chrome CDP `temp/cdp_v0140_tst5.mjs` **20/20**（默认展开 → 折叠 `display:none` → 恢复；手动记账 0 气泡、Toast 命中、近 7 天 52→53 且能在文本里读到新账；搜索无结果时近 7 天空态、记账后自动清空搜索并恢复列表）；总资产 / 改余额 / 三处按钮几何另有 `cdp_v0140_tst3.mjs` 30/30、`cdp_invest_cash.mjs` 13/13、`cdp_bigger_adjust.mjs` 15/15。`node --check` / `py_compile` 全过，测试账单按唯一备注清理、演示数据零污染。
+- **缓存**：两处 `CACHE_NAME` → `ai-accounting-v0.14.0-tst5`，模板与 manifest 全部 `?v=0.14.0-tst5`，`APP_VERSION_FALLBACK` = `v0.14.0-TST`。
+- **踩坑**：见 `docs/bugs-and-solutions/05~09`——SW 双份版本号不同步、Bootstrap Tooltip 吞 `title`、`[hidden]` 被 `display:flex!important` 压过、动态 DOM 让 `div:last-child` 贴底失效、手动记账误触 AI 气泡。

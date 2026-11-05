@@ -55,7 +55,7 @@ flask>=3.0
 
 ## 五、踩坑与结论
 
-- **`python` 命令不可用**：装 Python 之前，`python` 指向 `C:\Users\19370\AppData\Local\Microsoft\WindowsApps\python.exe` 这个商店占位符，执行直接报 `Python was not found`。详见 `docs/bugs-and-solutions.md` 坑 3。
+- **`python` 命令不可用**：装 Python 之前，`python` 指向 `C:\Users\19370\AppData\Local\Microsoft\WindowsApps\python.exe` 这个商店占位符，执行直接报 `Python was not found`。详见 `../bugs-and-solutions/00总览-早期踩坑集（坑1-6）.md` 坑 3。
 - **`curl` 不是 curl**：Windows PowerShell 里 `curl` 是 `Invoke-WebRequest` 的别名，不支持 `-X`，写测试命令必须用 `curl.exe`。
 - **`Invoke-WebRequest` 在本环境会抛异常**：非交互模式下 POST 报「Windows PowerShell 处于非交互模式」，所以后续所有接口验证统一走 `curl.exe`。
 - 结论：先把「能访问、不乱码」这件事钉死，后面接数据库、接前端才有稳定的地板。
