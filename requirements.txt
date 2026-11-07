@@ -4,3 +4,14 @@ python-dotenv>=1.0
 PyJWT>=2.8
 pandas>=2.0
 openpyxl>=3.1
+# --- v0.14.1 商业化重构新增 ---
+# SQLAlchemy：引擎 / 连接池 / ORM 映射（声明式模型只映射已存在的表，不建表）
+SQLAlchemy>=2.0,<3
+# Flask-Caching：SimpleCache，缓存统计与近 7 天图表
+Flask-Caching>=2.1
+# PyMySQL：mysql+pymysql:// 驱动（SQLAlchemy 与 db_compat 方言层共用）
+PyMySQL>=1.1
+# Werkzeug：security.py 的加盐哈希
+Werkzeug>=3.0
+# Gunicorn：容器生产入口，必须 -w 1（见 Dockerfile 注释）
+gunicorn>=21.2

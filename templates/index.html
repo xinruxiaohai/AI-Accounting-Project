@@ -7,17 +7,17 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json?v=0.14.0-tst5">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.14.0-tst5">
+  <link rel="manifest" href="/manifest.json?v=0.15.0-mobile1">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.0-mobile1">
   <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.14.0-tst5">
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.0-mobile1">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.14.0-tst5">
+  <link rel="stylesheet" href="/static/style.css?v=0.15.0-mobile1">
 </head>
 <body>
 
@@ -1545,6 +1545,18 @@
               </button>
             </div>
 
+            <!-- v0.15.0：用户端工单历史。后端 GET /api/user-feedback 就绪后自动读全量；
+                 接口未上线时降级到本机「我提交过的反馈」缓存，页面不报错、不空白。 -->
+            <div class="help-block" id="help-block-tickets">
+              <div class="ticket-head">
+                <h4>我的工单</h4>
+                <button class="btn btn-outline-secondary btn-sm ticket-refresh" type="button"
+                        id="feedback-ticket-refresh">刷新</button>
+              </div>
+              <p class="ticket-note">你提交的反馈和处理进度都在这里。</p>
+              <div class="ticket-list" id="feedback-ticket-list" role="list" aria-live="polite"></div>
+            </div>
+
             <div class="help-block" id="help-block-faq">
               <h4>快捷帮助</h4>
               <div id="help-faq-list" aria-label="常见问题列表"></div>
@@ -2414,13 +2426,13 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.14.0-tst5"></script>
-<script src="/static/access-guard.js?v=0.14.0-tst5"></script>
+<script src="/static/auth-v012.js?v=0.15.0-mobile1"></script>
+<script src="/static/access-guard.js?v=0.15.0-mobile1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.14.0-tst5"></script>
-<script src="/static/charts-v013.js?v=0.14.0-tst5"></script>
+<script src="/static/script.js?v=0.15.0-mobile1"></script>
+<script src="/static/charts-v013.js?v=0.15.0-mobile1"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.14.0-tst5"></script>
+<script src="/static/invest-v0133.js?v=0.15.0-mobile1"></script>
 
 </body>
 </html>

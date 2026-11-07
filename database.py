@@ -9,8 +9,14 @@ import sqlite3
 import time
 from pathlib import Path
 
-# 数据库文件固定在 database.py 同目录下，这样不管从哪个目录启动 app.py 都找得到
-DB_PATH = Path(__file__).resolve().parent / "records.db"
+import sqlalchemy_db
+
+# 数据库文件固定在 database.py 同目录下，这样不管从哪个目录启动 app.py 都找得到。
+# ZHZ_SQLITE_PATH 是 v0.14.1 加的 QA 隔离开关：设了以后所有 SQLite 读写都走副本，
+# 自动化测试绝不碰主库（与「测试须隔离运行」的工作纪律一致）。
+DB_PATH = Path(
+    os.getenv("ZHZ_SQLITE_PATH") or (Path(__file__).resolve().parent / "records.db")
+).resolve()
 
 # v0.13.1：迁移前的 DB 备份目录。**必须放在项目目录之外**（HANDOFF 红线：测试产物不进项目目录）
 MIGRATION_BACKUP_DIR = Path(r"D:\Project\temp\db-backup")
@@ -142,7 +148,20 @@ class RecordError(Exception):
 
 
 def get_conn():
-    """开一个新连接。sqlite3 的连接不能跨线程共用，所以每次用完就关。"""
+    """开一个新连接。sqlite3 的连接不能跨线程共用，所以每次用完就关。
+
+    v0.14.1 商业化重构：连接层已交给 SQLAlchemy Engine 接管。
+      * 配了 DB_URI（mysql+pymysql://…）→ 返回 SQLAlchemy 连接池驱动的
+        sqlite3 语义连接（由 db_compat 完成 MySQL 方言翻译与 Row 模拟）；
+      * 配了旧的 DB_ENGINE / DB_HOST → 返回 db_compat 的 MySQL 连接；
+      * 两者都没配 → 返回原生 sqlite3.connect()，行为与 v0.14.0 逐字节一致。
+
+    下面 6697 行业务 SQL 一条都不改：多用户隔离、平账/转账余额联动、分类迁移
+    全部保持原样，这是「原有业务零破坏 + 表结构/外键/索引完全不变」红线的落点。
+    """
+    conn = sqlalchemy_db.get_conn()
+    if conn is not None:
+        return conn
     conn = sqlite3.connect(DB_PATH)
     # 打开 row_factory 后，查询结果可以用 row["amount"] 按列名取，不用记下标
     conn.row_factory = sqlite3.Row
@@ -1677,8 +1696,94 @@ def consume_email_code(email, purpose):
         conn.close()
 
 
+def _ensure_feedback_ticket_schema(conn):
+    """v0.14.1 工单系统：给 user_feedback 幂等补两列。
+
+    只 ADD COLUMN，不改任何既有列的类型 / 默认值，不动任何外键与索引。
+    PRAGMA table_info 在 MySQL 下由 db_compat 翻译成 information_schema 查询，
+    所以这套迁移在双引擎上都能跑；重复执行不会报错。
+
+    为什么是 user_feedback 而不是 feedback：项目里根本没有叫 feedback 的表，
+    真正承载「用户提交问题单 + 后台查看」的是 user_feedback（/api/user-feedback
+    与 /api/admin/feedback 用的就是它）；ai_feedback 是 AI 解析纠错样本，语义不同。
+    """
+    columns = [
+        row["name"] for row in conn.execute("PRAGMA table_info(user_feedback)")
+    ]
+    if "status" not in columns:
+        conn.execute(
+            "ALTER TABLE user_feedback "
+            "ADD COLUMN status VARCHAR(20) DEFAULT 'pending'"
+        )
+        # 老行在 SQLite 里会拿到默认值；MySQL 侧显式兜一次，杜绝 NULL 状态
+        conn.execute(
+            "UPDATE user_feedback SET status = 'pending' "
+            "WHERE status IS NULL OR status = ''"
+        )
+        print("[v0.14.1] user_feedback 已补列 status", flush=True)
+    if "admin_reply" not in columns:
+        # 不加 DEFAULT：MySQL 8.0 的 TEXT 列不接受字面量默认值，读侧统一 COALESCE
+        conn.execute("ALTER TABLE user_feedback ADD COLUMN admin_reply TEXT")
+        print("[v0.14.1] user_feedback 已补列 admin_reply", flush=True)
+
+
+_MYSQL_REQUIRED_TABLES = (
+    "users", "records", "accounts", "categories", "debts", "contacts",
+    "notifications", "user_feedback", "admin_config", "app_settings",
+    "ai_memory", "ai_feedback", "ai_correction_log", "system_tips",
+    "icons", "user_icon_settings", "import_history", "login_attempts",
+    "access_sessions", "email_verifications", "invest_platforms",
+    "holdings", "dca_plans", "recurring_templates", "schema_migrations",
+)
+
+
+def _init_db_mysql_schema_guard():
+    """MySQL 启动分支：只校验 + 幂等补列，**绝不生成 DDL**。
+
+    「表结构 / 外键关系 / 索引完全不变」是防崩红线。database.init_db() 里那些
+    CREATE TABLE 是 SQLite 方言（TEXT DEFAULT ''、AUTOINCREMENT、
+    COALESCE() 函数索引……），直接翻译给 MySQL 会建出一张「差一点」的表：
+    MySQL 8.0 的 TEXT 不允许字面量默认值、函数索引要双层括号，凭猜测改写
+    等于拿线上账目赌。所以线上库必须先用经过核对的迁移脚本建好，本函数只负责：
+      1. 校验核心表齐全，缺表立刻快速失败（fail fast，不静默降级成 SQLite）；
+      2. 幂等补齐 v0.14.1 工单系统的两列；
+      3. 打印 MySQL 版本，方便排障。
+    """
+    conn = get_conn()
+    try:
+        version = ""
+        try:
+            row = conn.execute("SELECT VERSION() AS v").fetchone()
+            version = row["v"] if row else ""
+        except Exception:  # noqa: BLE001 - 版本查询失败不影响主流程
+            version = "unknown"
+        print("[v0.14.1] MySQL 引擎已连接，版本：%s" % version, flush=True)
+
+        rows = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+        existing = {row["name"] for row in rows}
+        missing = [t for t in _MYSQL_REQUIRED_TABLES if t not in existing]
+        if missing:
+            raise RuntimeError(
+                "MySQL 库缺少 %d 张表（%s）。为保证表结构/外键/索引与现有 SQLite 库"
+                "完全一致，请先执行经过核对的建表与数据迁移脚本，再启动 Flask；"
+                "本程序不会自动生成 MySQL DDL，也不会静默回退到 SQLite。"
+                % (len(missing), ", ".join(missing))
+            )
+        print("[v0.14.1] MySQL 表结构校验通过：%d 张表齐全" % len(existing), flush=True)
+
+        with conn:
+            _ensure_feedback_ticket_schema(conn)
+    finally:
+        conn.close()
+
+
 def init_db():
     """建表 + 兼容旧库升级。反复启动不会报错，旧库也不会丢数据。"""
+    if sqlalchemy_db.is_mysql_runtime():
+        _init_db_mysql_schema_guard()
+        return
     conn = get_conn()
     # 这一轮是不是刚补的 sort_order 列：只有刚补时才按旧顺序回填，
     # 否则每次启动都会把用户拖拽出来的顺序重置回「按 id / rowid」
@@ -2118,6 +2223,10 @@ def init_db():
         # v0.13.4：邮箱验证码表（幂等）。挂在投资迁移之后、第二段 DML 之前。
         with conn:
             _migrate_email_verification(conn)
+
+        # v0.14.1 工单系统：status / admin_reply 两列（幂等 ADD COLUMN，独占事务段）
+        with conn:
+            _ensure_feedback_ticket_schema(conn)
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
@@ -4506,8 +4615,12 @@ def purge_record(record_id):
         conn.close()
 
 
-def get_statistics():
+def get_statistics(user_id=None):
     """总览：总收入、总支出、总余额、待报销 / 已报销。
+
+    v0.14.1：新增显式 user_id 形参，专门给缓存层用 —— 缓存 key 与查库用同一个
+    uid，杜绝「缓存按 A 的 key 命中、SQL 却按请求上下文读 B」这种串号。
+    不传时仍回落到 contextvar，老调用方一行都不用改。
 
     - 总收入 / 总支出：按 type 分别求和，COALESCE 保证没有记录时是 0 而不是 NULL
     - 总余额：直接 SUM(accounts.balance)，账户表才是余额的唯一真相
@@ -4515,21 +4628,22 @@ def get_statistics():
       type / is_reimbursable / deleted_at 过滤，等于把全库所有用户的报销金额加在一起，
       新账号会看到老用户的钱、点开明细又是空的（口径对不上）。
     """
+    uid = _resolve_user_id(user_id)
     conn = get_conn()
     try:
         income_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
             "WHERE user_id = ? AND type = 'income' AND deleted_at IS NULL",
-            (_uid(),),
+            (uid,),
         ).fetchone()["total"]
         expense_total = conn.execute(
             "SELECT COALESCE(SUM(amount), 0) AS total FROM records "
             "WHERE user_id = ? AND type = 'expense' AND deleted_at IS NULL",
-            (_uid(),),
+            (uid,),
         ).fetchone()["total"]
         balance_total = conn.execute(
             "SELECT COALESCE(SUM(balance), 0) AS total FROM accounts WHERE user_id = ?",
-            (_uid(),),
+            (uid,),
         ).fetchone()["total"]
         reimb = conn.execute(
             "SELECT "
@@ -4538,7 +4652,7 @@ def get_statistics():
             "FROM records "
             "WHERE user_id = ? AND type = 'expense' AND is_reimbursable = 1 "
             "  AND deleted_at IS NULL",
-            (_uid(),),
+            (uid,),
         ).fetchone()
     finally:
         conn.close()
@@ -4550,6 +4664,49 @@ def get_statistics():
         "balance_total": round(balance_total, 2),
         "reimbursement_pending": round(reimb["pending"], 2),
         "reimbursement_done": round(reimb["done"], 2),
+    }
+
+
+def recent_7_days(user_id=None):
+    """近 7 天收支趋势（图表数据）：按天返回 income / expense，缺天补 0。
+
+    - 强制 user_id 过滤，多用户隔离不因加缓存而破防；
+    - deleted_at IS NULL；transfer 不计入收支（与 get_statistics 口径一致）；
+    - 日期区间在 Python 算好后当参数传，不用 SQLite 的 date('now','localtime')，
+      7 个日期桶也在内存补齐，避免 SQL 造日期序列的方言差异，SQLite / MySQL 通吃。
+    """
+    uid = _resolve_user_id(user_id)
+    today = datetime.date.today()
+    days = [today - datetime.timedelta(days=offset) for offset in range(6, -1, -1)]
+    start, end = days[0].isoformat(), days[-1].isoformat()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT date, type, COALESCE(SUM(amount), 0) AS total "
+            "  FROM records "
+            " WHERE user_id = ? AND deleted_at IS NULL "
+            "   AND type IN ('income', 'expense') AND date >= ? AND date <= ? "
+            " GROUP BY date, type",
+            (uid, start, end),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    totals = {}
+    for row in rows:
+        key = (str(row["date"])[:10], row["type"])
+        totals[key] = round(float(row["total"] or 0), 2)
+    return {
+        "from": start,
+        "to": end,
+        "days": [
+            {
+                "date": day.isoformat(),
+                "income": totals.get((day.isoformat(), "income"), 0.0),
+                "expense": totals.get((day.isoformat(), "expense"), 0.0),
+            }
+            for day in days
+        ],
     }
 
 
@@ -6569,6 +6726,13 @@ def _row_to_user_feedback(row):
         "contact_type": row["contact_type"] or "",
         "contact_info": row["contact_info"] or "",
         "created_at": row["created_at"] or "",
+        # v0.14.1 工单：老 SELECT 没带这两列时按默认值兜底，绝不 KeyError
+        "status": (
+            (row["status"] if "status" in row.keys() else "pending") or "pending"
+        ),
+        "admin_reply": (
+            (row["admin_reply"] if "admin_reply" in row.keys() else "") or ""
+        ),
     }
 
 
@@ -6682,7 +6846,8 @@ def list_user_feedback():
         rows = conn.execute(
             "SELECT f.id, f.user_id, f.email, f.nickname, f.issue_description, "
             "       f.occur_date, f.image_path, f.contact_type, f.contact_info, "
-            "       f.created_at, u.email AS user_email, u.nickname AS user_nickname "
+            "       f.created_at, f.status, f.admin_reply, "
+            "       u.email AS user_email, u.nickname AS user_nickname "
             "  FROM user_feedback f LEFT JOIN users u ON u.id = f.user_id "
             " ORDER BY f.created_at DESC, f.id DESC"
         ).fetchall()
@@ -6693,5 +6858,55 @@ def list_user_feedback():
             item["nickname"] = row["nickname"] or row["user_nickname"] or ""
             items.append(item)
         return items
+    finally:
+        conn.close()
+
+
+def list_my_feedback(user_id, limit=200):
+    """v0.14.1 工单系统：用户查「自己的」反馈与官方回复。
+
+    强制 user_id 过滤，管理员也不能借这个接口看别人的单；SQLAlchemy 未安装时
+    sqlalchemy_db.list_my_feedback() 会回落到这个原生实现。
+    """
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, user_id, email, nickname, issue_description, occur_date, "
+            "       image_path, contact_type, contact_info, created_at, "
+            "       status, admin_reply "
+            "  FROM user_feedback WHERE user_id = ? "
+            " ORDER BY created_at DESC, id DESC LIMIT ?",
+            (uid, int(limit)),
+        ).fetchall()
+        return [_row_to_user_feedback(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def reply_user_feedback(feedback_id, reply, status="replied"):
+    """v0.14.1 工单系统：管理员写回复。工单不存在返回 None。
+
+    只 UPDATE 两个工单字段，不碰 issue_description / user_id 等原始内容，
+    也不触发任何账单 / 余额逻辑。SQLAlchemy 未安装时作为 ORM 的降级实现。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE user_feedback SET admin_reply = ?, status = ? WHERE id = ?",
+                (reply, status, int(feedback_id)),
+            )
+            hit = cursor.rowcount > 0
+        if not hit:
+            return None
+        row = conn.execute(
+            "SELECT id, user_id, email, nickname, issue_description, occur_date, "
+            "       image_path, contact_type, contact_info, created_at, "
+            "       status, admin_reply "
+            "  FROM user_feedback WHERE id = ?",
+            (int(feedback_id),),
+        ).fetchone()
+        return _row_to_user_feedback(row) if row else None
     finally:
         conn.close()

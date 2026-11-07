@@ -10777,6 +10777,8 @@ async function init() {
   bindFeedbackForm();
   // v0.14.0-FIX：意见反馈改为磨砂 Modal，独立打开/关闭
   bindFeedbackModal();
+  // v0.15.0：用户端工单历史（帮助与反馈 Tab）
+  bindFeedbackTickets();
   initV0116Ui();
   initTooltips();
   initDateFields();
@@ -13116,8 +13118,11 @@ async function submitFeedback(event) {
       uid: user && user.id !== undefined && user.id !== null ? user.id : "",
     };
     // v0.14.0：用户反馈走独立接口（老的 /api/feedback 是 v0.10 AI 反馈，body.raw_text，不能复用）
-    await api("/api/user-feedback", jsonOptions("POST", payload));
+    const submitted = await api("/api/user-feedback", jsonOptions("POST", payload));
     resetFeedbackForm();
+    // v0.15.0：新提交的工单立刻进历史列表，状态默认「待处理」
+    cacheSubmittedTicket(issue, submitted);
+    loadFeedbackTickets();
     toast("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
     feedbackStatus("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
   } catch (error) {
@@ -13250,4 +13255,263 @@ function bindFeedbackModal() {
       first.focus();
     }
   });
+}
+
+/* =====================================================================
+ * v0.15.0：用户端工单历史（我的 → 意见反馈）
+ *
+ * 契约：GET /api/user-feedback → { feedback: [...] }，每条含
+ *   issue_description / created_at / status / admin_reply。
+ * 后端暂未上线 GET（405/404）时静默降级到本机「我提交过的反馈」缓存，
+ * 页面不弹错、不空白；按钮文案按界面口吻指引下一步。
+ * 所有用户内容一律 textContent 渲染，绝不拼接 innerHTML。
+ * ===================================================================== */
+const FEEDBACK_TICKET_CACHE_KEY = "zh_feedback_tickets_v1";
+let feedbackTicketLoading = false;
+let feedbackTicketApiUsable = true;
+
+/** 缓存按账号隔离：换号登录后不会看到上一个人的工单。
+ *  必须优先读 dshAuth 的登录会话（localStorage，一登录就恒定），
+ *  不能用 state.user —— 它在 /api/auth/me 回来之前是空的，
+ *  会让缓存键从 anonymous 漂到真实 uid，历史工单凭空「消失」。 */
+function feedbackTicketScope() {
+  let user =
+    window.dshAuth && typeof window.dshAuth.user === "function"
+      ? window.dshAuth.user()
+      : null;
+  if (!user || !(user.id || user.email)) {
+    user = state.user;
+  }
+  user = user || {};
+  return String(user.id || user.email || "anonymous");
+}
+
+function readCachedTickets() {
+  try {
+    const raw = window.localStorage.getItem(FEEDBACK_TICKET_CACHE_KEY);
+    const box = raw ? JSON.parse(raw) : {};
+    const list = box && box[feedbackTicketScope()];
+    return Array.isArray(list) ? list : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function writeCachedTickets(tickets) {
+  try {
+    const raw = window.localStorage.getItem(FEEDBACK_TICKET_CACHE_KEY);
+    let box = raw ? JSON.parse(raw) : {};
+    if (!box || typeof box !== "object" || Array.isArray(box)) {
+      box = {};
+    }
+    box[feedbackTicketScope()] = tickets.slice(0, 30);
+    window.localStorage.setItem(FEEDBACK_TICKET_CACHE_KEY, JSON.stringify(box));
+  } catch (error) {
+    // 隐私模式 / 存储配额满：缓存不可用不影响在线查看
+  }
+}
+
+/** 兼容后端可能的字段命名；同时兼容自己写进缓存的归一化结构（幂等）。
+ *  漏掉 created / resolved 会让二次归一化把时间戳和状态抹掉，
+ *  列表只剩「刚刚提交」，这是实测踩到的坑。 */
+function normalizeTicket(raw) {
+  const item = raw && typeof raw === "object" ? raw : {};
+  const issue = String(
+    item.issue_description || item.content || item.issue || item.message || item.description || ""
+  ).trim();
+  if (!issue) {
+    return null;
+  }
+  const created = String(
+    item.created_at || item.createdAt || item.created || item.date || item.submit_time || ""
+  ).trim();
+  const reply = String(
+    item.admin_reply || item.reply || item.reply_content || item.adminReply || item.answer || ""
+  ).trim();
+  const rawStatus = String(item.status || item.state || item.resolve_status || "").trim().toLowerCase();
+  const explicitlyResolved =
+    item.is_resolved === true ||
+    item.resolved === true ||
+    /^(resolved|closed|done|finished|replied|handled|已解决|已回复|已处理|已完成|2|true)$/.test(rawStatus);
+  return {
+    id: item.id !== undefined && item.id !== null ? item.id : "",
+    issue: issue,
+    created: created,
+    reply: reply,
+    // 没给 status 但有官方回复，按已解决处理；否则一律待处理
+    resolved: explicitlyResolved || (!rawStatus && !!reply),
+  };
+}
+
+/** 远端优先去重（远端带状态与官方回复），再按提交时间倒序 */
+function mergeFeedbackTickets(remote, cached) {
+  const seen = {};
+  const out = [];
+  remote.concat(cached).forEach(function (ticket) {
+    if (!ticket) {
+      return;
+    }
+    const key = ticket.issue.slice(0, 80) + "|" + String(ticket.created || "").slice(0, 10);
+    if (seen[key]) {
+      return;
+    }
+    seen[key] = true;
+    out.push(ticket);
+  });
+  out.sort(function (a, b) {
+    return String(b.created || "").localeCompare(String(a.created || ""));
+  });
+  return out.slice(0, 30);
+}
+
+function feedbackNowStamp() {
+  const now = new Date();
+  const pad = function (n) {
+    return String(n).padStart(2, "0");
+  };
+  return (
+    now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate()) + " " +
+    pad(now.getHours()) + ":" + pad(now.getMinutes()) + ":" + pad(now.getSeconds())
+  );
+}
+
+/** 提交成功后先落一条本地工单，用户回到「我的工单」立刻能看到「待处理」 */
+function cacheSubmittedTicket(issue, response) {
+  const data = (response && response.feedback) || response || {};
+  const ticket = normalizeTicket({
+    id: data.id || "",
+    issue_description: issue,
+    created_at: data.created_at || feedbackNowStamp(),
+    status: data.status || "pending",
+    admin_reply: data.admin_reply || "",
+  });
+  if (!ticket) {
+    return;
+  }
+  writeCachedTickets(mergeFeedbackTickets([ticket], readCachedTickets().map(normalizeTicket).filter(Boolean)));
+}
+
+function renderFeedbackTickets(tickets, kind) {
+  const list = $("feedback-ticket-list");
+  if (!list) {
+    return;
+  }
+  list.textContent = "";
+  if (!tickets.length) {
+    const empty = document.createElement("div");
+    empty.className = "ticket-empty" + (kind === "error" ? " is-error" : "");
+    empty.textContent =
+      kind === "degraded"
+        ? "暂时读不到历史工单；你新提交的反馈会显示在这里"
+        : kind === "error"
+          ? "工单加载失败，点「刷新」再试一次"
+          : "还没有提交过反馈，点上面的入口写下第一条吧";
+    list.appendChild(empty);
+    return;
+  }
+  tickets.forEach(function (ticket) {
+    const card = document.createElement("article");
+    card.className = "ticket-card";
+    card.setAttribute("role", "listitem");
+
+    const head = document.createElement("div");
+    head.className = "ticket-card-head";
+    const time = document.createElement("time");
+    time.className = "ticket-time";
+    time.textContent = ticket.created || "刚刚提交";
+    const badge = document.createElement("span");
+    badge.className = "ticket-status " + (ticket.resolved ? "is-resolved" : "is-pending");
+    badge.textContent = ticket.resolved ? "已解决" : "待处理";
+    head.appendChild(time);
+    head.appendChild(badge);
+    card.appendChild(head);
+
+    const issue = document.createElement("p");
+    issue.className = "ticket-card-issue";
+    issue.textContent = ticket.issue;
+    card.appendChild(issue);
+
+    if (ticket.reply) {
+      const reply = document.createElement("p");
+      reply.className = "ticket-reply";
+      const label = document.createElement("strong");
+      label.textContent = "官方回复：";
+      const text = document.createElement("span");
+      text.textContent = ticket.reply;
+      reply.appendChild(label);
+      reply.appendChild(text);
+      card.appendChild(reply);
+    }
+    list.appendChild(card);
+  });
+}
+
+/**
+ * 拉工单：先渲染本地缓存（打开弹窗不白屏），再尝试后端。
+ * force=true 用于「刷新」按钮 / 验收注入，即使上次接口不可用也再试一次。
+ */
+async function loadFeedbackTickets(force) {
+  if (feedbackTicketLoading) {
+    return { ok: false, reason: "busy" };
+  }
+  feedbackTicketLoading = true;
+  const cached = readCachedTickets().map(normalizeTicket).filter(Boolean);
+  let remote = null;
+  if (feedbackTicketApiUsable || force) {
+    try {
+      const data = await api("/api/user-feedback");
+      const rows = data && (data.feedback || data.tickets || data.items || data.list);
+      if (Array.isArray(rows)) {
+        remote = rows.map(normalizeTicket).filter(Boolean);
+        feedbackTicketApiUsable = true;
+      }
+    } catch (error) {
+      // 405 / 404 / 断网：接口还没支持或暂时不可用，静默降级
+      feedbackTicketApiUsable = false;
+    }
+  }
+  const finalTickets =
+    remote !== null ? mergeFeedbackTickets(remote, cached) : cached;
+  if (remote !== null) {
+    writeCachedTickets(finalTickets);
+  }
+  const kind = !finalTickets.length && remote === null && !feedbackTicketApiUsable ? "degraded" : "";
+  renderFeedbackTickets(finalTickets, kind);
+  feedbackTicketLoading = false;
+  return {
+    ok: true,
+    count: finalTickets.length,
+    source: remote !== null ? "api" : "cache",
+  };
+}
+window.loadFeedbackTickets = loadFeedbackTickets;
+
+function bindFeedbackTickets() {
+  const list = $("feedback-ticket-list");
+  if (!list) {
+    return;
+  }
+  renderFeedbackTickets(readCachedTickets().map(normalizeTicket).filter(Boolean), "");
+  const refresh = $("feedback-ticket-refresh");
+  if (refresh) {
+    refresh.addEventListener("click", function () {
+      loadFeedbackTickets(true);
+    });
+  }
+  const helpTab = document.querySelector('[data-settings-tab="help"]');
+  if (helpTab) {
+    helpTab.addEventListener("click", function () {
+      loadFeedbackTickets();
+    });
+  }
+  const settingsModal = $("settings-modal");
+  if (settingsModal) {
+    settingsModal.addEventListener("shown.bs.modal", function () {
+      const pane = $("settings-pane-help");
+      if (pane && !pane.hidden) {
+        loadFeedbackTickets();
+      }
+    });
+  }
+  loadFeedbackTickets();
 }

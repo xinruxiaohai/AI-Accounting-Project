@@ -1,0 +1,77 @@
+# v0.14.1 商业化编排：Flask 应用 + MySQL 8.0
+#
+# 启动：docker compose up -d --build
+# 停止：docker compose down          （加 -v 才会删掉数据库数据卷）
+#
+# 重要前置（务必先读）
+# --------------------
+# 1) 现有云端生产库是 SQLite（模块三用 sqlite3 查 users 表），MySQL 是本次新增的
+#    商业化部署形态。为保证「表结构 / 外键 / 索引完全不变」，程序在 MySQL 下
+#    **不会自动生成 DDL**：database.init_db() 走 _init_db_mysql_schema_guard()，
+#    只校验表是否齐全并幂等补列。全新 MySQL 库请先用经过核对的建表 + 数据迁移
+#    脚本初始化，再启动 web；缺表时会快速失败并打印缺哪些表，绝不静默降级。
+# 2) 密码含 @ : / # ? 等特殊字符时，DB_URI 里必须做 URL 编码（%40 / %3A …），
+#    否则 SQLAlchemy 的 URL 解析会把它当成 host / port。
+# 3) 请在项目根目录 .env 中配置 JWT_SECRET、MYSQL_ROOT_PASSWORD、MYSQL_PASSWORD
+#    等真实值；下面带 CHANGE_ME 的默认值仅供本地试跑，禁止上生产。
+# 4) MySQL 选 8.0（要求 >= 8.0.13）：schema 用到表达式默认值与函数索引，
+#    5.7 不支持，硬上会在建表阶段炸掉。
+version: "3.8"
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: zhihuizhang-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+08:00
+      - --sql-mode=STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-CHANGE_ME_root_2026}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-zhihuizhang}
+      MYSQL_USER: ${MYSQL_USER:-zhihuizhang}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-CHANGE_ME_app_2026}
+      TZ: Asia/Shanghai
+    # 只绑本机，避免把 3306 暴露到公网；web 走内部网络用服务名 db 连接
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  web:
+    build: .
+    container_name: zhihuizhang-web
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      # SQLAlchemy 连接串；host 用 compose 服务名 db，不是 127.0.0.1
+      DB_URI: mysql+pymysql://${MYSQL_USER:-zhihuizhang}:${MYSQL_PASSWORD:-CHANGE_ME_app_2026}@db:3306/${MYSQL_DATABASE:-zhihuizhang}?charset=utf8mb4
+      # 生产强制关闭 SQLite 降级：连不上 MySQL 必须立刻失败，不能把账写进容器内的 sqlite
+      ALLOW_SQLITE_FALLBACK: "0"
+      DB_ENGINE: mysql
+      DB_POOL_SIZE: "10"
+      DB_MAX_OVERFLOW: "20"
+      JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_SET_JWT_SECRET_IN_ENV}
+      APP_VERSION: ${APP_VERSION:-v0.14.1}
+      CLOUD_STORAGE_TYPE: ${CLOUD_STORAGE_TYPE:-local}
+      TZ: Asia/Shanghai
+    volumes:
+      # 用户上传的账单截图 / 头像持久化，容器重建不丢
+      - ./static/uploads:/app/static/uploads
+
+volumes:
+  mysql_data:

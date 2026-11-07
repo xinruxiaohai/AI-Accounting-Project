@@ -1,0 +1,52 @@
+# 虚拟环境（镜像内由 pip 重建，绝不能把 Windows 的 venv 拷进 Linux 镜像）
+venv/
+.venv/
+env/
+ENV/
+
+# 临时文件 / 测试产物 / 备份
+temp/
+backup/
+*.log
+*.tmp
+
+# 本地数据库与运行时密钥（生产走 MySQL；这些绝不能进镜像）
+records.db
+accounting.db
+data.db
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
+*.bak_*
+.env
+.env.*
+.jwt_secret
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Git / 编辑器 / 系统垃圾
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 缓存代际号是运行时产物，不进镜像也不进 Git
+.cache_generation
+.cache_generation.tmp.*
+
+# 用户上传内容（compose 用 volume 挂载，不打进镜像）
+static/uploads/
+
+# 文档与本地脚本，镜像里用不到
+docs/
+README.md
+*.md

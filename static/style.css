@@ -7617,17 +7617,14 @@ html.access-locked body {
   display: none !important;
 }
 
-/* PWA 顶栏遮挡兜底：独立窗口 / 窗口控件叠加时，给系统按钮留出安全区 */
-@media (display-mode: standalone) {
-  .topbar {
-    padding-right: 140px !important;
-    padding-top: 30px !important;
-    height: auto !important;
-    min-height: calc(var(--topbar-h) + 30px);
-  }
-}
-
-@media (display-mode: window-controls-overlay) {
+/* PWA 顶栏遮挡兜底：只有桌面「窗口控件叠加」才需要给系统按钮留位。
+ * v0.15.0 修复：原来写成无屏宽限定的 @media (display-mode: standalone)，
+ * 于是 iPhone 添加到桌面后（真 standalone）390px 视口也被塞进 140px 右内边距，
+ * 顶栏 6 个动作被挤爆、内容区被顶出横向溢出。手机端独立窗口根本没有窗口控件，
+ * 正确做法是只用 env(safe-area-inset-top) 让开状态栏（见文件末尾 PWA 段）。
+ * PWA-STANDALONE-DESKTOP-ONLY
+ */
+@media (min-width: 769px) and (display-mode: window-controls-overlay) {
   .topbar {
     padding-right: 140px !important;
     padding-top: 30px !important;
@@ -14756,4 +14753,272 @@ body.is-sidebar-collapsed #sidebar-toggle {
 /* v0.14.0-TST 安全加固：通知正文改纯文本渲染，保留原有分行排版 */
 .notice-content {
   white-space: pre-line;
+}
+
+/* ==================================================================
+ * v0.15.0 商业化前端升级：移动端强约束 / 工单历史 / PWA 全屏安全区
+ *
+ * 放在文件末尾是刻意的：本项目历史坑是「CSS 同权重靠文件末尾覆盖」，
+ * 旧断点里散落的双列网格、`#page-profile .profile-grid` 的 `!important` 双列、
+ * `.form-control` 的 14px、以及未声明 nowrap 的按钮，都在这里一次性收口。
+ * 视觉 token 全部复用既有 --surface / --line / --brand-blue / --warn /
+ * --color-income-*，不引入第二套配色；工单状态色直接借财务语义色，
+ * 「待处理」= 警示琥珀、「已解决」= 收入绿，和整站语义一致。
+ * ================================================================== */
+
+/* ---------- 1. 用户端工单历史（我的 → 意见反馈） ---------- */
+.ticket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.ticket-head h4 {
+  margin: 0;
+}
+.ticket-refresh {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.ticket-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.ticket-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 300px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.ticket-card {
+  flex: 0 0 auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.ticket-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ticket-time {
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ticket-status {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ticket-status.is-pending {
+  color: var(--warn);
+  background: rgba(217, 119, 6, 0.12);
+}
+.ticket-status.is-resolved {
+  color: var(--color-income-strong);
+  background: var(--color-income-soft);
+}
+[data-theme="dark"] .ticket-status.is-pending {
+  background: rgba(251, 191, 36, 0.14);
+}
+.ticket-card-issue {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ticket-reply {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-left: 3px solid var(--brand-blue);
+  border-radius: 0 8px 8px 0;
+  background: var(--brand-soft);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-main);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ticket-reply strong {
+  color: var(--brand-blue-ink);
+  font-weight: 600;
+}
+.ticket-empty {
+  padding: 18px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.ticket-empty.is-error {
+  color: var(--color-expense-strong);
+}
+.ticket-refresh:focus-visible,
+.ticket-card:focus-visible {
+  outline: 2px solid var(--brand-blue);
+  outline-offset: 2px;
+}
+
+/* ---------- 2. ≤768px：移动端最后一道统一覆盖 ---------- */
+@media (max-width: 768px) {
+  /* 2.1 侧边栏彻底让位给底部 Tab Bar（含旧版折叠态残留） */
+  .sidebar {
+    display: none !important;
+  }
+  .mobile-tabbar {
+    display: grid !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  /* 2.2 整页永不左右晃；溢出只在自己的容器里消化 */
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  html,
+  body {
+    max-width: 100%;
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
+  }
+  .app,
+  .main,
+  .content {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .table-responsive,
+  .bills-table-wrap {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  /* 2.3 所有双列 / 多列卡片强制单列垂直堆叠。
+     刻意不收编日历 7 列、图标选择、相册缩略图这类「控件网格」——
+     它们本来就用 minmax(0,1fr) 自适应，不是卡片，压成单列反而不可用。 */
+  .dash-grid,
+  .charts-grid,
+  .assets-split,
+  .bills-layout,
+  .chart-shell,
+  .profile-grid,
+  #page-profile .profile-grid,
+  .account-cards,
+  .assets-left .account-cards,
+  .asset-stats,
+  .asset-mini-grid,
+  .bills-filters,
+  .chart-overview,
+  .reimb-cards,
+  .reimb-fields,
+  .contacts-layout,
+  .duplicate-compare,
+  .invest-form-row,
+  #help-shortcut-list {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .dash-grid > *,
+  .charts-grid > *,
+  .assets-split > *,
+  .bills-layout > *,
+  .chart-shell > *,
+  .profile-grid > *,
+  .account-cards > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+  /* 图表概览由 3 列变 3 行，竖分隔线换成横分隔线 */
+  .chart-metric + .chart-metric {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+
+  /* 2.4 按钮文字一律不折行：宁可整组换行，也不许「新增账 / 户」 */
+  button,
+  .btn,
+  [role="button"],
+  .btn-close,
+  input[type="button"],
+  input[type="submit"] {
+    white-space: nowrap !important;
+  }
+  /* 账单行 / 通知项 / 反馈入口这类「可点击的内容卡片」不是动作按钮：
+     按钮节点本身保持 nowrap，内部长文案块单独恢复自动换行，避免撑破窄屏。 */
+  .notice-item-head .notice-title,
+  .help-feedback-entry .help-feedback-text strong,
+  .help-feedback-entry .help-feedback-text small,
+  .asset-stat-label,
+  .asset-stat-hint,
+  .account-row-sub,
+  .stat-card-meta {
+    white-space: normal;
+  }
+
+  /* 2.5 iOS 聚焦 <16px 输入框会自动放大整页，必须 !important 盖过 .form-control 的 14px */
+  input,
+  textarea,
+  select,
+  .form-control,
+  .form-select,
+  .form-control:focus,
+  .form-select:focus,
+  [contenteditable="true"] {
+    font-size: 16px !important;
+  }
+
+  /* 工单列表在手机上按屏高滚动，不把设置弹窗撑到无限长 */
+  .ticket-list {
+    max-height: 42vh;
+  }
+}
+
+/* ---------- 3. PWA 独立窗口：iPhone 小白条 / 状态栏安全区 ----------
+ * PWA-MOBILE-STANDALONE-SAFEAREA
+ * 手机端 standalone 没有浏览器地址栏，也没有桌面窗口控件；
+ * 顶部只让开状态栏，底部 Tab Bar 与内容区、FAB 统一按 env() 抬高。
+ * 旧的「无屏宽限定的 standalone 顶栏 140px」已移到桌面 WCO 分支。 */
+@media (max-width: 768px) and (display-mode: standalone) {
+  .topbar {
+    padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px !important;
+    height: auto !important;
+    min-height: 0 !important;
+  }
+  .mobile-tabbar {
+    padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .content {
+    padding-bottom: calc(var(--mtab-h) + 20px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .fab,
+  .fab.fab-menu {
+    bottom: calc(var(--mtab-h) + 16px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .app {
+    height: 100vh;
+    height: 100dvh;
+  }
+  body {
+    overscroll-behavior-y: none;
+  }
 }

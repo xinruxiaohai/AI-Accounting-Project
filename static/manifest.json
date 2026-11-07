@@ -9,30 +9,34 @@
   "scope": "/",
   "display": "standalone",
   "display_override": [
-    "window-controls-overlay",
     "standalone",
     "minimal-ui"
   ],
+  "orientation": "portrait",
   "background_color": "#f4f6fb",
   "theme_color": "#2563eb",
+  "prefer_related_applications": false,
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
   "icons": [
     {
-      "src": "/static/images/logo-main.png?v=0.14.0-tst5",
+      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
-      "src": "/static/images/logo-main.png?v=0.14.0-tst5",
+      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     },
     {
-      "src": "/static/images/logo-main.png?v=0.14.0-tst5",
+      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
       "sizes": "1024x1024",
       "type": "image/png",
-      "purpose": "any"
+      "purpose": "any maskable"
     }
   ],
   "shortcuts": [
@@ -43,12 +47,11 @@
       "url": "/?action=new",
       "icons": [
         {
-          "src": "/static/images/logo-main.png?v=0.14.0-tst5",
+          "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
           "sizes": "1024x1024",
           "type": "image/png"
         }
       ]
     }
-  ],
-  "orientation": "portrait"
+  ]
 }

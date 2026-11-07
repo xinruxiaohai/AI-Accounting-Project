@@ -29,17 +29,28 @@ from flask import (
 from dotenv import load_dotenv
 from email.message import EmailMessage
 from email.utils import formataddr
-from werkzeug.security import check_password_hash, generate_password_hash
+# v0.14.1：密码哈希统一收口到 security.py（Werkzeug 加盐哈希 + 老哈希兼容升级）。
+# check_password_hash 这个名字故意保留，让下面 4 处调用一行都不用动，
+# 但实际指向兼容版 verify_password —— 老 SHA256 账号也能正常登录并被静默升级。
+import security
+
+generate_password_hash = security.generate_password_hash
+check_password_hash = security.verify_password
 
 import ai_service
+import cache_ext
 import database
 import invest_eastmoney
 import invest_mock
+import sqlalchemy_db
 
 app = Flask(__name__)
 
 # 让 jsonify 直接输出中文，而不是 \uXXXX 转义，方便浏览器里肉眼检查
 app.json.ensure_ascii = False
+
+# v0.14.1：SimpleCache 进程内缓存，必须在第一个请求之前 init_app
+cache_ext.init_cache(app)
 
 # 通知里的配图统一存这里，用 /static/uploads/<uuid>.<ext> 访问
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -556,6 +567,15 @@ def auth_login():
         return jsonify(error="邮箱或密码不正确，还可尝试 %d 次" % remain, code="bad_password"), 401
 
     database.clear_login_failures(email)
+    # v0.14.1：兼容策略 —— 老用户若仍是旧的简单 Hash（SHA256 等），
+    # 在「登录成功」这一刻静默转成 Werkzeug 加盐哈希并落库。
+    # upgrade_if_needed 内部吞掉所有异常，升级失败绝不阻断登录。
+    security.upgrade_if_needed(
+        user["id"],
+        user.get("password_hash") or "",
+        password,
+        database.update_user_password,
+    )
     return jsonify(token=_issue_token(user), user=_public_user(user))
 
 
@@ -865,6 +885,9 @@ def create_record():
     if error_message is not None:
         # 余额不足、账户不存在这类业务校验失败是「参数/状态不对」，400
         return jsonify(error=error_message), 400
+
+    # v0.14.1：新增账单后立刻清缓存（全局 after_request 还会再兜一次）
+    cache_ext.invalidate_record_caches()
 
     # 201 表示"已创建"
     return jsonify(id=new_id, **payload), 201
@@ -2459,6 +2482,7 @@ def update_record(record_id):
     if not updated:
         return jsonify(error="记录不存在"), 404
 
+    cache_ext.invalidate_record_caches()
     return jsonify(id=record_id, **payload)
 
 
@@ -2506,6 +2530,7 @@ def remove_record(record_id):
     deleted = database.soft_delete_record(record_id)
     if not deleted:
         return jsonify(error="记录不存在"), 404
+    cache_ext.invalidate_record_caches()
     return jsonify(deleted=record_id, trashed=True)
 
 
@@ -2879,6 +2904,8 @@ def adjust_account_balance(name):
     )
     payload = dict(result)
     payload["account_detail"] = latest
+    # v0.14.1：平账会连带账户余额（statistics 的 balance_total），必须失效缓存
+    cache_ext.invalidate_record_caches()
     return jsonify(payload)
 
 
@@ -3300,8 +3327,39 @@ def batch_update_record_category():
 
 @app.route("/api/statistics", methods=["GET"])
 def statistics():
-    """总览：总收入、总支出、总余额，给首页三张卡片用。"""
-    return jsonify(database.get_statistics())
+    """总览：总收入、总支出、总余额，给首页三张卡片用。
+
+    v0.14.1：结果走 cache_ext 的 @cache.memoize(timeout=600)。缓存 key 显式
+    带 uid，且把同一个 uid 传给 database.get_statistics(user_id=...)，
+    key 与 SQL 用同一个值，不会因为请求上下文串到别的用户。
+    """
+    uid = database.current_user_id()
+    return jsonify(cache_ext.statistics_data(uid))
+
+
+@app.route("/api/records/recent_7_days", methods=["GET"])
+def recent_7_days():
+    """近 7 天收支趋势（图表数据），同样按 uid 维度 memoize(600s)。"""
+    uid = database.current_user_id()
+    return jsonify(cache_ext.recent_7_days_data(uid))
+
+
+@app.after_request
+def _invalidate_caches_after_write(response):
+    """缓存失效总闸门：任何成功的写请求之后清掉统计 / 近 7 天缓存。
+
+    项目里写路径有几十条（普通记账、AI 记账、图片记账、导入确认、批量删除、
+    还原 / 彻底删除、报销、账户调平、账户合并、借贷结清……），逐条在函数末尾
+    补 delete_memoized 一定会漏。这里在「响应即将发出」时统一清一次，等价于
+    在每条写逻辑末尾执行且不会漏；几个主写接口里另外显式调了一次做双保险。
+    只对 2xx 生效：失败的请求没改数据，不必白白失效。
+    """
+    if (
+        request.method in ("POST", "PUT", "PATCH", "DELETE")
+        and response.status_code < 400
+    ):
+        cache_ext.invalidate_record_caches()
+    return response
 
 
 # ---------------- 通知中心（v0.06.2） ----------------
@@ -3978,6 +4036,87 @@ def admin_list_user_feedback():
     if denied is not None:
         return denied
     return jsonify(feedback=database.list_user_feedback())
+
+
+# ---------------- v0.14.1 工单系统（管理员回复 / 用户查自己的单） ----------------
+
+FEEDBACK_REPLY_STATUSES = ("pending", "replied", "closed")
+MAX_FEEDBACK_REPLY_LENGTH = 2000
+
+
+def _require_feedback_admin():
+    """工单回复的守卫：登录 + 后台访问密码 + 管理员身份。
+
+    比现有 /api/admin/feedback 更严一点：站点没设访问密码时，只认 1 号管理员，
+    避免「任何登录用户都能冒充官方回复」；设了密码时，持有有效访问令牌即可
+    （与后台其它接口的既有口径保持一致）。
+    """
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(error="请先登录", code="auth_required"), 401
+    denied = _require_admin_access()
+    if denied is not None:
+        return denied
+    if int(user.get("id") or 0) == database.ADMIN_USER_ID:
+        return None
+    config = database.get_access_config()
+    if not config["protected"]:
+        return jsonify(error="只有管理员可以回复工单", code="forbidden"), 403
+    return None
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/reply", methods=["PUT"])
+def admin_reply_feedback(feedback_id):
+    """管理员回复工单：写 admin_reply，并把 status 置为 replied（可显式覆盖）。
+
+    body: {"reply": "官方回复内容", "status": "replied"|"pending"|"closed"}
+    """
+    denied = _require_feedback_admin()
+    if denied is not None:
+        return denied
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    reply = data.get("reply")
+    if not isinstance(reply, str) or not reply.strip():
+        return jsonify(error="回复内容不能为空"), 400
+    reply = reply.strip()
+    if len(reply) > MAX_FEEDBACK_REPLY_LENGTH:
+        return jsonify(error="回复最多 %d 个字" % MAX_FEEDBACK_REPLY_LENGTH), 400
+    status = data.get("status") or "replied"
+    if not isinstance(status, str) or status.strip().lower() not in FEEDBACK_REPLY_STATUSES:
+        return jsonify(error="status 只能是 pending / replied / closed"), 400
+    status = status.strip().lower()
+
+    # 走 SQLAlchemy ORM；未安装 SQLAlchemy 时 sqlalchemy_db 自动回落原生 SQL
+    updated = sqlalchemy_db.reply_feedback(feedback_id, reply, status=status)
+    if updated is None:
+        return jsonify(error="工单不存在"), 404
+    return jsonify(feedback=updated)
+
+
+@app.route("/api/feedback/my", methods=["GET"])
+@app.route("/api/user-feedback", methods=["GET"])
+@login_required
+def my_feedback():
+    """用户查「自己的」反馈与官方回复，按提交时间倒序。
+
+    /api/feedback/my 是 v0.14.1 指令指定的路径；/api/user-feedback 是兼容别名：
+    并行开发的前端「我的工单」列表读的是后者、契约 { feedback: [...] }
+    （issue_description / created_at / status / admin_reply），本接口正好一致。
+    加个别名就能让前端直接读到官方回复，无需改任何前端文件。
+
+    uid 直接取 JWT 解析出的 g.current_user，不读 contextvar，
+    避免公开路径把 0 兜底成 1 号管理员导致越权看到别人的工单。
+    """
+    uid = int(g.current_user["id"])
+    limit = request.args.get("limit", "200")
+    try:
+        limit = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit = 200
+    return jsonify(feedback=sqlalchemy_db.list_my_feedback(uid, limit=limit))
 
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
