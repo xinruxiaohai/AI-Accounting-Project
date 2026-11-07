@@ -61,8 +61,8 @@ except ImportError:  # pragma: no cover - 缺依赖时降级为「不缓存」�
 
 CACHE_TIMEOUT = 600  # 10 分钟
 
-# 跨进程「缓存代际号」：SimpleCache 是进程内缓存，云端 Gunicorn -w 4 时
-# delete_memoized() 只能清掉当前 worker 的那份，另外 3 个 worker 会继续返回旧数据。
+# 跨进程「缓存代际号」：SimpleCache 是进程内缓存，云端一旦开多 worker，
+# delete_memoized() 只能清掉当前 worker 的那份，其它 worker 会继续返回旧数据。
 # 所以写操作除了清本进程缓存，还会原子地递增这个共享文件的代际号；
 # 代际号进入 memoize 的 key，所有 worker 下一次取数自动换 key，旧值自然失效
 # （旧条目仍由 SimpleCache 的 600s 超时回收，不会无限增长）。
@@ -105,13 +105,24 @@ def _bump_generation():
             pass
 
 
-cache = Cache(
-    config={
-        "CACHE_TYPE": "SimpleCache",
+def _cache_config():
+    """本地默认 SimpleCache；云端多进程 / 多机部署用环境变量切 RedisCache。
+
+    v0.14.1 收尾：原先 CACHE_TYPE 是写死的，文档里「设环境变量换 RedisCache」
+    根本不生效。这里改成可由环境变量覆盖，默认值不变（零配置仍是 SimpleCache）。
+    """
+    config = {
+        "CACHE_TYPE": (os.getenv("CACHE_TYPE") or "SimpleCache").strip(),
         "CACHE_DEFAULT_TIMEOUT": CACHE_TIMEOUT,
         "CACHE_KEY_PREFIX": "zhz_v0141_",
     }
-)
+    redis_url = (os.getenv("CACHE_REDIS_URL") or "").strip()
+    if redis_url:
+        config["CACHE_REDIS_URL"] = redis_url
+    return config
+
+
+cache = Cache(config=_cache_config())
 
 
 def init_cache(app):

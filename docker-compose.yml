@@ -46,6 +46,9 @@ services:
       retries: 12
       start_period: 30s
 
+  # Gunicorn 启动参数固定在 Dockerfile：-w 1 --threads 4（单进程多线程）。
+  # 原因：默认缓存是进程内 SimpleCache，多 worker 时写后失效只作用于当前 worker，
+  # 其余 worker 会继续返回旧图表数据。见技术报告 1.5.1「缓存与多进程」。
   web:
     build: .
     container_name: zhihuizhang-web
@@ -66,6 +69,11 @@ services:
       DB_POOL_SIZE: "10"
       DB_MAX_OVERFLOW: "20"
       JWT_SECRET: ${JWT_SECRET:-CHANGE_ME_SET_JWT_SECRET_IN_ENV}
+      # 本地默认 SimpleCache（零依赖，配合 -w 1）。若云端改为多进程 / 多机部署，
+      # 必须切 RedisCache 并自行编排 redis 服务，否则用户会看到旧数据：
+      #   CACHE_TYPE: RedisCache
+      #   CACHE_REDIS_URL: redis://redis:6379/0
+      CACHE_TYPE: ${CACHE_TYPE:-SimpleCache}
       APP_VERSION: ${APP_VERSION:-v0.14.1}
       CLOUD_STORAGE_TYPE: ${CLOUD_STORAGE_TYPE:-local}
       TZ: Asia/Shanghai

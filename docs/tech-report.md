@@ -130,10 +130,23 @@ server {
 ```
 
 ```bash
-gunicorn -w 4 -b 127.0.0.1:8000 --timeout 300 "app:create_app()"
+# v0.14.1：固定「单进程 + 4 线程」。不要改成 -w 4，原因见 1.5.1。
+gunicorn -w 1 --threads 4 -b 127.0.0.1:8000 --timeout 300 "app:app"
 ```
 
-两个细节值得记录：**① `proxy_buffering off` 必须开**，否则 SSE 会被 Nginx 缓存成一整块，气泡里「打字机」效果退化为「等 8 秒后一次性出现」；**② SQLite 在 Gunicorn 多 worker 下要开 WAL**，否则并发写会撞 `database is locked`——这是本项目在压测中真实遇到过的问题，`database.py` 建连时统一 `PRAGMA journal_mode=WAL` 与 `busy_timeout=5000`。
+入口用 `"app:app"`：项目是模块级 `app = Flask(__name__)` 实例，**没有** `create_app()` 工厂，原先文档写的 `"app:create_app()"` 会直接启动失败。
+
+两个细节值得记录：**① `proxy_buffering off` 必须开**，否则 SSE 会被 Nginx 缓存成一整块，气泡里「打字机」效果退化为「等 8 秒后一次性出现」；**② 不要再开多 worker**：`cache_ext` 默认用进程内的 `SimpleCache`，`-w 4` 时写请求只清掉其中一个 worker 的缓存，另外 3 个继续返回旧图表数据；同时 SQLite 在多进程并发写下容易撞 `database is locked`。单进程多线程可同时规避这两个问题，连接按请求开关、用完即关。
+
+### 1.5.1 缓存与多进程（v0.14.1）
+
+| 部署形态 | 缓存配置 | 说明 |
+| --- | --- | --- |
+| 本地 / 单机单进程（**当前默认**） | `CACHE_TYPE=SimpleCache` | `cache_ext.py` 默认值，零依赖、不装 Redis；必须配合 `-w 1 --threads 4` |
+| 同一台机器多进程 | 仍可用 SimpleCache，但**必须保留共享代际号** | 写操作会原子递增 `temp/.cache_generation`，代际号进入 memoize key，所有进程自动换 key；仅在共享同一文件系统时有效 |
+| **云端多进程 / 多机 / 多容器** | **必须切 `RedisCache`** | 设 `CACHE_TYPE=RedisCache`、`CACHE_REDIS_URL=redis://<host>:6379/0`，并 `pip install redis`；代际号文件无法跨主机共享，不换必然出现「写完了却看到旧数据」 |
+
+`cache_ext._cache_config()` 会读这两个环境变量，默认值仍是 `SimpleCache`，本地零配置行为不变。失效调用（`cache.delete_memoized`）在两种后端下写法一致，切换缓存后端不需要改业务代码。Gunicorn 若必须改成 `-w N (N>1)`，请先完成上表第三行的 Redis 切换再改启动参数。
 
 ### 1.6 数据模型
 

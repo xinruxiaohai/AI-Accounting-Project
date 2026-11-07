@@ -32,7 +32,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # 关键：-w 1（单进程多线程）。
 # cache_ext 用的是 SimpleCache（进程内内存缓存），多 worker 时写请求落在 A 进程
 # 只清掉 A 的缓存，B 进程那份还是旧数据 —— 用户就会看到旧图表。
-# 单进程下 delete_memoized 对全部线程生效。将来要多机/多进程部署，
-# 必须把 CACHE_TYPE 换成 RedisCache，代码里的失效调用不用改。
+# 单进程下 delete_memoized 对全部线程生效（另有共享代际号兜底同机多进程）。
+# 将来要多机/多进程部署，必须把 CACHE_TYPE 换成 RedisCache 并设 CACHE_REDIS_URL，
+# 代码里的失效调用不用改。详见 docs/tech-report.md 1.5.1「缓存与多进程」。
 CMD ["gunicorn", "-w", "1", "--threads", "4", "-b", "0.0.0.0:5000", \
      "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
