@@ -301,7 +301,17 @@ def login_required(view):
 
 
 def _normalize_email(value):
-    return (value or "").strip().lower()
+    """邮箱归一化。
+
+    v0.14.1 紧急修复：原写法 `(value or "").strip()` 在客户端把 email 传成
+    数字 / 数组 / 对象时会抛 AttributeError → 接口 500。这里是所有 auth 接口的
+    公共入口（登录 / 注册 / 发码 / 找回密码），统一在边界处兜住非法类型：
+    非字符串一律回落空串，由各接口既有的邮箱格式校验返回 400。
+    字符串输入的行为与修复前逐字节一致。
+    """
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
 
 
 def _password_strength_error(password):
@@ -438,11 +448,21 @@ def _verify_email_code(email, code, purpose="register"):
 @app.route("/api/auth/send-code", methods=["POST"])
 def auth_send_code():
     """发送邮箱验证码（真实 SMTP）：6 位随机码，存哈希，5 分钟有效，1 分钟防刷。"""
-    data = request.get_json(silent=True) or {}
+    # v0.14.1 紧急修复：请求体可能是 JSON 数组 / 字符串 / null，
+    # 原来的 `or {}` 只在 falsy 时兜底，数组会带着走到 data.get() 直接 500。
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        data = {}
     email = _normalize_email(data.get("email"))
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
         return jsonify(error="请输入正确的邮箱"), 400
-    purpose = "reset" if (data.get("purpose") or "").strip() == "reset" else "register"
+    # purpose 同样：非字符串（数字 / 数组 / 对象）不能调 .strip()，否则 500。
+    raw_purpose = data.get("purpose")
+    purpose = (
+        "reset"
+        if isinstance(raw_purpose, str) and raw_purpose.strip() == "reset"
+        else "register"
+    )
     exists = database.get_user_by_email(email) is not None
     if purpose == "register" and exists:
         return jsonify(error="该邮箱已注册，请直接登录"), 409
