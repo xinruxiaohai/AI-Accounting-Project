@@ -142,7 +142,41 @@ def _access_guard():
 
 # ---------------- 多用户账号与 JWT 鉴权（v0.12） ----------------
 
-JWT_SECRET = os.getenv("JWT_SECRET", "ai-accounting-jwt-secret-v012")
+def _resolve_jwt_secret():
+    """签名密钥：环境变量 > 本地持久化的随机强密钥（v0.14.0-TST 安全加固）。
+
+    不再硬编码默认值。未配置 JWT_SECRET 时首次启动用 secrets.token_hex(32)
+    生成并原子写入 .jwt_secret（已被 .gitignore 忽略），保证 Gunicorn 多
+    worker 与服务重启后密钥一致，已签发的登录态不会集体失效。
+    """
+    env_secret = (os.getenv("JWT_SECRET") or "").strip()
+    if env_secret:
+        return env_secret
+    secret_file = os.path.join(BASE_DIR, ".jwt_secret")
+    try:
+        with open(secret_file, "r", encoding="utf-8") as fh:
+            saved = fh.read().strip()
+        if saved:
+            return saved
+    except OSError:
+        pass
+    generated = secrets.token_hex(32)
+    try:
+        fd = os.open(secret_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(generated)
+    except FileExistsError:
+        try:
+            with open(secret_file, "r", encoding="utf-8") as fh:
+                return fh.read().strip() or generated
+        except OSError:
+            return generated
+    except OSError:
+        return generated
+    return generated
+
+
+JWT_SECRET = _resolve_jwt_secret()
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRES_SECONDS = 7 * 24 * 3600
 
@@ -279,7 +313,7 @@ def _register_password_error(password):
     """v0.13.5 注册专用强校验：至少 8 位，且必须同时含字母和数字（纯数字直接拒绝）。
 
     刻意与 _password_strength_error 分开：改密 / 找回密码沿用旧规则，
-    登录侧完全不校验强度，保证老账号（如 123456）能正常登录。
+    登录侧完全不校验强度，保证历史账号（初始口令见环境变量）能正常登录。
     """
     if not isinstance(password, str) or len(password) < 8:
         return "注册密码至少 8 位"
@@ -3272,6 +3306,41 @@ def statistics():
 
 # ---------------- 通知中心（v0.06.2） ----------------
 
+# v0.14.0-TST 安全加固（S4）：通知正文统一收敛为纯文本。
+# 后端只保留换行语义、剥掉全部 HTML 标签；前端一律 textContent 渲染，
+# 从根上阻断「任意登录用户写通知 → 游客打开首页执行脚本」的存储型 XSS。
+_NOTICE_BR_RE = re.compile(r"<\s*br\s*/?\s*>", re.I)
+_NOTICE_BLOCK_END_RE = re.compile(r"</\s*(?:div|p|li|tr|h[1-6])\s*>", re.I)
+_NOTICE_BLOCK_START_RE = re.compile(r"<\s*(?:div|p|li|tr|h[1-6])\b[^>]*>", re.I)
+_NOTICE_ANY_TAG_RE = re.compile(r"<[^>]*>")
+_NOTICE_MULTI_NL_RE = re.compile(r"\n{3,}")
+# 危险元素连同内部文本一起丢弃，避免「标签被剥掉、载荷文字还在」
+_NOTICE_DANGEROUS_BLOCK_RE = re.compile(
+    r"<\s*(script|style|iframe|object|embed|template|svg|math)\b[^>]*>.*?<\s*/\s*\1\s*>",
+    re.I | re.S,
+)
+_NOTICE_DANGEROUS_OPEN_RE = re.compile(
+    r"<\s*(script|style|iframe|object|embed|template|svg|math)\b[^>]*>", re.I
+)
+
+
+def _sanitize_notice_content(raw):
+    """把通知正文净化为纯文本：块级标签 / <br> 转换行，其余标签全部剥离。"""
+    if not isinstance(raw, str):
+        return ""
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    text = _NOTICE_DANGEROUS_BLOCK_RE.sub("", text)
+    text = _NOTICE_DANGEROUS_OPEN_RE.sub("", text)
+    text = _NOTICE_BR_RE.sub("\n", text)
+    text = _NOTICE_BLOCK_END_RE.sub("\n", text)
+    text = _NOTICE_BLOCK_START_RE.sub("", text)
+    text = _NOTICE_ANY_TAG_RE.sub("", text)
+    # 只还原最常见排版实体，绝不做完整 unescape：否则 &lt;script&gt; 会重新
+    # 变回 <script> 字样。前端一律 textContent 渲染，本就不需要反转义。
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = _NOTICE_MULTI_NL_RE.sub("\n\n", text)
+    return text.strip()
+
 
 @app.route("/api/notifications", methods=["GET"])
 def list_notifications():
@@ -3307,6 +3376,7 @@ def create_notification():
         return jsonify(error="content 必须是字符串"), 400
     if len(content) > 20000:
         return jsonify(error="content 太长了，最多 20000 个字符"), 400
+    content = _sanitize_notice_content(content)
 
     image_url = data.get("image_url", "")
     if image_url is None:
@@ -3362,6 +3432,7 @@ def update_notification(notify_id):
             return jsonify(error="content 必须是字符串"), 400
         if len(content) > 20000:
             return jsonify(error="content 太长了，最多 20000 个字符"), 400
+        content = _sanitize_notice_content(content)
 
     image_url = data.get("image_url")
     if image_url is not None:
@@ -3437,7 +3508,7 @@ def draft_notification():
 
     try:
         notification = database.create_notification(
-            draft["title"], draft["content"], "", None, status="draft"
+            draft["title"], _sanitize_notice_content(draft.get("content", "")), "", None, status="draft"
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
@@ -3447,6 +3518,13 @@ def draft_notification():
 @app.route("/api/notifications/<int:notify_id>/publish", methods=["PUT"])
 def publish_notification(notify_id):
     """一键发布草稿：status 改 published，发布时间刷新为现在。"""
+    # 安全兜底：历史草稿可能含旧版写入的 HTML，发布前再净化一次
+    for existing in database.list_notifications():
+        if int(existing.get("id") or 0) == notify_id:
+            cleaned = _sanitize_notice_content(existing.get("content") or "")
+            if cleaned != (existing.get("content") or ""):
+                database.update_notification(notify_id, content=cleaned)
+            break
     notification = database.publish_notification(notify_id)
     if notification is None:
         return jsonify(error="通知不存在"), 404
@@ -4298,4 +4376,4 @@ def not_found(_error):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=False)

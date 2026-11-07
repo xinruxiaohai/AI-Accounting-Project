@@ -2,6 +2,7 @@ import contextvars
 import datetime
 import difflib
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -155,8 +156,8 @@ def get_conn():
 _CURRENT_USER_ID = contextvars.ContextVar("current_user_id", default=1)
 
 ADMIN_USER_ID = 1
-ADMIN_EMAIL = "1937097795@qq.com"
-ADMIN_INITIAL_PASSWORD = "123456"
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@example.com")
+ADMIN_INITIAL_PASSWORD = os.getenv("ADMIN_INITIAL_PASSWORD", "Admin@2026!")
 DEFAULT_USER_ID_START = 10
 USER_ID_RESERVED_MAX = 9
 
@@ -6413,7 +6414,7 @@ _DEFAULT_HELP_SHORTCUTS = "\n".join(
 _DEFAULT_HELP_CONTACT = "\n".join(
     (
         "客服邮箱|support@zhihuizhang.example.com",
-        "客服 QQ|800123456",
+        "客服 QQ|800100000",
         "工作时间|工作日 9:00 - 18:00",
     )
 )

@@ -12,7 +12,7 @@
 - users 表：id / email UNIQUE / password_hash / phone / created_at
 - `UPDATE sqlite_sequence SET seq = 9 WHERE name = 'users'`（没有该行就 INSERT），
   让自增起点是 10，1-9 留给系统/未来机器人账号。
-- 迁移脚本创建 id=1 超管：1937097795@qq.com / 123456（werkzeug generate_password_hash）。
+- 迁移脚本创建 id=1 超管：[管理员邮箱已脱敏] / [默认口令已脱敏]（werkzeug generate_password_hash）。
 - 核心表全部 ALTER ADD user_id INTEGER NOT NULL DEFAULT 1 并回填 1；
   accounts 由 name 单主键重建成 (user_id, name) 复合主键（SQLite 需整表重建）。
 

@@ -327,7 +327,7 @@ v0.11.2-DEV 2026-10-29 后台齿轮图标 / 日志驱动通知起草 / 密码明
 
 访问密码改为可回显的新格式：v0.11.1 存的是「盐$SHA256」，单向不可逆，无法做「查看明文」。v0.11.2 起新密码存 p1$ + urlsafe Base64（_encode_password/_decode_password），_password_matches 同时兼容旧格式校验；密码列表接口只回序号与掩码，绝不回明文或哈希。新增 POST /api/access/passwords/reveal：必须 body.password 当场验证任意一个当前密码（走 _fresh_admin_check 之外的独立校验，会话超 5 分钟也照样能查），验证通过返回该序号明文；旧格式密码返回「这个密码是旧版哈希存储，无法回显；请删除后重新添加」。前端密码列表默认全是 ******，点【查看密码】弹独立小窗输当前密码，错密只回内联错误、不泄露明文，验证通过后该行变明文并加 is-plain 标记，Enter 可直接提交。
 
-踩坑与验证：Bootstrap 弹窗刚弹出就立刻验证时还处在入场动画里，hide() 会被忽略导致弹窗卡住不关，补 350ms 延时兜底重试一次；测试要模拟「免密过期」必须同时回拨 localStorage 的 verifiedAt 与服务端会话时间。后端脚本 27/27 通过（旧哈希可登录但提示无法回显、新格式可回显、任意当前密码可验证、错密 401/缺密 400/越界 400、超 5 分钟 reveal 仍独立通过、AI 起草正文引用真实日志关键词、草稿不出现在用户端、测试后配置逐字恢复）；真实 Chrome E2E 38/38 通过（遮罩 z-index 9999 与滚动锁、齿轮 40×40 + SVG 21×21 + 11px 圆角、hover 蓝底 rgb(37,99,235) 且 matrix 旋转 0.7071、深色底色 #131c2b、密码两行全掩码、独立弹窗错密内联报错、Enter 验证回显 test1234 且第二行仍掩码、回拨 10 分钟后仍可查看第二行 second5678、AI 起草卡片引用「通知/密码/访问」并清理、页面无 JS 报错、admin_config 与 access_sessions 逐字恢复）。
+踩坑与验证：Bootstrap 弹窗刚弹出就立刻验证时还处在入场动画里，hide() 会被忽略导致弹窗卡住不关，补 350ms 延时兜底重试一次；测试要模拟「免密过期」必须同时回拨 localStorage 的 verifiedAt 与服务端会话时间。后端脚本 27/27 通过（旧哈希可登录但提示无法回显、新格式可回显、任意当前密码可验证、错密 401/缺密 400/越界 400、超 5 分钟 reveal 仍独立通过、AI 起草正文引用真实日志关键词、草稿不出现在用户端、测试后配置逐字恢复）；真实 Chrome E2E 38/38 通过（遮罩 z-index 9999 与滚动锁、齿轮 40×40 + SVG 21×21 + 11px 圆角、hover 蓝底 rgb(37,99,235) 且 matrix 旋转 0.7071、深色底色 #131c2b、密码两行全掩码、独立弹窗错密内联报错、Enter 验证回显 [演示口令已脱敏] 且第二行仍掩码、回拨 10 分钟后仍可查看第二行 [测试口令已脱敏]、AI 起草卡片引用「通知/密码/访问」并清理、页面无 JS 报错、admin_config 与 access_sessions 逐字恢复）。
 v0.11.3-DEV 2026-10-29 后台限定密码 / 三线趋势图 / 版本号自动公告
 
 密码鉴权收回到后台。static/access-guard.js 新增 isAdminPage()，只有 URL 命中 /admin 时才建遮罩、开超时上锁与 401 重锁；用户端首页、账单、资产、我的全部免密直接可用。验证凭证从 localStorage 换成 sessionStorage，关掉标签页或浏览器再打开必定重新输密码。所有危险操作（查看密码、删除密码、改免密时长）的二次验证层统一加 .modal.verify-top-modal / .settings-reauth，z-index 固定 100000 !important 并配套 99999 的 backdrop，永远压在设置弹窗之上。
@@ -380,7 +380,7 @@ v0.11.8-DEV 2026-10-30 余额卡品牌渐变 / 全局搜索浮窗
 
 v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 
-三阶段一起封版。后端基建：新建 users 表并把 sqlite_sequence 的起点钉在 9，预留 1-9 给系统账号，普通注册从 10 开始；迁移脚本创建 1 号超级管理员 1937097795@qq.com（初始密码 123456，werkzeug 哈希），把所有核心表加上 user_id 并把老数据回填 1；accounts 原来是 name 单主键，多用户同名账户会撞车，迁移时整表重建成 (user_id, name) 复合主键。鉴权用 PyJWT HS256（sub 必须是字符串，否则 PyJWT 2.15 抛 InvalidSubjectError），登录/注册返回 token 与不含密码的 user；@login_required 与全局 before_request 守卫让 /api/* 未登录统一 401，database 用 contextvars 记住当前用户，records / accounts 的查询、写入、删除、回收站、报销、统计全部带 user_id 条件。前端新增 auth-v012.js：重写 fetch 自动加 Bearer，401 auth_required 时弹全屏登录/注册遮罩，登录成功存 localStorage 再 reload；侧栏与「我的」页加退出登录。导入系统：/api/import/parse 用 pandas 读 CSV/Excel，编码按 utf-8-sig→utf-8→gb18030→gbk 依次尝试，表头行自动探测，列名按关键词优先识别（收/支 优先于 交易类型，交易对方优先于对方），无效流水直接跳过；判重查当前用户最近 10 天账单，时间+金额+商户重合标 is_duplicate；/api/import/confirm 只写未重复项，逐条 add_record 联动余额并写 import_history。前端账单页加【导入账单】弹窗：拖拽或选择文件、预览总条数与重复条数、表格勾选（重复行高亮默认不勾）、全选与确认入库。
+三阶段一起封版。后端基建：新建 users 表并把 sqlite_sequence 的起点钉在 9，预留 1-9 给系统账号，普通注册从 10 开始；迁移脚本创建 1 号超级管理员 [管理员邮箱已脱敏]（初始密码 [默认口令已脱敏]，werkzeug 哈希），把所有核心表加上 user_id 并把老数据回填 1；accounts 原来是 name 单主键，多用户同名账户会撞车，迁移时整表重建成 (user_id, name) 复合主键。鉴权用 PyJWT HS256（sub 必须是字符串，否则 PyJWT 2.15 抛 InvalidSubjectError），登录/注册返回 token 与不含密码的 user；@login_required 与全局 before_request 守卫让 /api/* 未登录统一 401，database 用 contextvars 记住当前用户，records / accounts 的查询、写入、删除、回收站、报销、统计全部带 user_id 条件。前端新增 auth-v012.js：重写 fetch 自动加 Bearer，401 auth_required 时弹全屏登录/注册遮罩，登录成功存 localStorage 再 reload；侧栏与「我的」页加退出登录。导入系统：/api/import/parse 用 pandas 读 CSV/Excel，编码按 utf-8-sig→utf-8→gb18030→gbk 依次尝试，表头行自动探测，列名按关键词优先识别（收/支 优先于 交易类型，交易对方优先于对方），无效流水直接跳过；判重查当前用户最近 10 天账单，时间+金额+商户重合标 is_duplicate；/api/import/confirm 只写未重复项，逐条 add_record 联动余额并写 import_history。前端账单页加【导入账单】弹窗：拖拽或选择文件、预览总条数与重复条数、表格勾选（重复行高亮默认不勾）、全选与确认入库。
 
 踩坑与验证：add_record 的 INSERT 参数顺序一度把 amount 和 user_id 写反，导致 user_id 变成 25.5，靠 E2E 断言注册用户看不到数据才暴露；PyJWT 的 sub 传 int 会直接报错，必须 str；GBK 报表里带 BOM 或不带 BOM 都要兜底，先试 utf-8-sig 再 gb18030；Excel 的金额单元格可能是 "¥1,234.00" 这种字符串，统一去符号再 float。自测 temp/test_v012_e2e.py 19/19（注册 id≥10 且不含密码字段、管理员登录看到 18 条老账目、新用户 0 条且默认 4 账户、未登录 401、GBK CSV 解析 3 条且分类正确、确认导入 3 条并扣微信 37.50 / 加支付宝 100、重复导入 duplicate_count=3、import_history 落库），temp/smoke_v012_frontend.py 19/19（首页/后台 200、auth-v012.js 与导入弹窗 DOM、版本引用、node --check 与 admin 内联脚本语法），py_compile 通过；迁移后 records 19 / accounts 16 / 总余额 -4655.8 与备份一致。
 
@@ -415,12 +415,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - 账户与密码顶部实装昵称修改（PUT /api/auth/profile），保存后同步侧边栏。
 - 资产页右侧流水每行加 #eef0f3 分割线与斑马底；侧边栏 .sidebar-user 改纯白高对比。
 - 图标选择器改可视化网格（icon-choice-grid），点选高亮，应用后账户列表与账单表格图标即时重绘；恢复默认保留。
-- 修复管理员 123456 登录状态（迁移初始密码不经强密码校验，测试直接写回 hash）。
+- 修复管理员 [默认口令已脱敏] 登录状态（迁移初始密码不经强密码校验，测试直接写回 hash）。
 - 自测：temp/test_v0124.py 21/21；回归 test_v0123 27/27、test_v0122 31/31、test_v0121 20/20、test_v012_e2e 21/21；py_compile / node --check 通过。
 
 ## v0.12.5-DEV（2026-10-30）
 
-- 管理员 1937097795@qq.com 密码哈希强制重置为 123456（werkzeug.security），用户端可正常登录。
+- 管理员 [管理员邮箱已脱敏] 密码哈希强制重置为 [默认口令已脱敏]（werkzeug.security），用户端可正常登录。
 - 【账户与密码】平铺的旧/新/确认密码输入框移除，改为【修改密码】按钮 + 独立 #change-password-modal；旧密码框 autocomplete=off、打开清空，避免浏览器自动填充。
 - 图标选择器重排：.icon-picker 卡片 + 两列类型/对象 Grid + 78px auto-fill 等高格子 + 文字省略 + 深色模式配色。
 - 侧边栏昵称旁显示 UID 胶囊，设置页账号行显示 UID，验证 1-9 预留（管理员=1，新用户从 10）。
@@ -542,13 +542,13 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 
 ## v0.13.5-DEV（注册安全校验与登录页美化）
 
-- **校验隔离（本轮死线）**：登录与注册共用同一张卡片、同一个 `submitGate()`，v0.12.3 起密码强度是在提交前统一拦的——**只要加上注册规则，老账号（纯数字 `123456`）就会被一起拒掉**。做法是把强度校验从提交主链路里拆出去：`submitGate()` 只剩「账号密码非空」这一条共同前置，注册才额外跑 `validateRegisterFields()` + 滑块闸门，登录分支只 `clearFieldErrors()`。后端同样拆成两个函数：`_register_password_error()`（≥8 位且含字母和数字）只服务 `/api/auth/register`，`_password_strength_error()`（6 位 + 两类字符）继续供改密与找回密码——登录接口**从头到尾没有强度判断**。
+- **校验隔离（本轮死线）**：登录与注册共用同一张卡片、同一个 `submitGate()`，v0.12.3 起密码强度是在提交前统一拦的——**只要加上注册规则，老账号（纯数字 `[默认口令已脱敏]`）就会被一起拒掉**。做法是把强度校验从提交主链路里拆出去：`submitGate()` 只剩「账号密码非空」这一条共同前置，注册才额外跑 `validateRegisterFields()` + 滑块闸门，登录分支只 `clearFieldErrors()`。后端同样拆成两个函数：`_register_password_error()`（≥8 位且含字母和数字）只服务 `/api/auth/register`，`_password_strength_error()`（6 位 + 两类字符）继续供改密与找回密码——登录接口**从头到尾没有强度判断**。
 - **注册强校验**：密码正则 `registerPasswordError()` 分三档提示（空 / 不足 8 位 / 缺字母或缺数字），文案「密码不能是纯数字，需同时包含字母和数字」直接点出纯数字场景；输入时实时校验、`is-invalid` 红框 + 字段下方红字，一次只提示一条，避免三行红字糊在脸上。
 - **确认密码**：`#auth-confirm-password` 放在密码正下方，`.auth-confirm` 默认 `hidden`，只在注册视图显示；切到登录会**清空**它（否则下次切回注册会带着上一个人的残留值）。两次不一致时红字「两次输入的密码不一致」并 `preventDefault` 阻止提交。
 - **滑块闸门**：解锁状态是 `sliderUnlocked`，此前只管视觉。新增 `syncRegisterLock()` 统一收口——注册且未解锁时给「发送验证码」「注册并进入」都加 `is-locked` + `disabled=true`，滑块下常驻提示「滑动解锁后，才能发送验证码和提交注册」，解锁即恢复。**踩坑**：发送验证码按钮有 60 秒倒计时，倒计时逻辑自己会写 `button.disabled=false`，直接和闸门抢同一个属性会把锁冲出个洞；改用 `data-counting` 标记倒计时态，disabled 的最终值只由 `syncRegisterLock()` 算（发送成功 / 发送失败 / 倒计时结束三处都改成先改标记再同步）。`sendEmailCode()` 入口另加一道保险，未解锁直接弹 Toast 不发请求。
 - **UI 深度美化（Glassmorphism）**：`.auth-card` 从纯白改为 `rgba(255,255,255,0.7)` + `backdrop-filter: blur(18px) saturate(180%)` + 20px 圆角 + 三层柔和外阴影（近距离描边 + 中距离扩散 + 远距离投影），深色模式对应 `rgba(19,28,43,0.66)`，靠 `[data-theme="dark"]` 覆盖而不用媒体查询，跟随应用内主题切换。输入框圆角 10px、聚焦时 `box-shadow` 三层发光（内圈 3px 蓝雾 + 外圈 16px 柔光）并配 `transition`，`.is-invalid` 换成红框红雾。滑块 46px 高、轨道弱化灰底、已滑部分渐变蓝、圆钮渐变 + hover 提亮。主按钮「注册并进入」`linear-gradient(135deg,#4f8cff,#2563eb,#1d4ed8)`，hover `brightness(1.09)` + 上移 1px，`disabled`/`is-locked` 统一灰化降饱和。小屏 `@media (max-width:430px)` 卡片 `max-height: calc(100vh - 28px)` + `overflow-y:auto`，保证不贴边、内容多时内部滚动而不是把按钮顶出屏幕。
 - **文案**：昵称 placeholder 改「请输入您的昵称（选填）」；密码 placeholder 按模式切换（登录「请输入密码」/注册「至少 8 位，需含字母和数字」），让规则在输入前就可见，而不是提交后才红。
-- **自测**：后端逻辑 11/11（8 位纯数字、纯字母、7 位均 400；`abc12345` 201 且响应不含 `password_hash`；老账号 `123456` 登录 200；改密 `abc123` 仍 200 证明旧规则未被误伤；空密码登录 401 且报错文案里没有强度字样）；真实 Chrome CDP **36/36**——登录 Tab 提交按钮默认可用且 `123456` 能进应用、注册 Tab 两按钮置灰、未解锁点发送实发 0 请求、纯数字/不一致各自红字且 0 请求、滑块解锁后恢复、解锁且合规后注册请求真实发出 1 次、深色卡片 alpha<1 且正文浅色可读、console 0 error；`py_compile` / `node --check` 全过。真实库零污染（验收用户建在临时库，浏览器测试用户结束时删除）。
+- **自测**：后端逻辑 11/11（8 位纯数字、纯字母、7 位均 400；`abc12345` 201 且响应不含 `password_hash`；老账号 `[默认口令已脱敏]` 登录 200；改密 `abc123` 仍 200 证明旧规则未被误伤；空密码登录 401 且报错文案里没有强度字样）；真实 Chrome CDP **36/36**——登录 Tab 提交按钮默认可用且 `[默认口令已脱敏]` 能进应用、注册 Tab 两按钮置灰、未解锁点发送实发 0 请求、纯数字/不一致各自红字且 0 请求、滑块解锁后恢复、解锁且合规后注册请求真实发出 1 次、深色卡片 alpha<1 且正文浅色可读、console 0 error；`py_compile` / `node --check` 全过。真实库零污染（验收用户建在临时库，浏览器测试用户结束时删除）。
 - **缓存**：`?v=0.13.4.1` → `?v=0.13.5`（index 6 处、admin 3 处），两处 SW `CACHE_NAME` → `ai-accounting-v0.13.5-r1`，`APP_VERSION_FALLBACK` → `v0.13.5-DEV`。
 
 ## v0.13.6-DEV（品牌化「智汇账」+ 头像大图 + Logo 多主题）
@@ -607,7 +607,7 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **核心业务修复②：快捷修改账户余额**。新增 `database.adjust_account_balance()` + `POST /api/accounts/<name>/adjust_balance`：单事务内先算 `diff = new - old`，`UPDATE` 覆盖余额，再按差额**裸插**一条 `records`（收入/支出，金额取绝对值，带用户填的备注与分类）。关键点：**不能直接调 `add_record()`**——它内部走 `_apply_effects` 会再把差额加一次余额，结果变成 `new + diff`。差额绝对值 < 0.01 时不生成 0 元流水。前端在资产页账户行、余额大卡片、「投资看板 → 可用资金」三处提供入口，共用同一个磨砂 Modal（调整后余额 / 是否生成账单 / 备注 / 分类，默认「账户余额修改」+「其他」）。
 - **顽固 UI 屠戮**：① 资产、账单、图表三个页面的左右双栏改为**各自独立滚动**（外层不再整页滚动，`overflow` 下沉到列容器），长列表不再把整页顶得乱跳；② 侧边栏折叠按钮极简重构——删除文字节点与动态 Tooltip 文案逻辑，只留 20px 图标，展开态左对齐 20px、折叠态居中（`#app.is-collapsed` 与兼容类名双套选择器并列）；③ 全局纯蓝按钮统一磨砂化（半透明底 + 描边 + 轻阴影，深色模式单独配色）；④ 修「卡片底部按钮悬空」——`.panel` 改 `flex-direction: column; height:100%` + 末子元素 `margin-top:auto`，并发现真正元凶是 `.panel + .panel { margin-top:16px }` 这条 v0.05 的通用相邻兄弟规则误伤；⑤ 图标实时预览修复（选图后立刻回填，不必保存再刷新）。
 - **后台整合**：`admin.html` 把「AI 反馈与记忆 / AI 记忆库 / AI 纠错与反馈中心」三个 Tab 合并为单一入口「AI 大脑管理」，内部左右分栏（左记忆库、右纠错审计）+ 下方反馈通栏；记忆库补示例与空态引导，反馈列表限高独立滚动。
-- **演示数据构建**：新增 `temp/generate_demo_data.py`，全部走 `database.py` 高层 API（`set_current_user(uid)` 绑定，保证余额联动与 user_id 隔离），生成 `test@test.com / test1234 / 智汇账体验官`：326 条账单（2026-10/11 占 69.9%，覆盖餐饮/交通/购物/娱乐/居住/医疗/人情/工资/兼职/理财 10 类，含真实备注、6 笔转账、4 条借贷）、2 个投资账户与 3 个持仓（005827 / 006679 / 600519）。写库前自动备份，结束后做余额勾稽与「其它用户零变化」断言。
+- **演示数据构建**：新增 `temp/generate_demo_data.py`，全部走 `database.py` 高层 API（`set_current_user(uid)` 绑定，保证余额联动与 user_id 隔离），生成 `test@test.com / [演示口令已脱敏] / 智汇账体验官`：326 条账单（2026-10/11 占 69.9%，覆盖餐饮/交通/购物/娱乐/居住/医疗/人情/工资/兼职/理财 10 类，含真实备注、6 笔转账、4 条借贷）、2 个投资账户与 3 个持仓（005827 / 006679 / 600519）。写库前自动备份，结束后做余额勾稽与「其它用户零变化」断言。
 - **交互解耦**：手动记账（填表保存）与 AI 气泡彻底解绑——成功后只弹普通 Toast「记账成功」，气泡里那个「哪里不对直接说，比如：改成微信」的输入框只属于「AI 快记」，避免用户以为还要再跟 AI 对话一轮；同时把 `refresh()` 收敛为「所有记账入口的最后一步」，尾部强制 `refreshRecentPanel()`，并在记账成功后清空全局搜索词（残留关键词会让近 7 天按关键词过滤，看起来像没刷新）。「近 7 天账单」新增折叠开关（默认展开，状态记 localStorage）。
 - **自测**：真实 Chrome CDP `temp/cdp_v0140_tst5.mjs` **20/20**（默认展开 → 折叠 `display:none` → 恢复；手动记账 0 气泡、Toast 命中、近 7 天 52→53 且能在文本里读到新账；搜索无结果时近 7 天空态、记账后自动清空搜索并恢复列表）；总资产 / 改余额 / 三处按钮几何另有 `cdp_v0140_tst3.mjs` 30/30、`cdp_invest_cash.mjs` 13/13、`cdp_bigger_adjust.mjs` 15/15。`node --check` / `py_compile` 全过，测试账单按唯一备注清理、演示数据零污染。
 - **缓存**：两处 `CACHE_NAME` → `ai-accounting-v0.14.0-tst5`，模板与 manifest 全部 `?v=0.14.0-tst5`，`APP_VERSION_FALLBACK` = `v0.14.0-TST`。

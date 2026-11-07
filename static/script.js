@@ -7686,11 +7686,12 @@ function saveReadIds(ids) {
 }
 
 /**
- * 通知正文允许富文本（/admin 的编辑器产出），渲染前过一遍白名单：
- * 去掉 script / iframe / 事件属性 / javascript: 链接。
+ * v0.14.0-TST 安全加固（S4）：通知正文一律转成纯文本。
+ * DOMParser 创建的是 inert document，不执行脚本、不加载外部资源；
+ * 块级标签与 <br> 还原成换行后只取 textContent，渲染侧也用 textContent。
  */
-function sanitizeNoticeHtml(html) {
-  const text = String(html || "");
+function noticePlainText(raw) {
+  const text = String(raw || "");
   if (!text) {
     return "";
   }
@@ -7699,23 +7700,19 @@ function sanitizeNoticeHtml(html) {
   if (!root) {
     return "";
   }
+  // 危险元素连同内部文本一起丢弃，避免「标签没了、载荷文字还在」
   root
-    .querySelectorAll("script, style, iframe, object, embed, link, meta, form, input, button")
+    .querySelectorAll("script, style, iframe, object, embed, template, svg, math")
     .forEach(function (node) {
       node.remove();
     });
-  root.querySelectorAll("*").forEach(function (node) {
-    Array.prototype.slice.call(node.attributes).forEach(function (attr) {
-      const name = String(attr.name || "").toLowerCase();
-      const value = String(attr.value || "").replace(/\s+/g, "").toLowerCase();
-      if (name.indexOf("on") === 0) {
-        node.removeAttribute(attr.name);
-      } else if ((name === "href" || name === "src") && value.indexOf("javascript:") === 0) {
-        node.removeAttribute(attr.name);
-      }
-    });
+  root.querySelectorAll("br").forEach(function (node) {
+    node.replaceWith(doc.createTextNode("\n"));
   });
-  return root.innerHTML;
+  root.querySelectorAll("div, p, li, h1, h2, h3, h4, h5, h6, tr").forEach(function (node) {
+    node.appendChild(doc.createTextNode("\n"));
+  });
+  return (root.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function notificationsUnreadCount() {
@@ -7745,12 +7742,14 @@ function renderNotifications() {
   }
 
   const readIds = readReadIds();
+  const plainContents = [];
   // v0.12.1：默认只展开最新 3 条，第 4 条起折叠成「标题 + 小字时间」，点标题平滑展开
   box.innerHTML = list
     .map(function (item, index) {
       const isNew = readIds.indexOf(item.id) === -1;
       const dateText = item.publish_date ? String(item.publish_date).slice(0, 16) : "";
-      const content = sanitizeNoticeHtml(item.content);
+      const content = noticePlainText(item.content);
+      plainContents[index] = content;
       const cover = item.image_url
         ? '<img class="notice-cover" src="' +
           escapeHtml(item.image_url) +
@@ -7776,13 +7775,21 @@ function renderNotifications() {
         "</span>" +
         "</div>" +
         '<div class="notice-body">' +
-        (content ? '<div class="notice-content">' + content + "</div>" : "") +
+        (content
+          ? '<div class="notice-content" data-notice-text="' + index + '"></div>'
+          : "") +
         cover +
         "</div>" +
         "</article>"
       );
     })
     .join("");
+
+  // 正文一律用 textContent 写入，绝不把用户内容交给 innerHTML
+  box.querySelectorAll("[data-notice-text]").forEach(function (node) {
+    node.textContent = plainContents[Number(node.getAttribute("data-notice-text"))] || "";
+    node.removeAttribute("data-notice-text");
+  });
 
   if (!box.dataset.toggleBound) {
     box.dataset.toggleBound = "1";

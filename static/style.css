@@ -14753,4 +14753,7 @@ body.is-sidebar-collapsed #sidebar-toggle {
   }
 }
 
-
+/* v0.14.0-TST 安全加固：通知正文改纯文本渲染，保留原有分行排版 */
+.notice-content {
+  white-space: pre-line;
+}

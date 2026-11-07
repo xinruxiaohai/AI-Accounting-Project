@@ -22,3 +22,12 @@ static/uploads/
 .idea/
 .DS_Store
 Thumbs.db
+
+# v0.14.0-TST 安全加固：拦截本地测试垃圾与运行时密钥
+temp/
+.env.*
+*.db-wal
+*.db-shm
+*.bak
+backup/
+.jwt_secret

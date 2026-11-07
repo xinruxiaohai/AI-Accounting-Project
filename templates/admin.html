@@ -121,6 +121,7 @@
       line-height: 1.7;
       outline: none;
     }
+    #notice-content { white-space: pre-line; }
     .editor-body:focus { border-color: var(--brand-blue); }
     .editor-body:empty::before {
       content: attr(data-placeholder);
@@ -1461,7 +1462,7 @@
         $("editor-title").textContent = "写一条新通知";
         $("notice-title").value = "";
         $("title-count").textContent = "0";
-        editor.innerHTML = "";
+        editor.textContent = "";
         setNoticeDateValue("");
         setVisibleAtValue("");
         state.imageUrl = "";
@@ -1473,6 +1474,24 @@
         $("cancel-edit-btn").classList.add("d-none");
       }
 
+      /** 通知正文按纯文本回显：DOMParser 是 inert document，不执行脚本、不加载资源。 */
+      function noticeToPlain(raw) {
+        var doc = new DOMParser().parseFromString(
+          "<div>" + String(raw || "") + "</div>", "text/html");
+        var root = doc.body.firstChild;
+        if (!root) { return ""; }
+        Array.prototype.forEach.call(
+          root.querySelectorAll("script, style, iframe, object, embed, template, svg, math"),
+          function (node) { node.remove(); });
+        Array.prototype.forEach.call(root.querySelectorAll("br"), function (node) {
+          node.replaceWith(doc.createTextNode("\n"));
+        });
+        Array.prototype.forEach.call(
+          root.querySelectorAll("div, p, li, h1, h2, h3, h4, h5, h6, tr"),
+          function (node) { node.appendChild(doc.createTextNode("\n")); });
+        return (root.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
+      }
+
       function fillForm(item) {
         state.editingId = item.id;
         state.editingStatus = item.status === "draft" ? "draft" : "published";
@@ -1480,7 +1499,7 @@
           (state.editingStatus === "draft" ? "编辑草稿 #" : "编辑通知 #") + item.id;
         $("notice-title").value = item.title || "";
         $("title-count").textContent = String(($("notice-title").value || "").length);
-        editor.innerHTML = item.content || "";
+        editor.textContent = noticeToPlain(item.content);
         state.imageUrl = item.image_url || "";
         if (state.imageUrl) {
           $("cover-preview").innerHTML = '<img src="' + escapeHtml(state.imageUrl) + '" alt="封面预览">';
@@ -1543,7 +1562,7 @@
       $("publish-btn").addEventListener("click", function () {
         if (state.publishing) { return; }
         var title = $("notice-title").value.trim();
-        var content = editor.innerHTML.trim();
+        var content = (editor.innerText || editor.textContent || "").trim();
         if (!title) {
           toast("标题不能为空", true);
           $("notice-title").focus();
