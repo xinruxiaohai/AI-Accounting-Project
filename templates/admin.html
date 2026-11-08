@@ -8,8 +8,8 @@
   <link rel="icon" type="image/png" href="/static/images/logo-main.png">
   <link rel="apple-touch-icon" href="/static/images/logo-main.png">
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.14.2">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.14.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.2.1">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.2.1">
   <script>
     /* v0.14.2：身份核验完成前先盖住后台内容，避免管理员数据闪现。
        9 秒兜底只解除「隐藏内容」，黑屏门帘仍由 admin-v0142.js 控制，防止脚本加载失败时整页空白。 */
@@ -1394,8 +1394,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.14.2"></script>
-<script src="/static/access-guard.js?v=0.14.2"></script>
+  <script src="/static/auth-v012.js?v=0.14.2.1"></script>
+<script src="/static/access-guard.js?v=0.14.2.1"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -2746,27 +2746,82 @@
 
       /* ---------- 当前管理员折叠列表（v0.14.2） ---------- */
 
+      // 云端「巨大头像撑爆页面」根因：头像原图是 1257×1257（UID 1）/ 1.7MB PNG（UID 3），
+      // 一旦 /static/v0142.css 没生效（Service Worker 旧缓存的 stale-while-revalidate 命中旧 CSS），
+      // <img> 没有任何尺寸约束，就直接按原始像素渲染。所以这里把尺寸 / 布局 / 兜底全部内联，
+      // 做到「CSS 挂掉也能安全渲染」。
+      var ROSTER_AVATAR_BOX =
+        "width:32px;height:32px;max-width:32px;max-height:32px;min-width:32px;flex:0 0 32px;";
+      var ROSTER_AVATAR_IMG_STYLE = ROSTER_AVATAR_BOX +
+        "display:block;object-fit:cover;border-radius:50%;overflow:hidden;" +
+        "background:#f8fafc;border:1px solid #e6ebf2;";
+      var ROSTER_AVATAR_LETTER_STYLE = ROSTER_AVATAR_BOX +
+        "display:grid;place-items:center;border-radius:50%;overflow:hidden;" +
+        "background:#f8fafc;border:1px solid #e6ebf2;font-size:13px;font-weight:700;color:#2563eb;";
+      var ROSTER_ROW_STYLE = "display:flex;align-items:center;gap:10px;min-width:0;overflow:hidden;";
+      var ROSTER_MAIN_STYLE = "flex:1 1 auto;min-width:0;overflow:hidden;";
+      var ROSTER_LINE_STYLE = "display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;";
+      var ROSTER_EMAIL_STYLE = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+
+      // 任意后端字段值 → 安全字符串：null/undefined/字面量 "None"/"null"/"undefined" 一律当空
+      function rosterText(value) {
+        if (value === null || typeof value === "undefined") { return ""; }
+        var text = String(value).trim();
+        if (!text) { return ""; }
+        var lowered = text.toLowerCase();
+        if (lowered === "null" || lowered === "none" || lowered === "undefined" || lowered === "nan") { return ""; }
+        return text;
+      }
+
+      // 云端 UID 重排后字段名可能变成 id / user_id，全部兜住
+      function rosterUid(item) {
+        var raw = rosterText(item.uid) || rosterText(item.id) ||
+                  rosterText(item.user_id) || rosterText(item.userId);
+        return raw || "—";
+      }
+
+      // 头像地址白名单：站内绝对路径 / http(s) / data:image，其余（裸文件名）补成上传目录
+      function rosterAvatarSrc(item) {
+        var raw = rosterText(item.avatar) || rosterText(item.avatar_url) ||
+                  rosterText(item.avatarUrl) || rosterText(item.head_img) || rosterText(item.headimg);
+        if (!raw) { return ""; }
+        if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) { return raw; }
+        if (raw.charAt(0) === "/") { return raw; }
+        return "/static/uploads/avatars/" + raw.replace(/^\/+/, "");
+      }
+
       function renderAdminRoster(items) {
         var box = $("admin-roster-list");
         if (!box) { return; }
-        $("admin-roster-total").textContent = String(items.length);
-        if (!items.length) {
+        var list = Array.isArray(items) ? items : [];
+        var total = $("admin-roster-total");
+        if (total) { total.textContent = String(list.length); }
+        if (!list.length) {
           box.innerHTML = '<div class="admin-empty">暂无管理员。</div>';
           return;
         }
-        box.innerHTML = items.map(function (a) {
-          var name = a.nickname || "（未设置昵称）";
-          var initial = String(name).slice(0, 1).toUpperCase();
-          var avatar = a.avatar
-            ? '<img class="v142-perm-avatar" src="' + escapeHtml(a.avatar) + '" alt="">'
-            : '<span class="v142-perm-avatar is-letter">' + escapeHtml(initial) + "</span>";
+        box.innerHTML = list.map(function (item) {
+          var a = (item && typeof item === "object") ? item : {};
+          var name = rosterText(a.nickname) || rosterText(a.nick_name) || rosterText(a.name) ||
+                     rosterText(a.display_name) || "（未设置昵称）";
+          var initial = name.slice(0, 1).toUpperCase() || "?";
+          var src = rosterAvatarSrc(a);
+          var avatar = src
+            ? '<img class="v142-perm-avatar" data-roster-avatar="1" data-initial="' + escapeHtml(initial) + '"' +
+              ' src="' + escapeHtml(src) + '" alt="' + escapeHtml(initial) + '"' +
+              ' width="32" height="32" style="' + ROSTER_AVATAR_IMG_STYLE + '"' +
+              ' loading="lazy" decoding="async" referrerpolicy="no-referrer">'
+            : '<span class="v142-perm-avatar is-letter" style="' + ROSTER_AVATAR_LETTER_STYLE + '">' +
+              escapeHtml(initial) + "</span>";
           return (
-            '<div class="v142-perm-row' + (a.builtin ? " is-super" : "") + '">' +
+            '<div class="v142-perm-row' + (a.builtin ? " is-super" : "") + '" style="' + ROSTER_ROW_STYLE + '">' +
               avatar +
-              '<div class="v142-perm-main">' +
-                '<div class="v142-perm-line">' +
-                  '<span class="v142-perm-uid">UID ' + escapeHtml(String(a.uid)) + "</span>" +
-                  '<span class="v142-perm-email">' + escapeHtml(a.email || "—") + "</span>" +
+              '<div class="v142-perm-main" style="' + ROSTER_MAIN_STYLE + '">' +
+                '<div class="v142-perm-line" style="' + ROSTER_LINE_STYLE + '">' +
+                  '<span class="v142-perm-uid">UID ' + escapeHtml(rosterUid(a)) + "</span>" +
+                  '<span class="v142-perm-email" style="' + ROSTER_EMAIL_STYLE + '">' +
+                    escapeHtml(rosterText(a.email) || rosterText(a.mail) || rosterText(a.user_email) || "—") +
+                  "</span>" +
                 "</div>" +
                 '<p class="v142-perm-sub">' + escapeHtml(name) +
                   (a.builtin ? " · 内置超级管理员（不可移除）" : " · 管理员") + "</p>" +
@@ -2774,6 +2829,19 @@
             "</div>"
           );
         }).join("");
+        // 头像 404（云端文件缺失 / 反代拦截）时换成首字母徽标，绝不留破图或原始大图
+        Array.prototype.slice.call(box.querySelectorAll("img[data-roster-avatar]")).forEach(function (img) {
+          var swap = function () {
+            if (!img.parentNode) { return; }
+            var span = document.createElement("span");
+            span.className = "v142-perm-avatar is-letter";
+            span.setAttribute("style", ROSTER_AVATAR_LETTER_STYLE);
+            span.textContent = img.getAttribute("data-initial") || "?";
+            img.parentNode.replaceChild(span, img);
+          };
+          img.addEventListener("error", swap);
+          if (img.complete && img.naturalWidth === 0) { swap(); }
+        });
       }
 
       function loadAdminRoster(force) {
@@ -3340,6 +3408,6 @@
     })();
   </script>
   <!-- v0.14.2：双重门禁 / 工单中心 / 问题日志 / 编号列表搜索 -->
-  <script src="/static/admin-v0142.js?v=0.14.2"></script>
+  <script src="/static/admin-v0142.js?v=0.14.2.1"></script>
 </body>
 </html>

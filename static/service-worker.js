@@ -11,9 +11,9 @@
  * 样式与 auth/charts/invest 三个脚本全部落空、只剩一个空壳页面。
  * 现在按模板真实 URL 精确预缓存，并同步 bump CACHE_NAME 与模板 ?v=。
  */
-const CACHE_NAME = "ai-accounting-v0.14.2";
+const CACHE_NAME = "ai-accounting-v0.14.2.1";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.14.2";
+const ASSET_VERSION = "0.14.2.1";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",

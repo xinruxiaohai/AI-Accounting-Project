@@ -200,15 +200,23 @@ html.v142-gating body > *:not(#v142-identity-gate) {
 .admin-roster[open] .admin-roster-summary { border-bottom: 1px solid var(--line, #e6ebf2); }
 .admin-roster > .admin-hint { margin: 10px 14px 8px; }
 .admin-roster > .v142-perm-list { padding: 0 14px 14px; }
+/* 折叠列表里的头像：死宽高 + 裁切，防止原图（云端有 1257×1257）按原始尺寸撑爆页面 */
 .v142-perm-avatar {
-  flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  max-width: 32px;
+  max-height: 32px;
+  min-width: 32px;
+  display: block;
   border-radius: 50%;
   object-fit: cover;
   border: 1px solid var(--line, #e6ebf2);
   background: var(--surface-2, #f8fafc);
 }
+/* 兜底：即便有别的样式表想放大头像，折叠面板内也锁死在 32px */
+.admin-roster img { max-width: 32px; max-height: 32px; }
+.admin-roster .v142-perm-row { overflow: hidden; }
 .v142-perm-avatar.is-letter {
   display: grid;
   place-items: center;
