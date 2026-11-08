@@ -942,9 +942,6 @@
       <!-- v0.14.2：工单归档出来的问题日志，独立 Tab -->
       <button type="button" class="admin-tab" role="tab" data-tab="problem-logs"
               aria-selected="false">问题日志</button>
-      <!-- v0.14.2：管理员权限管理面板 -->
-      <button type="button" class="admin-tab" role="tab" data-tab="permissions"
-              aria-selected="false">权限管理</button>
     </div>
 
     <section id="pane-notices">
@@ -1144,8 +1141,25 @@
       </div>
     </section>
 
-    <!-- v0.13.7：用户管理（只读）——后台需要 UID 才能快速定位某个用户 -->
+    <!-- v0.14.2：用户管理 —— 顶部可折叠「当前管理员」，下方用户表格带「操作」列 -->
     <section id="pane-users" hidden>
+      <div class="admin-card mb-3">
+        <details class="admin-roster" id="admin-roster">
+          <summary class="admin-roster-summary">
+            <span class="admin-roster-title">当前管理员</span>
+            <span class="admin-roster-count">共 <b id="admin-roster-total">0</b> 人</span>
+            <svg class="admin-roster-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </summary>
+          <p class="admin-hint">UID 1 为内置超级管理员，不可移除。添加 / 移除都在下方用户列表的【操作】列完成。</p>
+          <div class="v142-perm-list" id="admin-roster-list">
+            <div class="admin-empty">展开后加载…</div>
+          </div>
+        </details>
+      </div>
+
       <div class="admin-card">
         <div class="d-flex align-items-center justify-content-between mb-2">
           <h2 class="admin-card-title mb-0">用户管理 <span class="badge text-bg-secondary" id="user-total">0</span></h2>
@@ -1267,20 +1281,39 @@
         <div class="v142-log-list" id="v142-log-list"></div>
       </div>
     </section>
-
-    <!-- v0.14.2：管理员权限管理面板 -->
-    <section id="pane-permissions" hidden>
-      <div class="admin-card">
-        <h2 class="admin-card-title mb-0">权限管理</h2>
-        <p class="v142-perm-note">下方为全部管理员。添加 / 移除需输入您本人的登录密码二次确认；UID 1 为内置超级管理员，不可移除。</p>
-        <div class="v142-perm-toolbar">
-          <input type="text" id="v142-perm-input" class="form-control" placeholder="输入要添加的 UID 或邮箱">
-          <button type="button" class="v142-btn is-primary" id="v142-perm-add">添加管理员</button>
-        </div>
-        <div class="v142-perm-list" id="v142-perm-list"></div>
-      </div>
-    </section>
   </main>
+
+  <!-- v0.14.2：管理员权限二次验证（输入操作者本人的登录密码） -->
+  <div class="v142-modal" id="admin-verify-modal" hidden role="dialog" aria-modal="true"
+       aria-labelledby="admin-verify-title">
+    <div class="v142-modal-backdrop" data-admin-verify-cancel></div>
+    <div class="v142-modal-dialog" style="width: min(420px, calc(100vw - 32px));">
+      <div class="v142-modal-head">
+        <div>
+          <h3 class="v142-modal-title" id="admin-verify-title">验证操作者身份</h3>
+          <p class="v142-modal-sub" id="admin-verify-sub">请输入您本人的登录密码以确认。</p>
+        </div>
+        <button class="v142-modal-close" type="button" aria-label="关闭" data-admin-verify-cancel>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      <div class="v142-modal-body">
+        <div class="v142-field">
+          <label for="admin-verify-password">您的登录密码</label>
+          <input type="password" id="admin-verify-password" class="form-control"
+                 autocomplete="current-password" maxlength="64" placeholder="输入当前账号的登录密码">
+        </div>
+        <p class="admin-verify-error" id="admin-verify-error" hidden></p>
+      </div>
+      <div class="v142-modal-foot">
+        <button class="v142-btn" type="button" data-admin-verify-cancel>取消</button>
+        <button class="v142-btn is-primary" type="button" id="admin-verify-confirm">确认</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 查看明文密码二次验证（v0.11.2，独立于 5 分钟免密；v0.11.3 提到最高层） -->
   <div class="modal fade reveal-modal verify-top-modal" id="reveal-modal" tabindex="-1"
@@ -2319,15 +2352,13 @@
         // v0.14.2：问题日志 Tab
         var logPane = $("pane-problem-logs");
         if (logPane) { logPane.hidden = name !== "problem-logs"; }
-        // v0.14.2：权限管理 Tab（数据由 admin-v0142.js 暴露的 loadAdmins 拉取）
-        var permPane = $("pane-permissions");
-        if (permPane) { permPane.hidden = name !== "permissions"; }
-        if (name === "permissions" && window.__v0142Admin && typeof window.__v0142Admin.loadAdmins === "function") {
-          window.__v0142Admin.loadAdmins();
-        }
         if (name === "ai-brain" && !brainState.loaded) { loadAiBrain(); }
         if (name === "icons" && !iconsState.loaded) { loadIcons(); }
-        if (name === "users" && !usersState.loaded) { loadUsers(); }
+        if (name === "users") {
+          if (!usersState.loaded) { loadUsers(); }
+          // 管理员名单随「用户管理」一起加载，保证操作列与折叠面板状态同步
+          loadAdminRoster();
+        }
         if (name === "user-feedback" && !userFeedbackState.loaded) { loadUserFeedback(); }
         // 提示文案 Tab：文案列表 + 帮助内容配置一起进页，只拉一次
         if (name === "tips" && !tipsState.loaded) { loadTips(); }
@@ -2643,9 +2674,10 @@
         loadIcons().then(function () { toast("素材库已刷新"); });
       });
 
-      /* ---------- 用户管理（v0.13.7）：只读，重点是 UID ---------- */
+      /* ---------- 用户管理（v0.13.7，v0.14.2 合并管理员权限） ---------- */
 
       var usersState = { items: [], loaded: false, loading: false };
+      var rosterState = { items: [], loaded: false, loading: false };
 
       function renderUsers() {
         var box = $("user-list");
@@ -2658,18 +2690,32 @@
           '<table class="user-table">' +
             "<thead><tr>" +
               "<th>UID</th><th>昵称</th><th>邮箱</th><th>手机号</th>" +
-              "<th>账目数</th><th>注册时间</th>" +
+              "<th>账目数</th><th>注册时间</th><th class=\"user-ops-col\">操作</th>" +
             "</tr></thead><tbody>" +
             usersState.items.map(function (user) {
               var nickname = user.nickname || "（未设置）";
+              var uid = user.uid;
+              var isAdmin = Number(user.is_admin) === 1;
+              var ops;
+              if (uid === 1) {
+                ops = '<button type="button" class="v142-btn is-mini" disabled ' +
+                      'title="内置超级管理员，不可移除">超级管理员</button>';
+              } else if (isAdmin) {
+                ops = '<button type="button" class="v142-btn is-mini is-danger" ' +
+                      'data-admin-op="remove" data-uid="' + escapeHtml(String(uid)) + '">移除管理员</button>';
+              } else {
+                ops = '<button type="button" class="v142-btn is-mini is-primary" ' +
+                      'data-admin-op="add" data-uid="' + escapeHtml(String(uid)) + '">设为管理员</button>';
+              }
               return (
                 "<tr>" +
-                  '<td><span class="user-uid">#' + escapeHtml(String(user.uid)) + "</span></td>" +
+                  '<td><span class="user-uid">#' + escapeHtml(String(uid)) + "</span></td>" +
                   "<td>" + escapeHtml(nickname) + "</td>" +
                   "<td>" + escapeHtml(user.email || "—") + "</td>" +
                   "<td>" + escapeHtml(user.phone || "—") + "</td>" +
                   "<td>" + escapeHtml(String(user.record_count == null ? 0 : user.record_count)) + "</td>" +
                   "<td>" + escapeHtml(String(user.created_at || "—").slice(0, 19)) + "</td>" +
+                  '<td class="user-ops-col">' + ops + "</td>" +
                 "</tr>"
               );
             }).join("") +
@@ -2693,8 +2739,162 @@
 
       $("user-refresh").addEventListener("click", function () {
         usersState.loaded = false;
-        loadUsers().then(function () { toast("用户列表已刷新"); });
+        Promise.all([loadUsers(), loadAdminRoster(true)]).then(function () {
+          toast("用户列表已刷新");
+        });
       });
+
+      /* ---------- 当前管理员折叠列表（v0.14.2） ---------- */
+
+      function renderAdminRoster(items) {
+        var box = $("admin-roster-list");
+        if (!box) { return; }
+        $("admin-roster-total").textContent = String(items.length);
+        if (!items.length) {
+          box.innerHTML = '<div class="admin-empty">暂无管理员。</div>';
+          return;
+        }
+        box.innerHTML = items.map(function (a) {
+          var name = a.nickname || "（未设置昵称）";
+          var initial = String(name).slice(0, 1).toUpperCase();
+          var avatar = a.avatar
+            ? '<img class="v142-perm-avatar" src="' + escapeHtml(a.avatar) + '" alt="">'
+            : '<span class="v142-perm-avatar is-letter">' + escapeHtml(initial) + "</span>";
+          return (
+            '<div class="v142-perm-row' + (a.builtin ? " is-super" : "") + '">' +
+              avatar +
+              '<div class="v142-perm-main">' +
+                '<div class="v142-perm-line">' +
+                  '<span class="v142-perm-uid">UID ' + escapeHtml(String(a.uid)) + "</span>" +
+                  '<span class="v142-perm-email">' + escapeHtml(a.email || "—") + "</span>" +
+                "</div>" +
+                '<p class="v142-perm-sub">' + escapeHtml(name) +
+                  (a.builtin ? " · 内置超级管理员（不可移除）" : " · 管理员") + "</p>" +
+              "</div>" +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function loadAdminRoster(force) {
+        if (rosterState.loading) { return Promise.resolve(); }
+        if (rosterState.loaded && !force) { return Promise.resolve(); }
+        rosterState.loading = true;
+        return request("/api/admin/admins")
+          .then(function (data) {
+            rosterState.items = Array.isArray(data.admins) ? data.admins : [];
+            rosterState.loaded = true;
+            renderAdminRoster(rosterState.items);
+          })
+          .catch(function (error) {
+            var box = $("admin-roster-list");
+            if (box) { box.innerHTML = '<div class="admin-empty">' + escapeHtml(error.message) + "</div>"; }
+          })
+          .then(function () { rosterState.loading = false; });
+      }
+
+      /* ---------- 权限二次验证弹窗 ---------- */
+
+      var verifyState = { resolver: null };
+
+      function openVerifyModal(action, uid) {
+        var modal = $("admin-verify-modal");
+        if (!modal) { return Promise.resolve(null); }
+        $("admin-verify-title").textContent =
+          action === "add" ? "设为管理员" : "移除管理员";
+        $("admin-verify-sub").textContent =
+          (action === "add" ? "即将把 UID " + uid + " 设为管理员。" : "即将移除 UID " + uid + " 的管理员权限。") +
+          "请输入您本人的登录密码确认。";
+        var input = $("admin-verify-password");
+        input.value = "";
+        var err = $("admin-verify-error");
+        err.textContent = "";
+        err.hidden = true;
+        modal.hidden = false;
+        void modal.offsetWidth;
+        modal.classList.add("is-open");
+        window.setTimeout(function () { try { input.focus(); } catch (e) {} }, 30);
+        return new Promise(function (resolve) { verifyState.resolver = resolve; });
+      }
+
+      function closeVerifyModal(value) {
+        var modal = $("admin-verify-modal");
+        if (modal && !modal.hidden) {
+          modal.classList.remove("is-open");
+          modal.hidden = true;
+        }
+        var resolver = verifyState.resolver;
+        verifyState.resolver = null;
+        if (resolver) { resolver(value); }
+      }
+
+      function submitVerify() {
+        var input = $("admin-verify-password");
+        var value = String(input ? input.value || "" : "");
+        if (!value) {
+          var err = $("admin-verify-error");
+          err.textContent = "密码不能为空";
+          err.hidden = false;
+          input.focus();
+          return;
+        }
+        closeVerifyModal(value);
+      }
+
+      if ($("admin-verify-confirm")) {
+        $("admin-verify-confirm").addEventListener("click", submitVerify);
+      }
+      if ($("admin-verify-password")) {
+        $("admin-verify-password").addEventListener("keydown", function (event) {
+          if (event.key === "Enter") { event.preventDefault(); submitVerify(); }
+        });
+      }
+      Array.prototype.slice.call(document.querySelectorAll("[data-admin-verify-cancel]"))
+        .forEach(function (el) {
+          el.addEventListener("click", function () { closeVerifyModal(null); });
+        });
+
+      /* ---------- 设为 / 移除管理员（事件委托） ---------- */
+
+      function applyAdminRole(action, uid, button) {
+        var label = action === "add" ? "设为管理员" : "移除管理员";
+        openVerifyModal(action, uid).then(function (password) {
+          if (password === null) { return; }
+          var url = action === "add" ? "/api/admin/admins/add" : "/api/admin/admins/remove";
+          if (button) { button.disabled = true; }
+          request(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uid: uid, password: password })
+          }).then(function () {
+            toast("已" + label + "（UID " + uid + "）");
+            rosterState.loaded = false;
+            usersState.loaded = false;
+            return Promise.all([loadUsers(), loadAdminRoster(true)]);
+          }).catch(function (error) {
+            if (button) { button.disabled = false; }
+            toast((error && error.message) || (label + "失败"), true);
+          });
+        });
+      }
+
+      if ($("user-list")) {
+        $("user-list").addEventListener("click", function (event) {
+          var btn = event.target.closest ? event.target.closest("[data-admin-op]") : null;
+          if (!btn || btn.disabled) { return; }
+          event.preventDefault();
+          var uid = Number(btn.getAttribute("data-uid"));
+          if (!uid) { return; }
+          applyAdminRole(btn.getAttribute("data-admin-op"), uid, btn);
+        });
+      }
+
+      // 折叠面板首次展开时才拉数据，避免首屏多打一个接口
+      if ($("admin-roster")) {
+        $("admin-roster").addEventListener("toggle", function () {
+          if (this.open) { loadAdminRoster(); }
+        });
+      }
 
       /* ---------- 提示文案管理（v0.14.0）：toast() 的颜文字文案库 ---------- */
 

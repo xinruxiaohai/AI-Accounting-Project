@@ -332,6 +332,7 @@ def list_users():
     try:
         rows = conn.execute(
             "SELECT u.id, u.email, u.phone, u.nickname, u.avatar, u.created_at, "
+            "       COALESCE(u.is_admin, 0) AS is_admin, "
             "       (SELECT COUNT(*) FROM records r "
             "         WHERE r.user_id = u.id AND r.deleted_at IS NULL) AS record_count "
             "  FROM users u ORDER BY u.id"
@@ -341,6 +342,8 @@ def list_users():
             user = _row_to_user(row)
             user["uid"] = row["id"]
             user["record_count"] = row["record_count"]
+            # v0.14.2：用户管理表格要按 is_admin 决定显示「设为/移除管理员」
+            user["is_admin"] = 1 if _row_int(row, "is_admin", 0) else 0
             users.append(user)
         return users
     finally:

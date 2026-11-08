@@ -1029,14 +1029,6 @@
     ticketState.searchHooks.brain = attachListSearch("#pane-ai-brain", "#feedback-list", "搜索反馈编号 / 内容");
     loadTickets(false);
     loadLogs();
-    var permAdd = $("v142-perm-add");
-    if (permAdd) { permAdd.addEventListener("click", addAdminFromInput); }
-    var permInput = $("v142-perm-input");
-    if (permInput) {
-      permInput.addEventListener("keydown", function (event) {
-        if (event.key === "Enter") { event.preventDefault(); addAdminFromInput(); }
-      });
-    }
     // 内联脚本的 Tab 切换会异步填充列表，延迟再挂一次搜索过滤
     window.setTimeout(function () {
       Object.keys(ticketState.searchHooks).forEach(function (key) {
@@ -1051,94 +1043,9 @@
     }, true);
   }
 
-  /* ---------------- 管理员权限管理面板（对接 /api/admin/admins） ---------------- */
-  function loadAdmins() {
-    var box = $("v142-perm-list");
-    api("/api/admin/admins").then(function (data) {
-      renderAdminList(Array.isArray(data.admins) ? data.admins : []);
-    }).catch(function () {
-      if (box) {
-        box.textContent = "";
-        var e = document.createElement("div");
-        e.className = "v142-empty";
-        e.textContent = "管理员列表加载失败，请刷新重试。";
-        box.appendChild(e);
-      }
-    });
-  }
-  function renderAdminList(items) {
-    var box = $("v142-perm-list");
-    if (!box) { return; }
-    box.textContent = "";
-    if (!items.length) {
-      var empty = document.createElement("div");
-      empty.className = "v142-empty";
-      empty.textContent = "暂无其他管理员。";
-      box.appendChild(empty);
-      return;
-    }
-    items.forEach(function (a) {
-      var row = document.createElement("div");
-      row.className = "v142-perm-row" + (a.builtin ? " is-super" : "");
-      var main = document.createElement("div");
-      main.className = "v142-perm-main";
-      var line = document.createElement("div");
-      line.className = "v142-perm-line";
-      var uid = document.createElement("span");
-      uid.className = "v142-perm-uid";
-      uid.textContent = "UID " + esc(a.uid);
-      var email = document.createElement("span");
-      email.className = "v142-perm-email";
-      email.textContent = a.email || "—";
-      line.appendChild(uid);
-      line.appendChild(email);
-      var sub = document.createElement("p");
-      sub.className = "v142-perm-sub";
-      sub.textContent = (a.nickname ? a.nickname + " · " : "") +
-        (a.builtin ? "内置超级管理员（不可移除）" : "管理员");
-      main.appendChild(line);
-      main.appendChild(sub);
-      var actions = document.createElement("div");
-      actions.className = "v142-perm-actions";
-      if (a.builtin) {
-        var locked = document.createElement("button");
-        locked.type = "button";
-        locked.className = "v142-btn";
-        locked.textContent = "不可移除";
-        locked.disabled = true;
-        actions.appendChild(locked);
-      } else {
-        var rm = document.createElement("button");
-        rm.type = "button";
-        rm.className = "v142-btn is-danger";
-        rm.textContent = "移除";
-        rm.addEventListener("click", function () { removeAdmin(a.uid); });
-        actions.appendChild(rm);
-      }
-      row.appendChild(main);
-      row.appendChild(actions);
-      box.appendChild(row);
-    });
-  }
-  function addAdminFromInput() {
-    var input = $("v142-perm-input");
-    var val = String(input ? input.value || "" : "").trim();
-    if (!val) { toast("先输入要添加的 UID 或邮箱", true); return; }
-    var pwd = window.prompt("请输入您本人的登录密码以确认添加：");
-    if (pwd === null) { return; }
-    if (!pwd) { toast("密码不能为空", true); return; }
-    api("/api/admin/admins/add", jsonOptions("POST", { uid: val, password: pwd }))
-      .then(function () { if (input) { input.value = ""; } toast("已添加管理员"); loadAdmins(); })
-      .catch(function (error) { toast((error && error.message) || "添加失败", true); });
-  }
-  function removeAdmin(uid) {
-    var pwd = window.prompt("请输入您本人的登录密码以确认移除 UID " + uid + " 的管理员权限：");
-    if (pwd === null) { return; }
-    if (!pwd) { toast("密码不能为空", true); return; }
-    api("/api/admin/admins/remove", jsonOptions("POST", { uid: uid, password: pwd }))
-      .then(function () { toast("已移除管理员"); loadAdmins(); })
-      .catch(function (error) { toast((error && error.message) || "移除失败", true); });
-  }
+  /* ---------------- 管理员权限：已并入「用户管理」内联脚本（v0.14.2 重构） ----------------
+   * 独立「权限管理」Tab 与这里的 v142-perm-* 面板逻辑已移除，
+   * 管理员名单 / 设为 / 移除统一由 admin.html 的 pane-users 处理。 */
 
   window.__v0142Admin = {
     identity: function () { return window.__v0142Identity || null; },
@@ -1147,8 +1054,7 @@
     store: store,
     openChat: openChat,
     setTicketStatus: setTicketStatus,
-    saveLog: saveLog,
-    loadAdmins: loadAdmins
+    saveLog: saveLog
   };
 
   if (document.readyState === "loading") {
