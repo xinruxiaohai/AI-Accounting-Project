@@ -163,6 +163,18 @@ html.v142-gating body > *:not(#v142-identity-gate) {
 .v142-btn.is-primary { border-color: var(--brand-blue, #2563eb); background: var(--brand-blue, #2563eb); color: #fff; }
 .v142-btn.is-danger { color: var(--color-expense, #dc2626); }
 .v142-btn.is-ghost { background: transparent; }
+.v142-perm-toolbar { display: flex; gap: 8px; margin-bottom: 14px; }
+.v142-perm-toolbar input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 9px;
+  background: var(--surface, #fff);
+  color: var(--text-main, #1f2937);
+  font-size: 13px;
+}
+.v142-perm-toolbar input:focus-visible { outline: 2px solid var(--brand-blue, #2563eb); outline-offset: 1px; }
 .v142-empty {
   padding: 20px 14px;
   border: 1px dashed var(--line, #e6ebf2);
@@ -396,6 +408,65 @@ html.v142-gating body > *:not(#v142-identity-gate) {
   cursor: pointer;
 }
 .v142-phrases button:hover { background: var(--surface-2, #f8fafc); }
+/* v0.14.2：快捷语录管理面板（选中填入 / 新增 / 删除） */
+.v142-phrase-wrap .v142-btn { white-space: nowrap !important; }
+.v142-chat-actions { gap: 8px; }
+.v142-chat-email {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted, #64748b);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.v142-chat-email input { width: 14px; height: 14px; accent-color: var(--brand-blue, #2563eb); }
+.v142-phrases { width: 300px; max-height: 320px; overflow: auto; }
+.v142-phrase-item { display: flex; align-items: stretch; gap: 6px; margin-bottom: 6px; }
+.v142-phrase-empty { padding: 8px 4px; font-size: 12px; color: var(--text-muted, #64748b); }
+.v142-phrases .v142-phrase-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
+  width: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 7px;
+  background: var(--surface, #fff);
+  color: var(--text-main, #1f2937);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+.v142-phrases .v142-phrase-text:hover { background: var(--surface-2, #f8fafc); }
+.v142-phrases .v142-phrase-del {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 7px;
+  background: var(--surface, #fff);
+  color: var(--color-expense, #dc2626);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.v142-phrase-add { display: flex; gap: 6px; margin-top: 2px; }
+.v142-phrase-add input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 7px;
+  background: var(--surface, #fff);
+  color: var(--text-main, #1f2937);
+  font-size: 12px;
+}
 
 /* ---------------- 8. 问题日志 ---------------- */
 .v142-log-list { display: flex; flex-direction: column; gap: 9px; }

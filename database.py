@@ -1818,6 +1818,34 @@ def _ensure_v0142_schema(conn):
         "ON issue_logs (feedback_id)"
     )
 
+    # v0.14.2：快捷语录（管理员回复话术库），全新独立表，不加外键
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quick_replies (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            content    TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    # 初始化 2 条默认语录：仅当表为空时插入，幂等不重复塞
+    try:
+        qr_count = conn.execute(
+            "SELECT COUNT(*) AS c FROM quick_replies"
+        ).fetchone()["c"]
+    except Exception:  # noqa: BLE001 - 旧库可能还没有这张表，忽略后由 CREATE 兜底
+        qr_count = 0
+    if qr_count == 0:
+        qr_now = _feedback_now()
+        qr_defaults = [
+            "您好，问题我们已经收到，正在排查，有进展会第一时间在这里回复您。",
+            "麻烦补充一下出现问题的具体操作步骤和截图，我们尽快定位。",
+        ]
+        conn.executemany(
+            "INSERT INTO quick_replies (content, created_at) VALUES (?, ?)",
+            [(c0, qr_now) for c0 in qr_defaults],
+        )
+
     # 防呆：1 号超管永远是管理员。即使有人绕过接口把库改了，重启也会自愈。
     conn.execute(
         "UPDATE users SET is_admin = 1 WHERE id = 1 AND COALESCE(is_admin, 0) <> 1"
@@ -7117,7 +7145,7 @@ def list_admins():
     conn = get_conn()
     try:
         rows = conn.execute(
-            "SELECT id, email, nickname, is_admin FROM users "
+            "SELECT id, email, nickname, avatar, is_admin FROM users "
             " WHERE is_admin = 1 ORDER BY id"
         ).fetchall()
         return [
@@ -7125,10 +7153,78 @@ def list_admins():
                 "id": row["id"],
                 "email": row["email"] or "",
                 "nickname": row["nickname"] or "",
+                "avatar": row["avatar"] or "",
                 "is_admin": _row_int(row, "is_admin", 0),
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+# ---------------- v0.14.2 快捷语录（管理员回复话术库） ----------------
+
+def list_quick_replies():
+    """列出全部快捷语录，按 id 升序（后台话术库，与管理员一一对应，无需按 uid 隔离）。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, created_at FROM quick_replies ORDER BY id"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "content": row["content"] or "",
+                "created_at": row["created_at"] or "",
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+def add_quick_reply(content):
+    """新增一条快捷语录，返回入库字典。content 必填且 ≤500 字。"""
+    text = str(content or "").strip()
+    if not text:
+        raise RecordError("语录内容不能为空")
+    if len(text) > 500:
+        raise RecordError("语录内容最多 500 个字")
+    created_at = _feedback_now()
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO quick_replies (content, created_at) VALUES (?, ?)",
+                (text, created_at),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, content, created_at FROM quick_replies WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return {
+            "id": row["id"],
+            "content": row["content"] or "",
+            "created_at": row["created_at"] or "",
+        }
+    finally:
+        conn.close()
+
+
+def delete_quick_reply(reply_id):
+    """删除一条快捷语录，返回是否命中（用于前端 404 判定）。"""
+    try:
+        rid = int(reply_id)
+    except (TypeError, ValueError):
+        return False
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM quick_replies WHERE id = ?", (rid,)
+            )
+            return cursor.rowcount > 0
     finally:
         conn.close()
 

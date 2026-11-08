@@ -433,6 +433,49 @@ def _send_verification_email(email, code, purpose):
         return False, str(exc)
 
 
+def _build_feedback_reply_email(to_email, ticket_id, content):
+    """拼装工单回复通知邮件（纯文本 + HTML 双版本）。"""
+    preview = content if len(content) <= 200 else content[:200] + "…"
+    msg = EmailMessage()
+    msg["Subject"] = "【%s】您提交的工单 #%s 有了新回复" % (APP_BRAND_NAME, ticket_id)
+    msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
+    msg["To"] = to_email
+    msg.set_content(
+        "%s：您提交的工单 #%s 管理员已回复，内容如下：\n\n%s\n\n登录小程序查看完整对话。"
+        % (APP_BRAND_NAME, ticket_id, content)
+    )
+    msg.add_alternative(
+        '<div style="font-family:sans-serif;max-width:480px;margin:0 auto">'
+        "<h2>%s · 工单 #%s 新回复</h2>"
+        '<p style="white-space:pre-wrap">%s</p>'
+        "<p>登录小程序查看完整对话。</p></div>" % (APP_BRAND_NAME, ticket_id, preview),
+        subtype="html",
+    )
+    return msg
+
+
+def _send_feedback_reply_email(to_email, ticket_id, content):
+    """用 QQ 邮箱 SMTP(465, SSL) 发工单回复通知。返回 (是否发出, 错误信息)。
+
+    被 reply 接口的 try-except 包裹，发送失败绝不拖垮主流程（回复已先落库）。
+    """
+    if not MAIL_CONFIGURED:
+        print(
+            "[v0.14.2][工单回复邮件][未配置SMTP，仅控制台] -> %s (工单 #%s)"
+            % (to_email, ticket_id),
+            flush=True,
+        )
+        return False, "邮箱服务未配置（缺 MAIL_USER/MAIL_PASSWORD）"
+    try:
+        msg = _build_feedback_reply_email(to_email, ticket_id, content)
+        with smtplib.SMTP_SSL(MAIL_SERVER, MAIL_PORT, timeout=10) as server:
+            server.login(MAIL_USER, MAIL_PASSWORD)
+            server.send_message(msg)
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - 回复已落库，邮件失败只是通知不到位
+        return False, str(exc)
+
+
 def _verify_email_code(email, code, purpose="register"):
     """校验邮箱验证码并一次性消费，返回 (是否通过, 错误信息)。
 
@@ -4155,7 +4198,14 @@ def _target_uid(data):
     try:
         return int(value)
     except (TypeError, ValueError):
-        return None
+        pass
+    # 允许传邮箱：解析成对应 uid（让前端「输入 UID 或邮箱」都能用）
+    text = str(value or "").strip().lower()
+    if text:
+        user = database.get_user_by_email(text)
+        if user:
+            return int(user["id"])
+    return None
 
 
 @app.route("/api/admin/admins/add", methods=["POST"])
@@ -4278,7 +4328,8 @@ def admin_reply_feedback_post(feedback_id):
     denied = _require_rbac_admin()
     if denied is not None:
         return denied
-    content, image_url, err = _clean_reply_content(request.get_json(silent=True))
+    raw = request.get_json(silent=True)
+    content, image_url, err = _clean_reply_content(raw)
     if err is not None:
         return err
     if database.get_feedback_detail(feedback_id) is None:
@@ -4287,6 +4338,20 @@ def admin_reply_feedback_post(feedback_id):
         feedback_id, "admin", _admin_uid(), content, image_url
     )
     database.sync_admin_reply_to_legacy(feedback_id, content)
+    # v0.14.2：可选邮件通知工单提交用户；失败不抛，避免拖垮回复主流程
+    if raw.get("send_email") is True:
+        ticket = database.get_feedback_detail(feedback_id) or {}
+        to_email = (ticket.get("email") or "").strip()
+        if to_email:
+            ok, mail_err = _send_feedback_reply_email(
+                to_email, feedback_id, content
+            )
+            if not ok:
+                print(
+                    "[v0.14.2] 工单 #%s 回复邮件发送失败：%s"
+                    % (feedback_id, mail_err),
+                    flush=True,
+                )
     return jsonify(
         reply=reply, feedback=database.get_feedback_detail(feedback_id)
     ), 201
@@ -4355,16 +4420,58 @@ def admin_create_issue_log():
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify(error="请求体必须是 JSON 对象"), 400
+    # 前端传 result（"已解决"/"未解决"）或 status（0/1）；result 优先映射到 status
+    raw_status = data.get("status")
+    if raw_status is None and data.get("result") is not None:
+        raw_status = 1 if str(data.get("result")) in ("已解决", "resolved") else 0
     try:
         log = database.create_issue_log(
             data.get("content"),
             feedback_id=data.get("feedback_id"),
             user_uid=data.get("user_uid", _admin_uid()),
-            status=data.get("status", 0),
+            status=raw_status if raw_status is not None else 0,
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
     return jsonify(log=log), 201
+
+
+# ---------------- v0.14.2 快捷语录（管理员话术库） ----------------
+
+@app.route("/api/admin/quick-replies", methods=["GET"])
+def admin_list_quick_replies():
+    """列出全部快捷语录（管理员话术库）。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    return jsonify(replies=database.list_quick_replies())
+
+
+@app.route("/api/admin/quick-replies", methods=["POST"])
+def admin_add_quick_reply():
+    """新增一条快捷语录。body: {"content": "话术"}"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        reply = database.add_quick_reply(data.get("content"))
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, reply=reply), 201
+
+
+@app.route("/api/admin/quick-replies/<int:rid>", methods=["DELETE"])
+def admin_delete_quick_reply(rid):
+    """删除一条快捷语录。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    if not database.delete_quick_reply(rid):
+        return jsonify(error="语录不存在"), 404
+    return jsonify(ok=True, id=rid)
 
 
 # ---------------- v0.14.1 工单系统（管理员回复 / 用户查自己的单） ----------------
@@ -4450,6 +4557,8 @@ def _public_admin_list():
             "uid": item["id"],
             "id": item["id"],
             "email": item["email"],
+            "nickname": item["nickname"] or "",
+            "avatar": item["avatar"] or "",
             "builtin": item["id"] == database.ADMIN_USER_ID,
         }
         for item in database.list_admins()

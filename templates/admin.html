@@ -942,6 +942,9 @@
       <!-- v0.14.2：工单归档出来的问题日志，独立 Tab -->
       <button type="button" class="admin-tab" role="tab" data-tab="problem-logs"
               aria-selected="false">问题日志</button>
+      <!-- v0.14.2：管理员权限管理面板 -->
+      <button type="button" class="admin-tab" role="tab" data-tab="permissions"
+              aria-selected="false">权限管理</button>
     </div>
 
     <section id="pane-notices">
@@ -1262,6 +1265,19 @@
         </div>
         <p class="admin-hint mb-3">在工单对话里点「编写问题日志」，UID、时间、工单号会自动带入。</p>
         <div class="v142-log-list" id="v142-log-list"></div>
+      </div>
+    </section>
+
+    <!-- v0.14.2：管理员权限管理面板 -->
+    <section id="pane-permissions" hidden>
+      <div class="admin-card">
+        <h2 class="admin-card-title mb-0">权限管理</h2>
+        <p class="v142-perm-note">下方为全部管理员。添加 / 移除需输入您本人的登录密码二次确认；UID 1 为内置超级管理员，不可移除。</p>
+        <div class="v142-perm-toolbar">
+          <input type="text" id="v142-perm-input" class="form-control" placeholder="输入要添加的 UID 或邮箱">
+          <button type="button" class="v142-btn is-primary" id="v142-perm-add">添加管理员</button>
+        </div>
+        <div class="v142-perm-list" id="v142-perm-list"></div>
       </div>
     </section>
   </main>
@@ -2303,6 +2319,12 @@
         // v0.14.2：问题日志 Tab
         var logPane = $("pane-problem-logs");
         if (logPane) { logPane.hidden = name !== "problem-logs"; }
+        // v0.14.2：权限管理 Tab（数据由 admin-v0142.js 暴露的 loadAdmins 拉取）
+        var permPane = $("pane-permissions");
+        if (permPane) { permPane.hidden = name !== "permissions"; }
+        if (name === "permissions" && window.__v0142Admin && typeof window.__v0142Admin.loadAdmins === "function") {
+          window.__v0142Admin.loadAdmins();
+        }
         if (name === "ai-brain" && !brainState.loaded) { loadAiBrain(); }
         if (name === "icons" && !iconsState.loaded) { loadIcons(); }
         if (name === "users" && !usersState.loaded) { loadUsers(); }

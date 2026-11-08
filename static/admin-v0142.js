@@ -497,6 +497,7 @@
       '      <label class="v142-btn v142-chat-attach" for="v142-chat-file">选择图片' +
       '        <input type="file" id="v142-chat-file" accept="image/*" aria-label="选择回复图片"></label>' +
       '      <img class="v142-chat-shot" id="v142-chat-shot" alt="待发送图片预览" hidden>' +
+      '      <label class="v142-chat-email"><input type="checkbox" id="v142-chat-email"> 同时发送邮件通知用户</label>' +
       '      <button class="v142-btn is-ghost" type="button" id="v142-chat-clear">清空</button>' +
       '      <button class="v142-btn is-primary" type="button" id="v142-chat-send">发送回复</button>' +
       "    </div>" +
@@ -505,19 +506,7 @@
     document.body.appendChild(modal);
 
     var phraseBox = $("v142-phrases");
-    QUICK_PHRASES.forEach(function (text) {
-      var btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = text;
-      btn.addEventListener("click", function () {
-        var input = $("v142-chat-input");
-        input.value = input.value.trim() ? input.value.trim() + "\n" + text : text;
-        phraseBox.hidden = true;
-        input.focus();
-      });
-      phraseBox.appendChild(btn);
-    });
-    $("v142-phrase-btn").addEventListener("click", function () { phraseBox.hidden = !phraseBox.hidden; });
+    $("v142-phrase-btn").addEventListener("click", function () { renderPhrasePanel(); phraseBox.hidden = !phraseBox.hidden; });
     $("v142-chat-file").addEventListener("change", function (event) {
       var file = event.target.files && event.target.files[0];
       if (!file) { return; }
@@ -687,8 +676,10 @@
 
     // 图片先落盘换 URL：回复接口只接受 ≤500 字的图片地址，不收 dataURL
     uploadChatImage().then(function (imageUrl) {
+      var emailChk = $("v142-chat-email");
+      var sendEmail = !!(emailChk && emailChk.checked);
       return api("/api/admin/feedback/" + encodeURIComponent(ticket.id) + "/reply",
-        jsonOptions("POST", { content: text, image_url: imageUrl }))
+        jsonOptions("POST", { content: text, image_url: imageUrl, send_email: sendEmail }))
         .then(function () { return imageUrl; });
     }).then(function (imageUrl) {
       input.value = "";
@@ -749,6 +740,91 @@
       });
   }
 
+  /* ---------------- 快捷语录管理（对接后端 /api/admin/quick-replies） ---------------- */
+  function renderPhrasePanel() {
+    var box = $("v142-phrases");
+    if (!box) { return; }
+    box.textContent = "";
+    api("/api/admin/quick-replies").then(function (data) {
+      var items = Array.isArray(data.replies) ? data.replies : [];
+      box.textContent = "";
+      if (!items.length) {
+        var empty = document.createElement("div");
+        empty.className = "v142-phrase-empty";
+        empty.textContent = "还没有快捷语录，在下方新增一条吧。";
+        box.appendChild(empty);
+      }
+      items.forEach(function (item) {
+        var row = document.createElement("div");
+        row.className = "v142-phrase-item";
+        var fill = document.createElement("button");
+        fill.type = "button";
+        fill.className = "v142-phrase-text";
+        fill.textContent = item.content;
+        fill.title = "点击填入回复框";
+        fill.addEventListener("click", function () {
+          var input = $("v142-chat-input");
+          if (!input) { return; }
+          input.value = input.value.trim() ? input.value.trim() + "\n" + item.content : item.content;
+          box.hidden = true;
+          input.focus();
+        });
+        var del = document.createElement("button");
+        del.type = "button";
+        del.className = "v142-btn is-danger v142-phrase-del";
+        del.textContent = "删除";
+        del.addEventListener("click", function () { deleteQuickReply(item.id); });
+        row.appendChild(fill);
+        row.appendChild(del);
+        box.appendChild(row);
+      });
+      // 新增行
+      var addRow = document.createElement("div");
+      addRow.className = "v142-phrase-add";
+      var input = document.createElement("input");
+      input.id = "v142-phrase-new";
+      input.type = "text";
+      input.placeholder = "新增快捷语录…";
+      input.maxLength = 500;
+      var addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "v142-btn is-primary";
+      addBtn.textContent = "新增";
+      addBtn.addEventListener("click", addQuickReply);
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") { event.preventDefault(); addQuickReply(); }
+      });
+      addRow.appendChild(input);
+      addRow.appendChild(addBtn);
+      box.appendChild(addRow);
+    }).catch(function () {
+      box.textContent = "";
+      var fail = document.createElement("div");
+      fail.className = "v142-phrase-empty";
+      fail.textContent = "语录加载失败，请刷新重试。";
+      box.appendChild(fail);
+    });
+  }
+  function addQuickReply() {
+    var input = $("v142-phrase-new");
+    var text = String(input ? input.value || "" : "").trim();
+    if (!text) { toast("先写点内容再新增", true); return; }
+    api("/api/admin/quick-replies", jsonOptions("POST", { content: text })).then(function () {
+      toast("已新增快捷语录");
+      renderPhrasePanel();
+    }).catch(function (error) {
+      toast((error && error.message) || "新增失败", true);
+    });
+  }
+  function deleteQuickReply(id) {
+    api("/api/admin/quick-replies/" + encodeURIComponent(id), { method: "DELETE" }).then(function () {
+      toast("已删除快捷语录");
+      renderPhrasePanel();
+    }).catch(function (error) {
+      toast((error && error.message) || "删除失败", true);
+    });
+  }
+
   /* ---------------- 问题日志 ---------------- */
   function buildLogModal() {
     if ($("v142-log-modal")) { return; }
@@ -774,7 +850,7 @@
       '      <div class="v142-field"><label for="v142-log-ticket">工单号</label><input id="v142-log-ticket" readonly></div>' +
       "    </div>" +
       '    <div class="v142-field"><label for="v142-log-result">处理结论</label>' +
-      '      <select id="v142-log-result"><option value="resolved">已解决</option><option value="unresolved">未解决</option></select></div>' +
+      '      <select id="v142-log-result"><option value="resolved">已解决</option><option value="unresolved" selected>未解决</option></select></div>' +
       '    <div class="v142-field"><label for="v142-log-content">问题内容</label>' +
       '      <textarea id="v142-log-content" placeholder="写清楚现象、原因和处理动作…"></textarea></div>' +
       '    <p class="v142-form-error" id="v142-log-error" hidden></p>' +
@@ -953,6 +1029,14 @@
     ticketState.searchHooks.brain = attachListSearch("#pane-ai-brain", "#feedback-list", "搜索反馈编号 / 内容");
     loadTickets(false);
     loadLogs();
+    var permAdd = $("v142-perm-add");
+    if (permAdd) { permAdd.addEventListener("click", addAdminFromInput); }
+    var permInput = $("v142-perm-input");
+    if (permInput) {
+      permInput.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") { event.preventDefault(); addAdminFromInput(); }
+      });
+    }
     // 内联脚本的 Tab 切换会异步填充列表，延迟再挂一次搜索过滤
     window.setTimeout(function () {
       Object.keys(ticketState.searchHooks).forEach(function (key) {
@@ -967,6 +1051,95 @@
     }, true);
   }
 
+  /* ---------------- 管理员权限管理面板（对接 /api/admin/admins） ---------------- */
+  function loadAdmins() {
+    var box = $("v142-perm-list");
+    api("/api/admin/admins").then(function (data) {
+      renderAdminList(Array.isArray(data.admins) ? data.admins : []);
+    }).catch(function () {
+      if (box) {
+        box.textContent = "";
+        var e = document.createElement("div");
+        e.className = "v142-empty";
+        e.textContent = "管理员列表加载失败，请刷新重试。";
+        box.appendChild(e);
+      }
+    });
+  }
+  function renderAdminList(items) {
+    var box = $("v142-perm-list");
+    if (!box) { return; }
+    box.textContent = "";
+    if (!items.length) {
+      var empty = document.createElement("div");
+      empty.className = "v142-empty";
+      empty.textContent = "暂无其他管理员。";
+      box.appendChild(empty);
+      return;
+    }
+    items.forEach(function (a) {
+      var row = document.createElement("div");
+      row.className = "v142-perm-row" + (a.builtin ? " is-super" : "");
+      var main = document.createElement("div");
+      main.className = "v142-perm-main";
+      var line = document.createElement("div");
+      line.className = "v142-perm-line";
+      var uid = document.createElement("span");
+      uid.className = "v142-perm-uid";
+      uid.textContent = "UID " + esc(a.uid);
+      var email = document.createElement("span");
+      email.className = "v142-perm-email";
+      email.textContent = a.email || "—";
+      line.appendChild(uid);
+      line.appendChild(email);
+      var sub = document.createElement("p");
+      sub.className = "v142-perm-sub";
+      sub.textContent = (a.nickname ? a.nickname + " · " : "") +
+        (a.builtin ? "内置超级管理员（不可移除）" : "管理员");
+      main.appendChild(line);
+      main.appendChild(sub);
+      var actions = document.createElement("div");
+      actions.className = "v142-perm-actions";
+      if (a.builtin) {
+        var locked = document.createElement("button");
+        locked.type = "button";
+        locked.className = "v142-btn";
+        locked.textContent = "不可移除";
+        locked.disabled = true;
+        actions.appendChild(locked);
+      } else {
+        var rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "v142-btn is-danger";
+        rm.textContent = "移除";
+        rm.addEventListener("click", function () { removeAdmin(a.uid); });
+        actions.appendChild(rm);
+      }
+      row.appendChild(main);
+      row.appendChild(actions);
+      box.appendChild(row);
+    });
+  }
+  function addAdminFromInput() {
+    var input = $("v142-perm-input");
+    var val = String(input ? input.value || "" : "").trim();
+    if (!val) { toast("先输入要添加的 UID 或邮箱", true); return; }
+    var pwd = window.prompt("请输入您本人的登录密码以确认添加：");
+    if (pwd === null) { return; }
+    if (!pwd) { toast("密码不能为空", true); return; }
+    api("/api/admin/admins/add", jsonOptions("POST", { uid: val, password: pwd }))
+      .then(function () { if (input) { input.value = ""; } toast("已添加管理员"); loadAdmins(); })
+      .catch(function (error) { toast((error && error.message) || "添加失败", true); });
+  }
+  function removeAdmin(uid) {
+    var pwd = window.prompt("请输入您本人的登录密码以确认移除 UID " + uid + " 的管理员权限：");
+    if (pwd === null) { return; }
+    if (!pwd) { toast("密码不能为空", true); return; }
+    api("/api/admin/admins/remove", jsonOptions("POST", { uid: uid, password: pwd }))
+      .then(function () { toast("已移除管理员"); loadAdmins(); })
+      .catch(function (error) { toast((error && error.message) || "移除失败", true); });
+  }
+
   window.__v0142Admin = {
     identity: function () { return window.__v0142Identity || null; },
     loadTickets: loadTickets,
@@ -974,7 +1147,8 @@
     store: store,
     openChat: openChat,
     setTicketStatus: setTicketStatus,
-    saveLog: saveLog
+    saveLog: saveLog,
+    loadAdmins: loadAdmins
   };
 
   if (document.readyState === "loading") {
