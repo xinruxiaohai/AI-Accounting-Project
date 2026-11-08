@@ -7,17 +7,18 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json?v=0.15.0-mobile1">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.0-mobile1">
+  <link rel="manifest" href="/manifest.json?v=0.14.2">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.14.2">
   <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.0-mobile1">
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.14.2">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.15.0-mobile1">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.2">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.2">
 </head>
 <body>
 
@@ -115,7 +116,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.14.0-TST</div>
+      <div class="sidebar-version" id="sidebar-version">v0.14.2-DEV</div>
     </div>
   </aside>
 
@@ -675,7 +676,7 @@
               <div class="profile-avatar" aria-hidden="true">¥</div>
               <div>
                 <h2 class="profile-title">我的账本</h2>
-                <p class="profile-sub" id="profile-version">v0.14.0-TST</p>
+                <p class="profile-sub" id="profile-version">v0.14.2-DEV</p>
               </div>
             </div>
             <!-- v0.13.7 终极补丁：数据早已实时入库，旧文案「只存本机 / 不联网」严重过时 -->
@@ -1410,6 +1411,9 @@
           <button type="button" class="settings-tab" data-settings-tab="account"
                   role="tab" aria-selected="false">账户与密码</button>
           <button type="button" class="settings-tab" data-settings-tab="help" role="tab" aria-selected="false">帮助与反馈</button>
+          <!-- v0.14.2：权限管理仅管理员可见，由 user-feedback-v0142.js 校验身份后解除 hidden -->
+          <button type="button" class="settings-tab" data-settings-tab="permissions" role="tab"
+                  aria-selected="false" hidden>权限管理</button>
         </div>
 
         <section id="settings-pane-personal" class="settings-pane">
@@ -1553,7 +1557,15 @@
                 <button class="btn btn-outline-secondary btn-sm ticket-refresh" type="button"
                         id="feedback-ticket-refresh">刷新</button>
               </div>
-              <p class="ticket-note">你提交的反馈和处理进度都在这里。</p>
+              <p class="ticket-note">你提交的反馈和处理进度都在这里。点卡片进入对话，可以继续追加补充。</p>
+              <!-- v0.14.2：有编号的列表页统一加搜索框 -->
+              <div class="v142-search">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+                <input type="search" id="v142-user-ticket-search" aria-label="搜索工单号 / 内容"
+                       placeholder="搜索工单号 / 内容">
+                <span class="v142-search-count" id="v142-user-ticket-count" aria-live="polite"></span>
+              </div>
               <div class="ticket-list" id="feedback-ticket-list" role="list" aria-live="polite"></div>
             </div>
 
@@ -1573,6 +1585,24 @@
               <div id="help-shortcut-list" aria-label="快捷键列表"></div>
             </div>
           </div>
+        </div>
+
+        <!-- v0.14.2 模块二：权限管理（仅管理员可见；uid=1 永远不可移除） -->
+        <div id="settings-pane-permissions" class="settings-pane" role="tabpanel" hidden>
+          <div class="v142-perm-head">
+            <h4 style="margin:0;font-size:14px;font-weight:700;">权限管理
+              <span class="badge text-bg-secondary" id="v142-admin-total">0</span>
+            </h4>
+            <button class="v142-btn is-primary" type="button" id="v142-admin-add">添加管理员</button>
+          </div>
+          <p class="v142-perm-note">添加或移除都需要验证你本人的登录密码；内置超级管理员 UID #1 不可移除，按钮置灰。</p>
+          <div class="v142-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                 stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+            <input type="search" id="v142-admin-search" aria-label="搜索管理员 UID / 邮箱"
+                   placeholder="搜索 UID / 邮箱">
+          </div>
+          <div class="v142-perm-list" id="v142-admin-list" role="list" aria-live="polite"></div>
         </div>
       </div>
       <div class="modal-footer">
@@ -1636,6 +1666,11 @@
         </div>
 
         <p class="feedback-hint">留下电话或者其他联系方式客服就会来找您啦&gt;_&lt;</p>
+        <!-- v0.14.2 模块四：抄送邮箱默认不勾选 -->
+        <div class="form-check feedback-cc-row">
+          <input class="form-check-input" type="checkbox" id="feedback-cc-email" value="1">
+          <label class="form-check-label" for="feedback-cc-email">抄送用户邮箱(选填)</label>
+        </div>
         <div class="feedback-actions">
           <button class="btn btn-light" type="button" data-feedback-close>取消</button>
           <button class="btn btn-primary" type="submit" id="feedback-submit">提交反馈</button>
@@ -2426,13 +2461,15 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.15.0-mobile1"></script>
-<script src="/static/access-guard.js?v=0.15.0-mobile1"></script>
+<script src="/static/auth-v012.js?v=0.14.2"></script>
+<script src="/static/access-guard.js?v=0.14.2"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.15.0-mobile1"></script>
-<script src="/static/charts-v013.js?v=0.15.0-mobile1"></script>
+<script src="/static/script.js?v=0.14.2"></script>
+<script src="/static/charts-v013.js?v=0.14.2"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.15.0-mobile1"></script>
+<script src="/static/invest-v0133.js?v=0.14.2"></script>
+<!-- v0.14.2：权限管理 / 我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后） -->
+<script src="/static/user-feedback-v0142.js?v=0.14.2"></script>
 
 </body>
 </html>

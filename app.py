@@ -72,7 +72,13 @@ database.init_db()
 # ---------------- 全站访问密码（v0.11.1） ----------------
 
 # 这些接口在没验证密码时也要能访问：问配置、交密码换 token
-ACCESS_PUBLIC_PATHS = {"/api/access/config", "/api/access/verify"}
+ACCESS_PUBLIC_PATHS = {
+    "/api/access/config",
+    "/api/access/verify",
+    # v0.14.2：并行前端的后台门禁探测接口。只回「当前 JWT 是不是管理员」的布尔值，
+    # 不含任何后台数据，不需要站点访问密码；否则前端会 401 后退化到本地兜底。
+    "/api/access/check-identity",
+}
 
 # v0.11.3：密码只管后台。用户端（首页 / 资产 / 账单 / 我的）的读写接口全部免密，
 # 只有下面这些后台接口才要求 token：
@@ -202,6 +208,11 @@ AUTH_PUBLIC_PATHS = {
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
+    # v0.14.2：这个接口要自己给「非管理员」返回 403 + 指定提示语，
+    # 不能被 before_request 的通用 401 提前拦掉（未登录也应得到 403）。
+    "/api/admin/check-identity",
+    # 并行前端的等价门禁入口：未登录时返回 is_admin=false 让 UI 显示拦截页。
+    "/api/access/check-identity",
 }
 
 
@@ -706,8 +717,14 @@ def auth_upload_avatar():
 @app.route("/api/auth/me", methods=["GET"])
 @login_required
 def auth_me():
-    """当前登录用户信息；前端路由守卫用它验 Token 是否还有效。"""
-    return jsonify(user=_public_user(g.current_user))
+    """当前登录用户信息；前端路由守卫用它验 Token 是否还有效。
+
+    v0.14.2：补 is_admin 字段，让并行前端的 check-identity 降级分支
+    也能识别「新增的管理员」，不必只在 uid=1 时才放行后台。
+    """
+    user = _public_user(g.current_user)
+    user["is_admin"] = bool(database.is_admin(user.get("id")))
+    return jsonify(user=user)
 
 
 @app.route("/api/auth/sms-login", methods=["POST"])
@@ -1812,6 +1829,14 @@ def create_feedback():
     if not isinstance(raw_text, str) or not raw_text.strip():
         return jsonify(error="raw_text 必须是非空字符串"), 400
 
+    # v0.14.2：兼容前端可能随请求带来的 cc_email（0 关闭 / 1 开启）。
+    # 这个接口是 AI 纠错样本，不属于工单，所以只做校验与回显，
+    # 真正的抄送开关写入 user_feedback 由 POST /api/user-feedback 完成。
+    try:
+        cc_email = 1 if int(data.get("cc_email", 0) or 0) == 1 else 0
+    except (TypeError, ValueError):
+        cc_email = 0
+
     try:
         feedback = database.add_feedback(
             raw_text,
@@ -1821,7 +1846,7 @@ def create_feedback():
         )
     except database.RecordError as exc:
         return jsonify(error=str(exc)), 400
-    return jsonify(id=feedback["id"]), 201
+    return jsonify(id=feedback["id"], cc_email=cc_email), 201
 
 
 @app.route("/api/feedback", methods=["GET"])
@@ -4040,6 +4065,8 @@ def submit_user_feedback():
             contact_info=data.get("contact_info") or "",
             email=data.get("email") or "",
             nickname=data.get("nickname") or "",
+            # v0.14.2 抄送开关：0 关闭 / 1 开启，非法值由数据层回落 0
+            cc_email=data.get("cc_email", 0),
         )
     except database.RecordError as exc:
         # 校验失败（含 10 秒防刷）时把刚落盘的截图删掉，别留下孤儿文件
@@ -4049,13 +4076,295 @@ def submit_user_feedback():
     return jsonify(feedback=feedback), 201
 
 
-@app.route("/api/admin/feedback", methods=["GET"])
-def admin_list_user_feedback():
-    """后台「用户反馈」列表：全部用户的反馈，按提交时间倒序。"""
-    denied = _require_admin_access()
+# ---------------- v0.14.2 RBAC：管理员身份与增删 ----------------
+
+ADMIN_DENY_MESSAGE = "抱歉呢，前面是管理员后端，用户止步哟！"
+
+
+def _require_rbac_admin():
+    """统一管理员守卫：JWT 合法 + users.is_admin=1，否则 403 + 固定提示语。"""
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(error=ADMIN_DENY_MESSAGE, code="forbidden"), 403
+    try:
+        uid = int(user.get("id") or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if not database.is_admin(uid):
+        return jsonify(error=ADMIN_DENY_MESSAGE, code="forbidden"), 403
+    return None
+
+
+def _admin_uid():
+    user = g.get("current_user") or {}
+    try:
+        return int(user.get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_int_arg(name, allowed=None):
+    """解析 query 里的整数参数；返回 (值, 错误响应)，错误响应非 None 时直接 return。"""
+    raw = request.args.get(name)
+    if raw is None or str(raw).strip() == "":
+        return None, None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None, (jsonify(error="%s 必须是整数" % name), 400)
+    if allowed is not None and value not in allowed:
+        return None, (jsonify(error="%s 取值非法" % name), 400)
+    return value, None
+
+
+@app.route("/api/admin/check-identity", methods=["GET"])
+def admin_check_identity():
+    """校验当前 JWT 是否管理员。非管理员 / 未登录一律 403 + 指定提示语。
+
+    已加入 AUTH_PUBLIC_PATHS，让 before_request 不先回 401，
+    由本路由统一给出约定的 403 文案。
+    """
+    denied = _require_rbac_admin()
     if denied is not None:
         return denied
-    return jsonify(feedback=database.list_user_feedback())
+    user = g.current_user
+    return jsonify(
+        is_admin=True,
+        uid=int(user["id"]),
+        email=user.get("email") or "",
+        nickname=user.get("nickname") or "",
+    )
+
+
+def _verify_operator_password(data):
+    """增删管理员的二次验证：必须是操作者本人的登录密码（不接收访问密码）。"""
+    password = data.get("password")
+    if not isinstance(password, str) or not password:
+        return jsonify(error="请输入验证密码"), 400
+    email = (g.current_user or {}).get("email") or ""
+    user = database.get_user_by_email(email)
+    if user is None or not check_password_hash(
+        user.get("password_hash") or "", password
+    ):
+        return jsonify(error="验证密码不正确"), 403
+    return None
+
+
+def _target_uid(data):
+    value = data.get("uid", data.get("target_uid"))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/api/admin/admins/add", methods=["POST"])
+def admin_add_admin():
+    """把目标 uid 设为管理员。body: {"uid": 3, "password": "操作者登录密码"}"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    denied = _verify_operator_password(data)
+    if denied is not None:
+        return denied
+    uid = _target_uid(data)
+    if uid is None:
+        return jsonify(error="uid 必须是整数"), 400
+    if not database.set_admin(uid, 1):
+        return jsonify(error="目标用户不存在"), 404
+    return jsonify(ok=True, uid=uid, is_admin=1, admins=database.list_admins())
+
+
+@app.route("/api/admin/admins/remove", methods=["POST"])
+def admin_remove_admin():
+    """移除目标 uid 的管理员权限。防呆红线：uid=1 永远不可移除。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    denied = _verify_operator_password(data)
+    if denied is not None:
+        return denied
+    uid = _target_uid(data)
+    if uid is None:
+        return jsonify(error="uid 必须是整数"), 400
+    if uid == database.ADMIN_USER_ID:
+        return jsonify(error="不能移除 1 号超级管理员的权限", code="protected_admin"), 403
+    if not database.set_admin(uid, 0):
+        return jsonify(error="目标用户不存在"), 404
+    return jsonify(ok=True, uid=uid, is_admin=0, admins=database.list_admins())
+
+
+@app.route("/api/admin/feedback", methods=["GET"])
+def admin_list_user_feedback():
+    """后台工单列表：read_status / process_status / keyword 过滤 + 动态 reply_status。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    read_status, err = _parse_int_arg(
+        "read_status", database.FEEDBACK_READ_STATUSES
+    )
+    if err is not None:
+        return err
+    process_status, err = _parse_int_arg(
+        "process_status", database.FEEDBACK_PROCESS_STATUSES
+    )
+    if err is not None:
+        return err
+    keyword = (request.args.get("keyword") or "").strip()
+    return jsonify(
+        feedback=database.list_user_feedback(
+            read_status=read_status,
+            process_status=process_status,
+            keyword=keyword or None,
+        )
+    )
+
+
+# ---------------- v0.14.2 工单详情 / 对话流 / 状态联动 ----------------
+
+def _clean_reply_content(data):
+    """统一解析「文本 + 图片 URL」；返回 (content, image_url, 错误响应)。"""
+    if not isinstance(data, dict):
+        return None, None, (jsonify(error="请求体必须是 JSON 对象"), 400)
+    content = data.get("content", data.get("reply"))
+    if not isinstance(content, str) or not content.strip():
+        return None, None, (jsonify(error="内容不能为空"), 400)
+    content = content.strip()
+    if len(content) > MAX_FEEDBACK_REPLY_LENGTH:
+        return None, None, (
+            jsonify(error="内容最多 %d 个字" % MAX_FEEDBACK_REPLY_LENGTH), 400
+        )
+    image_url = data.get("image_url", data.get("image_path", data.get("image", "")))
+    if not isinstance(image_url, str):
+        return None, None, (jsonify(error="image_url 必须是字符串"), 400)
+    image_url = image_url.strip()
+    if len(image_url) > 500:
+        return None, None, (jsonify(error="图片地址过长"), 400)
+    return content, image_url, None
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/detail", methods=["GET"])
+def admin_feedback_detail(feedback_id):
+    """工单详情：主反馈 + 全部 feedback_replies；调用即把 read_status 置 1。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    detail = database.get_feedback_detail(feedback_id)
+    if detail is None:
+        return jsonify(error="工单不存在"), 404
+    # 状态联动：只要管理员看了详情，立刻标记已读
+    database.mark_feedback_read(feedback_id)
+    detail["read_status"] = 1
+    return jsonify(
+        feedback=detail,
+        replies=database.list_feedback_replies(feedback_id),
+    )
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/reply", methods=["POST"])
+def admin_reply_feedback_post(feedback_id):
+    """管理员回复（文本 + 图片 URL），写入 feedback_replies 对话流。
+
+    刻意不动 process_status：原值为 0 就仍是「待处理」，回复 != 已解决。
+    同时把文本同步到 user_feedback.admin_reply 供已有前端「我的工单」显示，
+    但不改 status（保持 pending → 前端显示待处理，与后端语义一致）。
+    """
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    content, image_url, err = _clean_reply_content(request.get_json(silent=True))
+    if err is not None:
+        return err
+    if database.get_feedback_detail(feedback_id) is None:
+        return jsonify(error="工单不存在"), 404
+    reply = database.add_feedback_reply(
+        feedback_id, "admin", _admin_uid(), content, image_url
+    )
+    database.sync_admin_reply_to_legacy(feedback_id, content)
+    return jsonify(
+        reply=reply, feedback=database.get_feedback_detail(feedback_id)
+    ), 201
+
+
+@app.route("/api/user-feedback/<int:feedback_id>/supplement", methods=["POST"])
+def user_supplement_feedback(feedback_id):
+    """用户追加反馈：写 user 对话 + 强制 read_status=0 / process_status=0。
+
+    归属校验在前：只能给自己的工单追加，杜绝越权改别人的单状态。
+    """
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(error="请先登录", code="auth_required"), 401
+    try:
+        uid = int(user["id"])
+    except (TypeError, ValueError):
+        return jsonify(error="请先登录", code="auth_required"), 401
+    owner = database.get_feedback_owner(feedback_id)
+    if owner is None:
+        return jsonify(error="工单不存在"), 404
+    if owner != uid:
+        return jsonify(error="只能追加自己的工单", code="forbidden"), 403
+
+    content, image_url, err = _clean_reply_content(request.get_json(silent=True))
+    if err is not None:
+        return err
+    reply = database.add_feedback_reply(
+        feedback_id, "user", uid, content, image_url
+    )
+    # 最高优先级联动：无论当前已读/已解决/已忽略，一律打回「未读 + 待处理」
+    database.reset_feedback_on_supplement(feedback_id)
+    return jsonify(
+        reply=reply, feedback=database.get_feedback_detail(feedback_id)
+    ), 201
+
+
+@app.route("/api/admin/issue-logs", methods=["GET"])
+def admin_list_issue_logs():
+    """问题日志查询：?status=0|1 &feedback_id= &keyword= （内容 / UID）。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    status, err = _parse_int_arg("status", database.ISSUE_LOG_STATUSES)
+    if err is not None:
+        return err
+    feedback_id, err = _parse_int_arg("feedback_id")
+    if err is not None:
+        return err
+    keyword = (request.args.get("keyword") or "").strip()
+    return jsonify(
+        logs=database.list_issue_logs(
+            status=status,
+            feedback_id=feedback_id,
+            keyword=keyword or None,
+        )
+    )
+
+
+@app.route("/api/admin/issue-logs", methods=["POST"])
+def admin_create_issue_log():
+    """新增问题日志。body: content(必填), feedback_id(可空), user_uid, status。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        log = database.create_issue_log(
+            data.get("content"),
+            feedback_id=data.get("feedback_id"),
+            user_uid=data.get("user_uid", _admin_uid()),
+            status=data.get("status", 0),
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(log=log), 201
 
 
 # ---------------- v0.14.1 工单系统（管理员回复 / 用户查自己的单） ----------------
@@ -4064,25 +4373,8 @@ FEEDBACK_REPLY_STATUSES = ("pending", "replied", "closed")
 MAX_FEEDBACK_REPLY_LENGTH = 2000
 
 
-def _require_feedback_admin():
-    """工单回复的守卫：登录 + 后台访问密码 + 管理员身份。
-
-    比现有 /api/admin/feedback 更严一点：站点没设访问密码时，只认 1 号管理员，
-    避免「任何登录用户都能冒充官方回复」；设了密码时，持有有效访问令牌即可
-    （与后台其它接口的既有口径保持一致）。
-    """
-    user = g.get("current_user")
-    if user is None:
-        return jsonify(error="请先登录", code="auth_required"), 401
-    denied = _require_admin_access()
-    if denied is not None:
-        return denied
-    if int(user.get("id") or 0) == database.ADMIN_USER_ID:
-        return None
-    config = database.get_access_config()
-    if not config["protected"]:
-        return jsonify(error="只有管理员可以回复工单", code="forbidden"), 403
-    return None
+# v0.14.2：旧的「访问密码 + 只看 uid=1」守卫已下线，全部 admin 工单接口
+# 统一走 _require_rbac_admin（JWT + users.is_admin=1），权限模型不再有两套。
 
 
 @app.route("/api/admin/feedback/<int:feedback_id>/reply", methods=["PUT"])
@@ -4090,8 +4382,10 @@ def admin_reply_feedback(feedback_id):
     """管理员回复工单：写 admin_reply，并把 status 置为 replied（可显式覆盖）。
 
     body: {"reply": "官方回复内容", "status": "replied"|"pending"|"closed"}
+
+    v0.14.2：守卫已统一为 RBAC；保留路径与方法以兼容既有后台调用。
     """
-    denied = _require_feedback_admin()
+    denied = _require_rbac_admin()
     if denied is not None:
         return denied
 
@@ -4113,6 +4407,8 @@ def admin_reply_feedback(feedback_id):
     updated = sqlalchemy_db.reply_feedback(feedback_id, reply, status=status)
     if updated is None:
         return jsonify(error="工单不存在"), 404
+    # v0.14.2：旧 PUT 接口也进对话流，保证后台列表的 reply_status 不漏算
+    database.add_feedback_reply(feedback_id, "admin", _admin_uid(), reply, "")
     return jsonify(feedback=updated)
 
 
@@ -4139,13 +4435,221 @@ def my_feedback():
     return jsonify(feedback=sqlalchemy_db.list_my_feedback(uid, limit=limit))
 
 
+# ---------------- v0.14.2 前端契约兼容别名 ----------------
+# 并行交付的前端（static/admin-v0142.js / static/user-feedback-v0142.js）
+# 用的是另一套路径与字段名。这里在**不改任何前端文件**的前提下补齐别名，
+# 两套路径同时可用；指令指定的规范路径行为完全不变。
+# 漂移清单已在交付说明中列给项目经理，后续可择一统一。
+
+FRONTEND_STATUS_TO_PROCESS = {"pending": 0, "resolved": 1, "ignored": 2}
+
+
+def _public_admin_list():
+    return [
+        {
+            "uid": item["id"],
+            "id": item["id"],
+            "email": item["email"],
+            "builtin": item["id"] == database.ADMIN_USER_ID,
+        }
+        for item in database.list_admins()
+    ]
+
+
+@app.route("/api/access/check-identity", methods=["GET"])
+def access_check_identity_alias():
+    """前端后台守卫入口：恒 200，用 is_admin 字段表达结果（前端直接读该字段）。
+
+    与指令要求的 /api/admin/check-identity（非管理员 403 + 提示语）语义不同，
+    两者互不干扰：这里是给 UI 做门禁用，不是权限判定的唯一依据。
+    """
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(is_admin=False, user=None)
+    ok = database.is_admin(user.get("id"))
+    return jsonify(
+        is_admin=ok,
+        user={
+            "id": user.get("id"),
+            "email": user.get("email") or "",
+            "is_admin": ok,
+        },
+    )
+
+
+@app.route("/api/admin/admins", methods=["GET"])
+def admin_admins_list_alias():
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    return jsonify(admins=_public_admin_list())
+
+
+def _resolve_admin_target(data):
+    """前端可能传 uid，也可能传邮箱或「数字 UID 字符串」。"""
+    raw = data.get("uid", data.get("email", data.get("target")))
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if text.isdigit():
+        return int(text)
+    user = database.get_user_by_email(text.lower())
+    return int(user["id"]) if user else None
+
+
+@app.route("/api/admin/admins", methods=["POST"])
+def admin_admins_add_alias():
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    uid = _resolve_admin_target(data)
+    if uid is None:
+        return jsonify(error="目标用户不存在或格式不对"), 404
+    if not database.set_admin(uid, 1):
+        return jsonify(error="目标用户不存在"), 404
+    return jsonify(ok=True, admins=_public_admin_list()), 201
+
+
+@app.route("/api/admin/admins/<int:uid>", methods=["DELETE"])
+def admin_admins_remove_alias(uid):
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    if uid == database.ADMIN_USER_ID:
+        return jsonify(error="不能移除 1 号超级管理员的权限", code="protected_admin"), 403
+    if not database.set_admin(uid, 0):
+        return jsonify(error="目标用户不存在"), 404
+    return jsonify(ok=True, admins=_public_admin_list())
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/read", methods=["PUT"])
+def admin_feedback_read_alias(feedback_id):
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    if not database.mark_feedback_read(feedback_id):
+        return jsonify(error="工单不存在"), 404
+    return jsonify(ok=True, read_status=1, is_read=True)
+
+
+@app.route("/api/admin/feedback/<int:feedback_id>/status", methods=["PUT"])
+def admin_feedback_status_alias(feedback_id):
+    """前端状态 pending/resolved/ignored → process_status 0/1/2。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    raw = str(data.get("status") or "").strip().lower()
+    if raw in FRONTEND_STATUS_TO_PROCESS:
+        value = FRONTEND_STATUS_TO_PROCESS[raw]
+    elif raw.isdigit() and int(raw) in database.FEEDBACK_PROCESS_STATUSES:
+        value = int(raw)
+    else:
+        return jsonify(error="status 只能是 pending / resolved / ignored"), 400
+    try:
+        hit = database.set_feedback_process_status(feedback_id, value)
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if not hit:
+        return jsonify(error="工单不存在"), 404
+    return jsonify(
+        ok=True,
+        status=raw,
+        process_status=value,
+        feedback=database.get_feedback_detail(feedback_id),
+    )
+
+
+@app.route("/api/admin/problem-logs", methods=["GET"])
+def admin_problem_logs_list_alias():
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    status, err = _parse_int_arg("status", database.ISSUE_LOG_STATUSES)
+    if err is not None:
+        return err
+    keyword = (request.args.get("keyword") or "").strip()
+    return jsonify(
+        logs=database.list_issue_logs(status=status, keyword=keyword or None)
+    )
+
+
+@app.route("/api/admin/problem-logs", methods=["POST"])
+def admin_problem_logs_create_alias():
+    """前端 log 对象用 result（"未解决"/"已解决"），映射到 issue_logs.status。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    result = str(data.get("result") or "").strip()
+    status = 1 if result in ("已解决", "resolved", "1") else 0
+    try:
+        log = database.create_issue_log(
+            data.get("content"),
+            feedback_id=data.get("feedback_id"),
+            user_uid=data.get("user_uid", _admin_uid()),
+            status=status,
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(log=log), 201
+
+
+@app.route("/api/feedback/<int:feedback_id>/messages", methods=["GET"])
+def feedback_messages_get_alias(feedback_id):
+    """用户查看自己工单的对话流（并行前端约定的路径）。"""
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(error="请先登录", code="auth_required"), 401
+    owner = database.get_feedback_owner(feedback_id)
+    if owner is None:
+        return jsonify(error="工单不存在"), 404
+    if owner != int(user["id"]):
+        return jsonify(error="只能查看自己的工单", code="forbidden"), 403
+    return jsonify(messages=database.list_feedback_replies(feedback_id))
+
+
+@app.route("/api/feedback/<int:feedback_id>/messages", methods=["POST"])
+def feedback_messages_post_alias(feedback_id):
+    """用户追加补充（前端字段名 text），复用 supplement 的强制状态联动。"""
+    user = g.get("current_user")
+    if user is None:
+        return jsonify(error="请先登录", code="auth_required"), 401
+    owner = database.get_feedback_owner(feedback_id)
+    if owner is None:
+        return jsonify(error="工单不存在"), 404
+    if owner != int(user["id"]):
+        return jsonify(error="只能追加自己的工单", code="forbidden"), 403
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    text = data.get("text", data.get("content"))
+    if not isinstance(text, str) or not text.strip():
+        return jsonify(error="内容不能为空"), 400
+    reply = database.add_feedback_reply(
+        feedback_id, "user", int(user["id"]), text.strip(), ""
+    )
+    database.reset_feedback_on_supplement(feedback_id)
+    return jsonify(
+        message=reply,
+        messages=database.list_feedback_replies(feedback_id),
+    ), 201
+
+
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.0-TST"
+APP_VERSION_FALLBACK = "v0.14.2-DEV"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.14.0-TST。
+    """返回当前统一版本号 v0.14.2-DEV。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿

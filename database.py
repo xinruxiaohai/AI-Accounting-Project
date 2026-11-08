@@ -1727,6 +1727,103 @@ def _ensure_feedback_ticket_schema(conn):
         print("[v0.14.1] user_feedback 已补列 admin_reply", flush=True)
 
 
+# ---------------- v0.14.2：RBAC + 工单/问题日志扩容 ----------------
+
+# 工单状态取值（应用层白名单校验，不用 CHECK 约束，避免新旧库结构不一致）
+FEEDBACK_READ_STATUSES = (0, 1)          # 0 未读 / 1 已读
+FEEDBACK_PROCESS_STATUSES = (0, 1, 2)    # 0 待处理 / 1 已解决 / 2 已忽略
+ISSUE_LOG_STATUSES = (0, 1)              # 0 未解决 / 1 已解决
+FEEDBACK_SENDER_TYPES = ("user", "admin")
+
+
+def _ensure_v0142_schema(conn):
+    """v0.14.2 幂等扩容：只 ADD COLUMN + CREATE 全新表，绝不改任何既有表结构。
+
+    * users.is_admin                       RBAC 管理员标记
+    * user_feedback.read_status            0 未读 / 1 已读
+    * user_feedback.process_status         0 待处理 / 1 已解决 / 2 已忽略
+    * user_feedback.cc_email               0 关闭 / 1 开启（抄送开关）
+    * feedback_replies                     工单对话流（新表）
+    * issue_logs                           独立于工单的问题日志（新表）
+
+    两张新表刻意**不加外键**：既有表一个字节不动，且 SQLite / MySQL 双引擎
+    行为一致；关联完整性由应用层保证。TEXT 列不加 DEFAULT（MySQL 8.0 的
+    TEXT 不接受字面量默认值），INSERT 一律显式给值。
+    """
+    def _columns(table):
+        return [row["name"] for row in conn.execute("PRAGMA table_info(%s)" % table)]
+
+    user_cols = _columns("users")
+    if "is_admin" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        print("[v0.14.2] users 已补列 is_admin", flush=True)
+
+    fb_cols = _columns("user_feedback")
+    if "read_status" not in fb_cols:
+        conn.execute(
+            "ALTER TABLE user_feedback ADD COLUMN read_status INTEGER NOT NULL DEFAULT 0"
+        )
+        print("[v0.14.2] user_feedback 已补列 read_status", flush=True)
+    if "process_status" not in fb_cols:
+        conn.execute(
+            "ALTER TABLE user_feedback ADD COLUMN process_status INTEGER NOT NULL DEFAULT 0"
+        )
+        print("[v0.14.2] user_feedback 已补列 process_status", flush=True)
+    if "cc_email" not in fb_cols:
+        conn.execute(
+            "ALTER TABLE user_feedback ADD COLUMN cc_email INTEGER NOT NULL DEFAULT 0"
+        )
+        print("[v0.14.2] user_feedback 已补列 cc_email", flush=True)
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feedback_replies (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            feedback_id  INTEGER NOT NULL,
+            sender_type  VARCHAR(16) NOT NULL,
+            sender_uid   INTEGER NOT NULL DEFAULT 0,
+            content      TEXT NOT NULL,
+            image_url    TEXT NOT NULL,
+            created_at   TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_replies_fid "
+        "ON feedback_replies (feedback_id, created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_feedback_replies_sender "
+        "ON feedback_replies (sender_type, feedback_id)"
+    )
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS issue_logs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            feedback_id  INTEGER,
+            user_uid     INTEGER NOT NULL DEFAULT 0,
+            content      TEXT NOT NULL,
+            status       INTEGER NOT NULL DEFAULT 0,
+            created_at   TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_issue_logs_created "
+        "ON issue_logs (created_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_issue_logs_fid "
+        "ON issue_logs (feedback_id)"
+    )
+
+    # 防呆：1 号超管永远是管理员。即使有人绕过接口把库改了，重启也会自愈。
+    conn.execute(
+        "UPDATE users SET is_admin = 1 WHERE id = 1 AND COALESCE(is_admin, 0) <> 1"
+    )
+
+
 _MYSQL_REQUIRED_TABLES = (
     "users", "records", "accounts", "categories", "debts", "contacts",
     "notifications", "user_feedback", "admin_config", "app_settings",
@@ -1775,6 +1872,9 @@ def _init_db_mysql_schema_guard():
 
         with conn:
             _ensure_feedback_ticket_schema(conn)
+            # v0.14.2：只做幂等 ADD COLUMN 与「全新独立表」的 CREATE IF NOT EXISTS，
+            # 不涉及任何既有表的重建，因此不违反「不自动改写线上 schema」的约束。
+            _ensure_v0142_schema(conn)
     finally:
         conn.close()
 
@@ -2227,6 +2327,10 @@ def init_db():
         # v0.14.1 工单系统：status / admin_reply 两列（幂等 ADD COLUMN，独占事务段）
         with conn:
             _ensure_feedback_ticket_schema(conn)
+
+        # v0.14.2 RBAC + 工单扩容：补列 / 建新表 / 钉死 1 号超管（独占事务段）
+        with conn:
+            _ensure_v0142_schema(conn)
 
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
@@ -6712,6 +6816,17 @@ def _feedback_now():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _row_int(row, key, default=0):
+    """从 Row 里安全取整数：列不存在 / NULL / 脏值都回落默认值，绝不 KeyError。"""
+    try:
+        if key not in row.keys():
+            return default
+        value = row[key]
+        return default if value is None else int(value)
+    except (TypeError, ValueError, KeyError, IndexError, AttributeError):
+        return default
+
+
 def _row_to_user_feedback(row):
     return {
         "id": row["id"],
@@ -6733,6 +6848,10 @@ def _row_to_user_feedback(row):
         "admin_reply": (
             (row["admin_reply"] if "admin_reply" in row.keys() else "") or ""
         ),
+        # v0.14.2 工单三态；老库 / 老 SELECT 没带这些列时按默认值兜底
+        "read_status": _row_int(row, "read_status", 0),
+        "process_status": _row_int(row, "process_status", 0),
+        "cc_email": _row_int(row, "cc_email", 0),
     }
 
 
@@ -6744,9 +6863,11 @@ def create_user_feedback(
     contact_info="",
     email="",
     nickname="",
+    cc_email=0,
 ):
     """新增一条用户反馈，返回入库后的字典。
 
+    v0.14.2：cc_email 为抄送开关（0 关闭 / 1 开启），非法值一律回落 0。
     user_id 一律取当前登录用户上下文（app.py 的 JWT 守卫已注入）；
     issue 必填且 ≤2000 字；occur_date 可空，非空要求 YYYY-MM-DD；
     contact_type 只允许 ""/qq/wechat/phone；联系方式 ≤100 字。
@@ -6777,6 +6898,10 @@ def create_user_feedback(
     image_path = str(image_path or "").strip()
     email = str(email or "").strip()
     nickname = str(nickname or "").strip()
+    try:
+        cc_flag = 1 if int(cc_email or 0) == 1 else 0
+    except (TypeError, ValueError):
+        cc_flag = 0
     # 前端没带邮箱/昵称时按 user_id 回表兜底，保证后台卡片一定能看到联系方式
     if not email or not nickname:
         user = get_user(user_id)
@@ -6809,8 +6934,8 @@ def create_user_feedback(
             cursor = conn.execute(
                 "INSERT INTO user_feedback "
                 "(user_id, email, nickname, issue_description, occur_date, image_path, "
-                " contact_type, contact_info, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " contact_type, contact_info, created_at, cc_email) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     email,
@@ -6821,12 +6946,14 @@ def create_user_feedback(
                     contact_type,
                     contact_info,
                     now.strftime("%Y-%m-%d %H:%M:%S"),
+                    cc_flag,
                 ),
             )
             new_id = cursor.lastrowid
         row = conn.execute(
             "SELECT id, user_id, email, nickname, issue_description, occur_date, "
-            "       image_path, contact_type, contact_info, created_at "
+            "       image_path, contact_type, contact_info, created_at, "
+            "       status, admin_reply, read_status, process_status, cc_email "
             "  FROM user_feedback WHERE id = ?",
             (new_id,),
         ).fetchone()
@@ -6835,27 +6962,60 @@ def create_user_feedback(
         conn.close()
 
 
-def list_user_feedback():
-    """后台「用户反馈」列表：所有用户的反馈，按提交时间倒序。
+def list_user_feedback(read_status=None, process_status=None, keyword=None, limit=500):
+    """后台「用户反馈」列表：多参数过滤 + 动态 reply_status（v0.14.2）。
 
-    管理员专用接口（app.py 里 _require_admin_access 守卫），所以不带 user_id 过滤；
-    email / nickname 优先用反馈里存的那份，users 表兜底老数据。
+    管理员专用（app.py 里 RBAC 守卫），不带 user_id 过滤。
+    * read_status / process_status：精确过滤，None 表示不过滤；
+    * keyword：模糊搜工单编号 / UID / 邮箱 / 昵称，参数化防注入；
+    * reply_status：feedback_replies 里存在 sender_type='admin' 的行即为 1，
+      由 SQL 相关子查询动态算出，不落库、不会和主表状态不一致。
     """
+    where = []
+    params = []
+    if read_status is not None:
+        where.append("f.read_status = ?")
+        params.append(int(read_status))
+    if process_status is not None:
+        where.append("f.process_status = ?")
+        params.append(int(process_status))
+    if keyword and str(keyword).strip():
+        like = "%" + str(keyword).strip() + "%"
+        where.append(
+            "(f.id LIKE ? OR f.user_id LIKE ? OR f.email LIKE ? "
+            " OR u.email LIKE ? OR f.nickname LIKE ?)"
+        )
+        params.extend([like, like, like, like, like])
+
+    sql = (
+        "SELECT f.id, f.user_id, f.email, f.nickname, f.issue_description, "
+        "       f.occur_date, f.image_path, f.contact_type, f.contact_info, "
+        "       f.created_at, f.status, f.admin_reply, "
+        "       f.read_status, f.process_status, f.cc_email, "
+        "       CASE WHEN EXISTS ("
+        "           SELECT 1 FROM feedback_replies r "
+        "            WHERE r.feedback_id = f.id AND r.sender_type = 'admin'"
+        "       ) THEN 1 ELSE 0 END AS reply_status, "
+        "       (SELECT COUNT(*) FROM feedback_replies r2 "
+        "         WHERE r2.feedback_id = f.id) AS reply_count, "
+        "       u.email AS user_email, u.nickname AS user_nickname "
+        "  FROM user_feedback f LEFT JOIN users u ON u.id = f.user_id "
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY f.created_at DESC, f.id DESC LIMIT ?"
+    params.append(int(limit))
+
     conn = get_conn()
     try:
-        rows = conn.execute(
-            "SELECT f.id, f.user_id, f.email, f.nickname, f.issue_description, "
-            "       f.occur_date, f.image_path, f.contact_type, f.contact_info, "
-            "       f.created_at, f.status, f.admin_reply, "
-            "       u.email AS user_email, u.nickname AS user_nickname "
-            "  FROM user_feedback f LEFT JOIN users u ON u.id = f.user_id "
-            " ORDER BY f.created_at DESC, f.id DESC"
-        ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
         items = []
         for row in rows:
             item = _row_to_user_feedback(row)
             item["email"] = row["email"] or row["user_email"] or ""
             item["nickname"] = row["nickname"] or row["user_nickname"] or ""
+            item["reply_status"] = _row_int(row, "reply_status", 0)
+            item["reply_count"] = _row_int(row, "reply_count", 0)
             items.append(item)
         return items
     finally:
@@ -6908,5 +7068,324 @@ def reply_user_feedback(feedback_id, reply, status="replied"):
             (int(feedback_id),),
         ).fetchone()
         return _row_to_user_feedback(row) if row else None
+    finally:
+        conn.close()
+
+
+# ---------------- v0.14.2 RBAC ----------------
+
+def is_admin(user_id):
+    """按 uid 查管理员标记；用户不存在 / 列还没迁移都安全返回 False。"""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT is_admin FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+        return bool(row is not None and _row_int(row, "is_admin", 0) == 1)
+    finally:
+        conn.close()
+
+
+def set_admin(user_id, value):
+    """设置管理员标记，返回是否命中用户。
+
+    防呆由 app 层负责（禁止移除 uid=1），这里只做最小写操作；
+    1 号超管另有 _ensure_v0142_schema() 的启动自愈兜底。
+    """
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return False
+    flag = 1 if int(value) == 1 else 0
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE users SET is_admin = ? WHERE id = ?", (flag, uid)
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def list_admins():
+    """列出全部管理员（后台核对用），不返回任何密码哈希。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, email, nickname, is_admin FROM users "
+            " WHERE is_admin = 1 ORDER BY id"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "email": row["email"] or "",
+                "nickname": row["nickname"] or "",
+                "is_admin": _row_int(row, "is_admin", 0),
+            }
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
+# ---------------- v0.14.2 工单对话流 / 状态联动 ----------------
+
+def get_feedback_owner(feedback_id):
+    """取工单归属 uid；不存在返回 None（用户追加反馈的越权校验用）。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT user_id FROM user_feedback WHERE id = ?", (int(feedback_id),)
+        ).fetchone()
+        return int(row["user_id"]) if row else None
+    finally:
+        conn.close()
+
+
+def get_feedback_detail(feedback_id):
+    """工单主记录（含三态字段），不存在返回 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, user_id, email, nickname, issue_description, occur_date, "
+            "       image_path, contact_type, contact_info, created_at, "
+            "       status, admin_reply, read_status, process_status, cc_email "
+            "  FROM user_feedback WHERE id = ?",
+            (int(feedback_id),),
+        ).fetchone()
+        return _row_to_user_feedback(row) if row else None
+    finally:
+        conn.close()
+
+
+def mark_feedback_read(feedback_id):
+    """管理员查看 detail 时立刻置已读，返回是否命中。"""
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE user_feedback SET read_status = 1 WHERE id = ?",
+                (int(feedback_id),),
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def add_feedback_reply(
+    feedback_id, sender_type, sender_uid, content, image_url=""
+):
+    """往对话流写一条回复/补充，返回入库字典。
+
+    sender_type 只允许 user / admin；content 必填且 ≤2000 字。
+    """
+    if sender_type not in FEEDBACK_SENDER_TYPES:
+        raise RecordError("sender_type 只能是 user / admin")
+    text = str(content or "").strip()
+    if not text:
+        raise RecordError("内容不能为空")
+    if len(text) > 2000:
+        raise RecordError("内容最多 2000 个字")
+    image = str(image_url or "").strip()
+    if len(image) > 500:
+        raise RecordError("图片地址过长")
+
+    created_at = _feedback_now()
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO feedback_replies "
+                "(feedback_id, sender_type, sender_uid, content, image_url, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    int(feedback_id),
+                    sender_type,
+                    int(sender_uid or 0),
+                    text,
+                    image,
+                    created_at,
+                ),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, feedback_id, sender_type, sender_uid, content, "
+            "       image_url, created_at FROM feedback_replies WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_reply(row)
+    finally:
+        conn.close()
+
+
+def _row_to_reply(row):
+    return {
+        "id": row["id"],
+        "feedback_id": row["feedback_id"],
+        "sender_type": row["sender_type"] or "",
+        "sender_uid": _row_int(row, "sender_uid", 0),
+        "content": row["content"] or "",
+        "image_url": row["image_url"] or "",
+        "created_at": row["created_at"] or "",
+    }
+
+
+def list_feedback_replies(feedback_id):
+    """按时间正序返回某工单的全部对话（用户补充 + 管理员回复）。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, feedback_id, sender_type, sender_uid, content, "
+            "       image_url, created_at FROM feedback_replies "
+            " WHERE feedback_id = ? ORDER BY created_at ASC, id ASC",
+            (int(feedback_id),),
+        ).fetchall()
+        return [_row_to_reply(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def reset_feedback_on_supplement(feedback_id):
+    """用户追加反馈的强制状态联动（最高优先级）：
+
+    无论当前已读/已解决/已忽略，一律 read_status=0（未读）、
+    process_status=0（待处理），让后台重新看到这张单。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE user_feedback SET read_status = 0, process_status = 0 "
+                " WHERE id = ?",
+                (int(feedback_id),),
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def set_feedback_process_status(feedback_id, value):
+    """更新工单处理状态（0 待处理 / 1 已解决 / 2 已忽略），返回是否命中。"""
+    if value not in FEEDBACK_PROCESS_STATUSES:
+        raise RecordError("处理状态取值非法")
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE user_feedback SET process_status = ? WHERE id = ?",
+                (int(value), int(feedback_id)),
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def sync_admin_reply_to_legacy(feedback_id, content):
+    """只把最新官方回复同步到 user_feedback.admin_reply，供已有前端「我的工单」显示。
+
+    刻意**不改 status**：保持 'pending' 时前端 normalizeTicket 会显示「待处理」，
+    与「管理员回复后 process_status 仍为 0」的语义一致，不会出现前后端打架。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE user_feedback SET admin_reply = ? WHERE id = ?",
+                (str(content or ""), int(feedback_id)),
+            )
+    finally:
+        conn.close()
+
+
+# ---------------- v0.14.2 问题日志（独立于工单） ----------------
+
+def create_issue_log(content, feedback_id=None, user_uid=0, status=0):
+    """新增一条问题日志；feedback_id 可为空（日志可独立于工单）。"""
+    text = str(content or "").strip()
+    if not text:
+        raise RecordError("日志内容不能为空")
+    if len(text) > 2000:
+        raise RecordError("日志内容最多 2000 个字")
+    try:
+        flag = int(status)
+    except (TypeError, ValueError):
+        flag = 0
+    if flag not in ISSUE_LOG_STATUSES:
+        flag = 0
+    fid = None
+    if feedback_id not in (None, ""):
+        try:
+            fid = int(feedback_id)
+        except (TypeError, ValueError):
+            raise RecordError("feedback_id 必须是整数")
+    try:
+        uid = int(user_uid or 0)
+    except (TypeError, ValueError):
+        uid = 0
+
+    created_at = _feedback_now()
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO issue_logs "
+                "(feedback_id, user_uid, content, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (fid, uid, text, flag, created_at),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, feedback_id, user_uid, content, status, created_at "
+            "  FROM issue_logs WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_issue_log(row)
+    finally:
+        conn.close()
+
+
+def _row_to_issue_log(row):
+    return {
+        "id": row["id"],
+        "feedback_id": row["feedback_id"],
+        "user_uid": _row_int(row, "user_uid", 0),
+        "content": row["content"] or "",
+        "status": _row_int(row, "status", 0),
+        "created_at": row["created_at"] or "",
+    }
+
+
+def list_issue_logs(status=None, feedback_id=None, keyword=None, limit=200):
+    """问题日志查询：状态 / 关联工单 / 关键字（内容、UID）过滤，时间倒序。"""
+    where = []
+    params = []
+    if status is not None:
+        where.append("status = ?")
+        params.append(int(status))
+    if feedback_id is not None:
+        where.append("feedback_id = ?")
+        params.append(int(feedback_id))
+    if keyword and str(keyword).strip():
+        like = "%" + str(keyword).strip() + "%"
+        where.append("(content LIKE ? OR user_uid LIKE ?)")
+        params.extend([like, like])
+    sql = (
+        "SELECT id, feedback_id, user_uid, content, status, created_at "
+        "  FROM issue_logs "
+    )
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+    params.append(int(limit))
+
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+        return [_row_to_issue_log(row) for row in rows]
     finally:
         conn.close()

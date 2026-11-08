@@ -107,6 +107,10 @@ if Base is not None:
         created_at = Column(String(32), default="")
         status = Column(String(20), default="pending")
         admin_reply = Column(Text)
+        # v0.14.2 三态字段：只映射已存在的列，不调用 create_all，不产生任何 DDL
+        read_status = Column(Integer, default=0)
+        process_status = Column(Integer, default=0)
+        cc_email = Column(Integer, default=0)
 
         def as_dict(self):
             return {
@@ -123,6 +127,9 @@ if Base is not None:
                 "created_at": self.created_at or "",
                 "status": self.status or "pending",
                 "admin_reply": self.admin_reply or "",
+                "read_status": int(self.read_status or 0),
+                "process_status": int(self.process_status or 0),
+                "cc_email": int(self.cc_email or 0),
             }
 
 else:  # pragma: no cover - 未安装 SQLAlchemy 时的占位，避免 import * 崩掉

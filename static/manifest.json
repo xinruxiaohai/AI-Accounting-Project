@@ -21,19 +21,19 @@
   },
   "icons": [
     {
-      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
+      "src": "/static/images/logo-main.png?v=0.14.2",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
+      "src": "/static/images/logo-main.png?v=0.14.2",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
+      "src": "/static/images/logo-main.png?v=0.14.2",
       "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any maskable"
@@ -47,7 +47,7 @@
       "url": "/?action=new",
       "icons": [
         {
-          "src": "/static/images/logo-main.png?v=0.15.0-mobile1",
+          "src": "/static/images/logo-main.png?v=0.14.2",
           "sizes": "1024x1024",
           "type": "image/png"
         }

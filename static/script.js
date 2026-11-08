@@ -13107,6 +13107,8 @@ async function submitFeedback(event) {
     const dateInput = $("feedback-date");
     const contactType = $("feedback-contact-type");
     const contactInfo = $("feedback-contact-info");
+    // v0.14.2：勾选才抄送，默认不勾选；未登录时邮箱为空，后端按当前用户自行补齐
+    const ccInput = $("feedback-cc-email");
     const payload = {
       issue_description: issue,
       occur_date: dateInput ? dateInput.value || "" : "",
@@ -13116,6 +13118,7 @@ async function submitFeedback(event) {
       email: (user && user.email) || "",
       nickname: (user && user.nickname) || "",
       uid: user && user.id !== undefined && user.id !== null ? user.id : "",
+      cc_email: ccInput && ccInput.checked ? (user && user.email) || "" : "",
     };
     // v0.14.0：用户反馈走独立接口（老的 /api/feedback 是 v0.10 AI 反馈，body.raw_text，不能复用）
     const submitted = await api("/api/user-feedback", jsonOptions("POST", payload));
@@ -13396,6 +13399,8 @@ function renderFeedbackTickets(tickets, kind) {
   if (!list) {
     return;
   }
+  // v0.14.2：对话流模块按索引取同一份数据，避免两套状态各说各话
+  window.__v0142Tickets = tickets;
   list.textContent = "";
   if (!tickets.length) {
     const empty = document.createElement("div");
@@ -13409,19 +13414,24 @@ function renderFeedbackTickets(tickets, kind) {
     list.appendChild(empty);
     return;
   }
-  tickets.forEach(function (ticket) {
+  tickets.forEach(function (ticket, index) {
     const card = document.createElement("article");
     card.className = "ticket-card";
     card.setAttribute("role", "listitem");
+    card.dataset.ticketIndex = String(index);
+    card.dataset.ticketId = String(ticket.id || "");
+    card.tabIndex = 0;
+    card.setAttribute("aria-label", "查看工单对话");
 
     const head = document.createElement("div");
     head.className = "ticket-card-head";
     const time = document.createElement("time");
     time.className = "ticket-time";
     time.textContent = ticket.created || "刚刚提交";
+    // v0.14.2：用户端只显示「已回复 / 未回复」，其余处理状态一律隐藏
     const badge = document.createElement("span");
-    badge.className = "ticket-status " + (ticket.resolved ? "is-resolved" : "is-pending");
-    badge.textContent = ticket.resolved ? "已解决" : "待处理";
+    badge.className = "ticket-status " + (ticket.reply ? "is-resolved" : "is-pending");
+    badge.textContent = ticket.reply ? "已回复" : "未回复";
     head.appendChild(time);
     head.appendChild(badge);
     card.appendChild(head);
@@ -13442,6 +13452,10 @@ function renderFeedbackTickets(tickets, kind) {
       reply.appendChild(text);
       card.appendChild(reply);
     }
+    const hint = document.createElement("span");
+    hint.className = "ticket-card-hint";
+    hint.textContent = "查看对话 →";
+    card.appendChild(hint);
     list.appendChild(card);
   });
 }
