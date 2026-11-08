@@ -9554,6 +9554,41 @@ function onAiImagePicked(event) {
   }
 })();
 
+/* ==================== v0.14.3：对外刷新入口 ==================== */
+
+/*
+ * 跑马灯（static/marquee-v0143.js）在三种时机要跟服务端对齐一次：
+ *   服务器 version 变了 / 断网恢复 / 顶部通知滚完消失。
+ * 本文件是 IIFE，refresh() 不是全局函数，所以只暴露这一个薄壳。
+ * 传 reason 只为排查用，refresh() 本身不关心。
+ */
+window.__zhRefresh = function (reason) {
+  // 登录 / 注册页没有账本数据，未登录时直接跳过，避免刷出一批 401 噪声；
+  // 后台页面没有本文件的 refresh()，也会自然走下面的「无函数」分支。
+  var token = "";
+  try {
+    token = window.localStorage.getItem("ai_accounting_token") || "";
+  } catch (error) {
+    token = "";
+  }
+  if (!token) {
+    try {
+      document.dispatchEvent(new CustomEvent("zh:data-refresh", { detail: { reason: reason } }));
+    } catch (error) {
+      // 忽略不支持 CustomEvent 构造器的老浏览器
+    }
+    return Promise.resolve();
+  }
+  try {
+    return Promise.resolve(refresh()).catch(function (error) {
+      console.warn("[v0.14.3] 全量刷新失败", reason || "", error);
+    });
+  } catch (error) {
+    console.warn("[v0.14.3] 全量刷新失败", reason || "", error);
+    return Promise.resolve();
+  }
+};
+
 /* ==================== 报销（旧版） ==================== */
 
 /** 资产页顶部汇总：待报销 = 应报未报，已报销 = 已经收回的；优先用统计接口，不受账户筛选影响 */

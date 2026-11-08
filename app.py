@@ -208,6 +208,8 @@ AUTH_PUBLIC_PATHS = {
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
+    # v0.14.3：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
+    "/api/notices/active_temp",
     # v0.14.2：这个接口要自己给「非管理员」返回 403 + 指定提示语，
     # 不能被 before_request 的通用 401 提前拦掉（未登录也应得到 403）。
     "/api/admin/check-identity",
@@ -3677,6 +3679,111 @@ def publish_notification(notify_id):
     return jsonify(notification)
 
 
+# ---------------- v0.14.3：临时滚动通知（全局跑马灯） ----------------
+#
+# 与上面 notifications 的分工：
+#   notifications = 点开看的公告（草稿/发布/封面/详情），后台第一排；
+#   temp_notices  = 页面顶部一直滚的一句话（时间窗 + 开关），后台第二排面板。
+#
+# 前台每页加载都会请求 active_temp，**登录页也要能看**，所以这个接口在
+# AUTH_PUBLIC_PATHS 里；它的前缀是 /api/notices 而不是 /api/notifications，
+# 因此不会被站点访问密码挡住（_needs_access 只认 /api/notifications 前缀）。
+
+
+def _temp_notice_server_time():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+@app.route("/api/notices/active_temp", methods=["GET"])
+def api_active_temp_notices():
+    """当前生效的滚动通知。没有生效条目时 notices=[]，前端隐藏跑马灯。"""
+    notices = database.list_active_temp_notices()
+    return jsonify(
+        notices=[
+            {
+                "id": notice["id"],
+                "content": notice["content"],
+                "start_time": notice["start_time"],
+                "end_time": notice["end_time"],
+            }
+            for notice in notices
+        ],
+        count=len(notices),
+        server_time=_temp_notice_server_time(),
+        version=detect_version(),
+    )
+
+
+@app.route("/api/admin/temp-notices", methods=["GET"])
+def admin_list_temp_notices():
+    """后台临时通知列表：全量 + 每条的播放状态（playing/upcoming/expired/paused）。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    notices = database.list_temp_notices()
+    return jsonify(
+        notices=notices,
+        count=len(notices),
+        server_time=_temp_notice_server_time(),
+        default_content=database.TEMP_NOTICE_DEFAULT_CONTENT,
+    )
+
+
+@app.route("/api/admin/temp-notices", methods=["POST"])
+def admin_create_temp_notice():
+    """新增一条滚动通知。content / start_time / end_time 必填，is_active 默认启用。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        notice = database.create_temp_notice(
+            data.get("content"),
+            data.get("start_time"),
+            data.get("end_time"),
+            data.get("is_active", 1),
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(notice=notice), 201
+
+
+@app.route("/api/admin/temp-notices/<int:notice_id>", methods=["PUT"])
+def admin_update_temp_notice(notice_id):
+    """编辑滚动通知：只改 body 里出现的字段，没传的保持原样。"""
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    try:
+        notice = database.update_temp_notice(
+            notice_id,
+            content=data.get("content") if "content" in data else None,
+            start_time=data.get("start_time") if "start_time" in data else None,
+            end_time=data.get("end_time") if "end_time" in data else None,
+            is_active=data.get("is_active") if "is_active" in data else None,
+        )
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if notice is None:
+        return jsonify(error="滚动通知不存在"), 404
+    return jsonify(notice=notice)
+
+
+@app.route("/api/admin/temp-notices/<int:notice_id>", methods=["DELETE"])
+def admin_delete_temp_notice(notice_id):
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    if not database.delete_temp_notice(notice_id):
+        return jsonify(error="滚动通知不存在"), 404
+    return jsonify(ok=True, id=notice_id)
+
+
 def _save_upload_image(upload):
     """校验并保存一张图片；返回 (url, None)，失败返回 (None, 中文错误)。"""
     if upload is None or not upload.filename:
@@ -4754,11 +4861,11 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.2-DEV"
+APP_VERSION_FALLBACK = "v0.14.3-DEV"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.14.2-DEV。
+    """返回当前统一版本号 v0.14.3-DEV。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿

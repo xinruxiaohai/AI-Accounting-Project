@@ -1906,6 +1906,9 @@ def _init_db_mysql_schema_guard():
             # v0.14.2：只做幂等 ADD COLUMN 与「全新独立表」的 CREATE IF NOT EXISTS，
             # 不涉及任何既有表的重建，因此不违反「不自动改写线上 schema」的约束。
             _ensure_v0142_schema(conn)
+            # v0.14.3：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
+            _ensure_temp_notice_schema(conn)
+            _boot_temp_notices(conn)
     finally:
         conn.close()
 
@@ -2363,6 +2366,10 @@ def init_db():
         with conn:
             _ensure_v0142_schema(conn)
 
+        # v0.14.3 临时滚动通知：全新独立表（幂等 CREATE IF NOT EXISTS）
+        with conn:
+            _ensure_temp_notice_schema(conn)
+
         # 第二段：补种子数据 + 回填老数据（DML，失败可以整体回滚）。
         # D5/F3：种子固定传 ADMIN_USER_ID，保持老用户 1 号的分类体系不动
         with conn:
@@ -2396,6 +2403,8 @@ def init_db():
             # 账户回填放在补账户之后：新补进来的行 rowid 最大，理应排最后
             if accounts_need_order:
                 conn.execute("UPDATE accounts SET sort_order = rowid")
+            # v0.14.3：预置 / 刷新默认维护通知（重启后自动播 5 分钟）
+            _boot_temp_notices(conn)
     finally:
         conn.close()  # with 只管事务，连接必须手动关
 
@@ -7486,5 +7495,274 @@ def list_issue_logs(status=None, feedback_id=None, keyword=None, limit=200):
     try:
         rows = conn.execute(sql, tuple(params)).fetchall()
         return [_row_to_issue_log(row) for row in rows]
+    finally:
+        conn.close()
+
+# ---------------- v0.14.3：临时滚动通知（全局跑马灯） ----------------
+#
+# 与 notifications 的区别：
+#   notifications 是「一条一条点开看的公告」，有草稿/发布状态、封面图、详情；
+#   temp_notices 是「挂在页面顶部一直滚的那句话」，只有一个时间窗 + 开关。
+# 两者互不影响，后台也分两个面板。
+
+TEMP_NOTICE_MAX_LENGTH = 200
+# 预置的维护文案：后台第一次打开就有这条；服务重启时也会把它拉起来播 5 分钟。
+TEMP_NOTICE_DEFAULT_CONTENT = (
+    "当前服务器正常维护更新，云同步以及登录注册功能暂时无法使用，请稍后"
+)
+# 服务启动后默认维护通知的生效时长（分钟）
+TEMP_NOTICE_BOOT_MINUTES = 5
+
+TEMP_NOTICE_STATUS_LABELS = {
+    "playing": "播放中",
+    "upcoming": "未开始",
+    "expired": "已过期",
+    "paused": "已停用",
+}
+
+
+def _temp_notice_now_text():
+    """统一用「YYYY-MM-DD HH:MM:SS」比较：字符串序 = 时间序，SQLite / MySQL 都成立。"""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_notice_time(value, label):
+    """把前端 datetime-local / 手写文本统一成秒级时间串。非法输入抛 RecordError。"""
+    text = str(value or "").strip().replace("T", " ")
+    if not text:
+        raise RecordError("%s不能为空" % label)
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(text, fmt).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    raise RecordError("%s格式不正确（示例：2026-11-09 03:00）" % label)
+
+
+def _normalize_notice_content(content):
+    text = str(content or "").strip()
+    if not text:
+        raise RecordError("通知内容不能为空")
+    if len(text) > TEMP_NOTICE_MAX_LENGTH:
+        raise RecordError("通知内容最多 %d 个字" % TEMP_NOTICE_MAX_LENGTH)
+    return text
+
+
+def _temp_notice_status(row, now_text):
+    """播放中 / 未开始 / 已过期 / 已停用 —— 后台列表和前台过滤共用同一套判定。"""
+    if not int(row["is_active"] or 0):
+        return "paused"
+    start_time = str(row["start_time"] or "")
+    end_time = str(row["end_time"] or "")
+    if start_time and start_time > now_text:
+        return "upcoming"
+    if end_time and end_time < now_text:
+        return "expired"
+    return "playing"
+
+
+def _row_to_temp_notice(row, now_text=None):
+    now_text = now_text or _temp_notice_now_text()
+    status = _temp_notice_status(row, now_text)
+    return {
+        "id": row["id"],
+        "content": row["content"] or "",
+        "start_time": row["start_time"] or "",
+        "end_time": row["end_time"] or "",
+        "is_active": int(row["is_active"] or 0),
+        "created_at": row["created_at"] or "",
+        "updated_at": row["updated_at"] or "",
+        "status": status,
+        "status_label": TEMP_NOTICE_STATUS_LABELS.get(status, status),
+    }
+
+
+def _ensure_temp_notice_schema(conn):
+    """建 temp_notices（新独立表，不改任何既有表）。
+
+    TEXT 列一律不带 DEFAULT：MySQL 8.0 的 TEXT 不接受字面量默认值，
+    与 _ensure_v0142_schema 保持同一条约束，插入时显式给值。
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS temp_notices (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            content    TEXT NOT NULL,
+            start_time VARCHAR(32) NOT NULL,
+            end_time   VARCHAR(32) NOT NULL,
+            is_active  INTEGER NOT NULL DEFAULT 1,
+            created_at VARCHAR(32) NOT NULL,
+            updated_at VARCHAR(32) NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_temp_notices_window "
+        "ON temp_notices (is_active, start_time, end_time)"
+    )
+
+
+def _boot_temp_notices(conn):
+    """启动时把默认维护通知拉到「现在 → 5 分钟后」。
+
+    * 表里没有这条文案 → 插入（也就是「默认预置一条」）；
+    * 已经有 → 只刷新时间窗并重新启用，**不会每次重启多出一行**。
+
+    之所以用「文案精确匹配」而不是加一列 source：需求只要求 5 个字段，
+    文案是这条通知的身份标识；管理员改过文案后会被当成另一条，原行保留不动。
+    """
+    now = datetime.datetime.now()
+    start_text = now.strftime("%Y-%m-%d %H:%M:%S")
+    end_text = (now + datetime.timedelta(minutes=TEMP_NOTICE_BOOT_MINUTES)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    row = conn.execute(
+        "SELECT id FROM temp_notices WHERE content = ? ORDER BY id ASC LIMIT 1",
+        (TEMP_NOTICE_DEFAULT_CONTENT,),
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO temp_notices "
+            "(content, start_time, end_time, is_active, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            (TEMP_NOTICE_DEFAULT_CONTENT, start_text, end_text, start_text, start_text),
+        )
+        print("[v0.14.3] 已预置默认维护通知（%d 分钟）" % TEMP_NOTICE_BOOT_MINUTES, flush=True)
+        return
+    conn.execute(
+        "UPDATE temp_notices SET start_time = ?, end_time = ?, is_active = 1, "
+        "updated_at = ? WHERE id = ?",
+        (start_text, end_text, start_text, row["id"]),
+    )
+
+
+def get_temp_notice(notice_id):
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active, created_at, updated_at "
+            "FROM temp_notices WHERE id = ?",
+            (int(notice_id),),
+        ).fetchone()
+        return _row_to_temp_notice(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def list_temp_notices():
+    """后台列表：全量，按 id 倒序（最新建的排最上面），带 status。"""
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active, created_at, updated_at "
+            "FROM temp_notices ORDER BY id DESC"
+        ).fetchall()
+    finally:
+        conn.close()
+    now_text = _temp_notice_now_text()
+    return [_row_to_temp_notice(row, now_text) for row in rows]
+
+
+def list_active_temp_notices():
+    """前台跑马灯：只回「启用 + 已到开始时间 + 未过结束时间」的条目，按创建顺序。"""
+    now_text = _temp_notice_now_text()
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active, created_at, updated_at "
+            "FROM temp_notices "
+            "WHERE is_active = 1 "
+            "  AND (start_time = '' OR start_time <= ?) "
+            "  AND (end_time = '' OR end_time >= ?) "
+            "ORDER BY id ASC",
+            (now_text, now_text),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_temp_notice(row, now_text) for row in rows]
+
+
+def create_temp_notice(content, start_time, end_time, is_active=1):
+    content = _normalize_notice_content(content)
+    start_text = _normalize_notice_time(start_time, "开始时间")
+    end_text = _normalize_notice_time(end_time, "结束时间")
+    if end_text <= start_text:
+        raise RecordError("结束时间必须晚于开始时间")
+    active = 1 if int(is_active or 0) else 0
+    now_text = _temp_notice_now_text()
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "INSERT INTO temp_notices "
+                "(content, start_time, end_time, is_active, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (content, start_text, end_text, active, now_text, now_text),
+            )
+            new_id = cursor.lastrowid
+        row = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active, created_at, updated_at "
+            "FROM temp_notices WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+        return _row_to_temp_notice(row)
+    finally:
+        conn.close()
+
+
+def update_temp_notice(notice_id, content=None, start_time=None, end_time=None,
+                       is_active=None):
+    """局部更新：字段传 None 表示不改。找不到返回 None。"""
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active FROM temp_notices "
+            "WHERE id = ?",
+            (int(notice_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        next_content = (
+            row["content"] if content is None else _normalize_notice_content(content)
+        )
+        next_start = (
+            row["start_time"] if start_time is None
+            else _normalize_notice_time(start_time, "开始时间")
+        )
+        next_end = (
+            row["end_time"] if end_time is None
+            else _normalize_notice_time(end_time, "结束时间")
+        )
+        if next_end <= next_start:
+            raise RecordError("结束时间必须晚于开始时间")
+        next_active = (
+            int(row["is_active"] or 0) if is_active is None
+            else (1 if int(is_active or 0) else 0)
+        )
+        with conn:
+            conn.execute(
+                "UPDATE temp_notices SET content = ?, start_time = ?, end_time = ?, "
+                "is_active = ?, updated_at = ? WHERE id = ?",
+                (next_content, next_start, next_end, next_active,
+                 _temp_notice_now_text(), int(notice_id)),
+            )
+        updated = conn.execute(
+            "SELECT id, content, start_time, end_time, is_active, created_at, updated_at "
+            "FROM temp_notices WHERE id = ?",
+            (int(notice_id),),
+        ).fetchone()
+        return _row_to_temp_notice(updated)
+    finally:
+        conn.close()
+
+
+def delete_temp_notice(notice_id):
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM temp_notices WHERE id = ?", (int(notice_id),)
+            )
+            return cursor.rowcount > 0
     finally:
         conn.close()

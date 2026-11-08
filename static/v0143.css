@@ -1,0 +1,107 @@
+/* ============================================================
+   v0.14.3 · 全局临时通知跑马灯（首页 / 登录页 / 注册页 / 后台）
+   ------------------------------------------------------------
+   约定：
+   1. 固定贴顶，高度 28px（手机 24px），不占文档流 —— 所以下面给
+      .app / .auth-gate / .admin-page 补了同高的 padding-top，绝不遮挡正文；
+   2. 层级 7000，高于 .auth-gate(6000)，登录注册页也能看到；
+   3. 浅色用淡黄警示色，[data-theme="dark"] 下换成深琥珀底 + 亮黄字。
+   ============================================================ */
+
+#global-marquee {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 7000;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 28px;
+  letter-spacing: 0.2px;
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.94);
+  border-bottom: 1px solid rgba(217, 119, 6, 0.28);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 6px rgba(15, 23, 42, 0.06);
+  user-select: none;
+  pointer-events: none;
+}
+
+#global-marquee[hidden] {
+  display: none;
+}
+
+#global-marquee .global-marquee-track {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  white-space: nowrap;
+  will-change: transform;
+  animation-name: global-marquee-scroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+
+/* 一组 = 全部生效通知；组首组尾留白，多份复制滚动时句子不会首尾黏连 */
+#global-marquee .global-marquee-group {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 0 56px;
+}
+
+#global-marquee .global-marquee-item {
+  padding: 0 4px;
+}
+
+#global-marquee .global-marquee-sep {
+  padding: 0 18px;
+  font-weight: 700;
+  color: rgba(180, 83, 9, 0.55);
+}
+
+@keyframes global-marquee-scroll {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-50%, 0, 0); }
+}
+
+/* 跑马灯出现时给正文让位（固定定位元素不占流） */
+body.has-global-marquee .app { padding-top: 28px; }
+body.has-global-marquee .auth-gate { padding-top: 52px; }
+body.has-global-marquee .admin-page { padding-top: 60px; }
+
+/* 深色模式：深琥珀底 + 亮黄字，仍然是警示色而不是纯白刺眼 */
+[data-theme="dark"] #global-marquee {
+  color: #fcd34d;
+  background: rgba(69, 45, 10, 0.94);
+  border-bottom-color: rgba(252, 211, 77, 0.3);
+  box-shadow: 0 1px 8px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="dark"] #global-marquee .global-marquee-sep {
+  color: rgba(252, 211, 77, 0.55);
+}
+
+/* 手机：高度压到 24px、字号 12px，滚动速度在 JS 里同步放慢 */
+@media (max-width: 640px) {
+  #global-marquee {
+    height: 24px;
+    font-size: 12px;
+    line-height: 24px;
+  }
+  #global-marquee .global-marquee-group { padding: 0 32px; }
+  #global-marquee .global-marquee-sep { padding: 0 12px; }
+  body.has-global-marquee .app { padding-top: 24px; }
+  body.has-global-marquee .auth-gate { padding-top: 44px; }
+  body.has-global-marquee .admin-page { padding-top: 52px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #global-marquee .global-marquee-track {
+    animation-duration: 120s !important;
+  }
+}

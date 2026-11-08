@@ -8,8 +8,10 @@
   <link rel="icon" type="image/png" href="/static/images/logo-main.png">
   <link rel="apple-touch-icon" href="/static/images/logo-main.png">
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.14.2.1">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.14.2.1">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.3">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3">
+  <!-- v0.14.3：顶部临时通知跑马灯 -->
+  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3">
   <script>
     /* v0.14.2：身份核验完成前先盖住后台内容，避免管理员数据闪现。
        9 秒兜底只解除「隐藏内容」，黑屏门帘仍由 admin-v0142.js 控制，防止脚本加载失败时整页空白。 */
@@ -897,9 +899,97 @@
       font-weight: 600 !important;
       white-space: nowrap !important;
     }
+    /* v0.14.3：临时滚动通知（顶部跑马灯）管理面板
+       外层卡片 + 内层列表双层 overflow-y:auto，条目再多也只在面板里滚，
+       不会把「通知发布」这一页撑到超长、也不会顶掉下面的 AI 大脑管理区。 */
+    .temp-notice-card {
+      margin-top: 22px;
+      max-height: 76vh;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .temp-notice-form {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius-sm);
+      padding: 14px;
+      background: var(--surface-2);
+      margin-bottom: 14px;
+    }
+    .temp-notice-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .temp-notice-row > .admin-label { margin: 0; flex: none; min-width: 64px; }
+    .temp-notice-row > .form-control { flex: 1 1 320px; min-width: 180px; }
+    .temp-notice-times > .form-control { flex: 0 1 208px; min-width: 168px; }
+    .temp-notice-active {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin: 0;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .temp-notice-list {
+      max-height: 340px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .temp-notice-item {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      background: var(--surface-2);
+    }
+    .temp-notice-item.is-playing {
+      border-color: rgba(16, 185, 129, 0.5);
+      box-shadow: inset 3px 0 0 rgba(16, 185, 129, 0.8);
+    }
+    .temp-notice-item.is-paused { opacity: 0.72; }
+    .temp-notice-text {
+      font-size: 14px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .temp-notice-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--text-muted, #64748b);
+    }
+    .temp-notice-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: rgba(148, 163, 184, 0.18);
+      color: var(--text-muted, #64748b);
+    }
+    .temp-notice-badge.is-playing { background: rgba(16, 185, 129, 0.16); color: #0f766e; }
+    .temp-notice-badge.is-upcoming { background: rgba(59, 130, 246, 0.16); color: #1d4ed8; }
+    .temp-notice-badge.is-paused { background: rgba(244, 63, 94, 0.14); color: #be123c; }
+    .temp-notice-ops { display: inline-flex; align-items: center; gap: 10px; margin-left: auto; }
+    @media (max-width: 640px) {
+      .temp-notice-row > .admin-label { min-width: 100%; }
+      .temp-notice-times > .form-control { flex: 1 1 100%; }
+    }
   </style>
 </head>
 <body>
+  <!-- v0.14.3：全局临时通知跑马灯（后台改完通知，这里也能立刻看到效果） -->
+  <div id="global-marquee" class="global-marquee" role="status" aria-live="polite" hidden>
+    <div class="global-marquee-track"></div>
+  </div>
   <main class="admin-page">
     <header class="admin-head">
       <div>
@@ -907,7 +997,7 @@
         <p>在这里写通知，前台点顶部信封就能看到；仅在开发期使用。</p>
       </div>
       <div class="admin-head-actions">
-        <span class="admin-version" id="admin-version">v0.14.2-DEV</span>
+        <span class="admin-version" id="admin-version">v0.14.3-DEV</span>
         <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
         <button type="button" class="admin-gear-btn" id="admin-settings-btn"
                 title="访问密码与验证设置" aria-label="访问密码与验证设置">
@@ -1039,6 +1129,45 @@
           <div class="admin-list" id="notice-list"></div>
         </div>
       </section>
+    </div>
+
+    <!-- v0.14.3：临时滚动通知（前台所有页面顶部的跑马灯） -->
+    <div class="admin-card temp-notice-card" id="temp-notice-card">
+      <h2 class="admin-card-title">
+        临时滚动通知
+        <span class="badge text-bg-secondary" id="temp-notice-total">0</span>
+        <span class="admin-count" id="temp-notice-preview"></span>
+      </h2>
+      <p class="admin-hint mb-2">
+        前台每个页面顶部会一直从右往左滚一句话；多条同时生效时用「|」隔开。
+        服务器每次重启还会自动续上一条 5 分钟的维护提醒，改完保存即刻生效。
+      </p>
+
+      <form class="temp-notice-form" id="temp-notice-form" autocomplete="off">
+        <div class="temp-notice-row">
+          <label class="admin-label" for="temp-notice-content">通知内容</label>
+          <input id="temp-notice-content" class="form-control" type="text" maxlength="200"
+                 placeholder="例：今晚 23:00-24:00 例行维护，云同步暂停">
+        </div>
+        <div class="temp-notice-row temp-notice-times">
+          <label class="admin-label" for="temp-notice-start">开始时间</label>
+          <input id="temp-notice-start" class="form-control" type="datetime-local" step="1">
+          <label class="admin-label" for="temp-notice-end">结束时间</label>
+          <input id="temp-notice-end" class="form-control" type="datetime-local" step="1">
+          <label class="form-check temp-notice-active" for="temp-notice-active">
+            <input class="form-check-input" type="checkbox" id="temp-notice-active" checked>
+            <span>启用</span>
+          </label>
+        </div>
+        <div class="d-flex align-items-center gap-3 flex-wrap">
+          <button type="submit" class="btn btn-primary btn-sm" id="temp-notice-save">新增通知</button>
+          <button type="button" class="btn btn-outline-secondary btn-sm d-none" id="temp-notice-cancel">取消编辑</button>
+          <button type="button" class="btn btn-outline-primary btn-sm" id="temp-notice-preset">填入维护文案</button>
+          <span class="admin-count" id="temp-notice-hint"></span>
+        </div>
+      </form>
+
+      <div class="admin-list temp-notice-list" id="temp-notice-list"></div>
     </div>
     </section>
 
@@ -1394,8 +1523,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.14.2.1"></script>
-<script src="/static/access-guard.js?v=0.14.2.1"></script>
+  <script src="/static/auth-v012.js?v=0.14.3"></script>
+<script src="/static/access-guard.js?v=0.14.3"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -2269,9 +2398,210 @@
         }
       });
 
+      /* ---------- v0.14.3：临时滚动通知（前台顶部跑马灯） ---------- */
+
+      var tempNoticeState = { items: [], editingId: 0, loading: false, defaultContent: "" };
+
+      function tempNoticePad(n) { return (n < 10 ? "0" : "") + n; }
+
+      // datetime-local 要的是 "YYYY-MM-DDTHH:MM:SS"，后端统一存 "YYYY-MM-DD HH:MM:SS"
+      function tempNoticeLocalValue(date) {
+        return date.getFullYear() + "-" + tempNoticePad(date.getMonth() + 1) + "-" +
+          tempNoticePad(date.getDate()) + "T" + tempNoticePad(date.getHours()) + ":" +
+          tempNoticePad(date.getMinutes()) + ":" + tempNoticePad(date.getSeconds());
+      }
+
+      function tempNoticeFromServer(value) {
+        return String(value || "").replace(" ", "T");
+      }
+
+      function renderTempNotices() {
+        var box = $("temp-notice-list");
+        $("temp-notice-total").textContent = String(tempNoticeState.items.length);
+        var playing = tempNoticeState.items.filter(function (item) {
+          return item.status === "playing";
+        });
+        $("temp-notice-preview").textContent = playing.length
+          ? "当前播放 " + playing.length + " 条"
+          : "当前没有生效中的条目";
+        if (!tempNoticeState.items.length) {
+          box.innerHTML =
+            '<div class="admin-empty">还没有滚动通知。上面写一句、选好时间，保存后前台顶部立刻开始滚。</div>';
+          return;
+        }
+        box.innerHTML = tempNoticeState.items.map(function (item) {
+          var status = item.status || "paused";
+          var active = Number(item.is_active) ? "停用" : "启用";
+          return (
+            '<div class="temp-notice-item is-' + escapeHtml(status) + '" data-id="' + item.id + '">' +
+              '<div class="temp-notice-text">' + escapeHtml(item.content) + "</div>" +
+              '<div class="temp-notice-meta">' +
+                '<span class="temp-notice-badge is-' + escapeHtml(status) + '">' +
+                  escapeHtml(item.status_label || status) + "</span>" +
+                "<span>" + escapeHtml(item.start_time || "—") + " → " +
+                  escapeHtml(item.end_time || "—") + "</span>" +
+                '<span class="temp-notice-ops">' +
+                  '<button type="button" class="btn btn-link btn-sm p-0" data-edit="' + item.id + '">编辑</button>' +
+                  '<button type="button" class="btn btn-link btn-sm p-0" data-toggle="' + item.id + '">' +
+                    active + "</button>" +
+                  '<button type="button" class="btn btn-link btn-sm p-0 text-danger" data-delete="' +
+                    item.id + '">删除</button>' +
+                "</span>" +
+              "</div>" +
+            "</div>"
+          );
+        }).join("");
+      }
+
+      function loadTempNotices() {
+        tempNoticeState.loading = true;
+        return request("/api/admin/temp-notices")
+          .then(function (data) {
+            tempNoticeState.items = data.notices || [];
+            if (data.default_content) {
+              tempNoticeState.defaultContent = data.default_content;
+            }
+            renderTempNotices();
+          })
+          .catch(function (error) {
+            $("temp-notice-list").innerHTML =
+              '<div class="admin-empty">' + escapeHtml(error.message) + "</div>";
+          })
+          .then(function () {
+            tempNoticeState.loading = false;
+          });
+      }
+
+      function tempNoticeFind(id) {
+        var target = Number(id);
+        return tempNoticeState.items.filter(function (item) {
+          return Number(item.id) === target;
+        })[0];
+      }
+
+      function tempNoticeResetForm() {
+        tempNoticeState.editingId = 0;
+        $("temp-notice-content").value = "";
+        $("temp-notice-start").value = "";
+        $("temp-notice-end").value = "";
+        $("temp-notice-active").checked = true;
+        $("temp-notice-save").textContent = "新增通知";
+        $("temp-notice-cancel").classList.add("d-none");
+        $("temp-notice-hint").textContent = "";
+      }
+
+      function tempNoticeEdit(item) {
+        if (!item) { return; }
+        tempNoticeState.editingId = Number(item.id);
+        $("temp-notice-content").value = item.content || "";
+        $("temp-notice-start").value = tempNoticeFromServer(item.start_time);
+        $("temp-notice-end").value = tempNoticeFromServer(item.end_time);
+        $("temp-notice-active").checked = !!Number(item.is_active);
+        $("temp-notice-save").textContent = "保存修改";
+        $("temp-notice-cancel").classList.remove("d-none");
+        $("temp-notice-hint").textContent = "正在编辑 #" + item.id;
+        $("temp-notice-content").focus();
+      }
+
+      $("temp-notice-form").addEventListener("submit", function (event) {
+        event.preventDefault();
+        var payload = {
+          content: $("temp-notice-content").value.trim(),
+          start_time: $("temp-notice-start").value,
+          end_time: $("temp-notice-end").value,
+          is_active: $("temp-notice-active").checked ? 1 : 0
+        };
+        if (!payload.content) {
+          toast("先写一句通知内容", true);
+          return;
+        }
+        if (!payload.start_time || !payload.end_time) {
+          toast("开始时间和结束时间都要填", true);
+          return;
+        }
+        var editing = tempNoticeState.editingId;
+        var button = $("temp-notice-save");
+        button.disabled = true;
+        request("/api/admin/temp-notices" + (editing ? "/" + editing : ""), {
+          method: editing ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function () {
+            toast(editing ? "滚动通知已更新" : "滚动通知已新增");
+            tempNoticeResetForm();
+            return loadTempNotices();
+          })
+          .catch(function (error) {
+            toast(error.message, true);
+          })
+          .then(function () {
+            button.disabled = false;
+          });
+      });
+
+      $("temp-notice-cancel").addEventListener("click", tempNoticeResetForm);
+
+      $("temp-notice-preset").addEventListener("click", function () {
+        var start = new Date();
+        var end = new Date(start.getTime() + 30 * 60 * 1000);
+        $("temp-notice-content").value =
+          tempNoticeState.defaultContent || "当前服务器正常维护更新，云同步以及登录注册功能暂时无法使用，请稍后";
+        $("temp-notice-start").value = tempNoticeLocalValue(start);
+        $("temp-notice-end").value = tempNoticeLocalValue(end);
+        $("temp-notice-active").checked = true;
+        $("temp-notice-hint").textContent = "已填入默认维护文案（30 分钟）";
+      });
+
+      $("temp-notice-list").addEventListener("click", function (event) {
+        var editButton = event.target.closest("[data-edit]");
+        if (editButton) {
+          tempNoticeEdit(tempNoticeFind(editButton.getAttribute("data-edit")));
+          return;
+        }
+        var toggleButton = event.target.closest("[data-toggle]");
+        if (toggleButton) {
+          var toggleItem = tempNoticeFind(toggleButton.getAttribute("data-toggle"));
+          if (!toggleItem) { return; }
+          toggleButton.disabled = true;
+          request("/api/admin/temp-notices/" + toggleItem.id, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ is_active: Number(toggleItem.is_active) ? 0 : 1 })
+          })
+            .then(function () {
+              toast(Number(toggleItem.is_active) ? "已停用，前台不再滚动" : "已启用");
+              return loadTempNotices();
+            })
+            .catch(function (error) {
+              toast(error.message, true);
+              toggleButton.disabled = false;
+            });
+          return;
+        }
+        var deleteButton = event.target.closest("[data-delete]");
+        if (deleteButton) {
+          var deleteItem = tempNoticeFind(deleteButton.getAttribute("data-delete"));
+          if (!deleteItem) { return; }
+          if (!window.confirm("删除这条滚动通知？\n\n" + deleteItem.content)) { return; }
+          deleteButton.disabled = true;
+          request("/api/admin/temp-notices/" + deleteItem.id, { method: "DELETE" })
+            .then(function () {
+              toast("已删除");
+              if (tempNoticeState.editingId === Number(deleteItem.id)) { tempNoticeResetForm(); }
+              return loadTempNotices();
+            })
+            .catch(function (error) {
+              toast(error.message, true);
+              deleteButton.disabled = false;
+            });
+        }
+      });
+
       /* ---------- 启动 ---------- */
 
       loadList();
+      loadTempNotices();
     })();
   </script>
 
@@ -3408,6 +3738,8 @@
     })();
   </script>
   <!-- v0.14.2：双重门禁 / 工单中心 / 问题日志 / 编号列表搜索 -->
-  <script src="/static/admin-v0142.js?v=0.14.2.1"></script>
+  <script src="/static/admin-v0142.js?v=0.14.3"></script>
+  <!-- v0.14.3：全局跑马灯（后台改了临时通知，这里也能立刻看到效果） -->
+  <script src="/static/marquee-v0143.js?v=0.14.3" defer></script>
 </body>
 </html>
