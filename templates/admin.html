@@ -8,10 +8,10 @@
   <link rel="icon" type="image/png" href="/static/images/logo-main.png">
   <link rel="apple-touch-icon" href="/static/images/logo-main.png">
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.14.3">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.3.1">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3.1">
   <!-- v0.14.3：顶部临时通知跑马灯 -->
-  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3">
+  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3.1">
   <script>
     /* v0.14.2：身份核验完成前先盖住后台内容，避免管理员数据闪现。
        9 秒兜底只解除「隐藏内容」，黑屏门帘仍由 admin-v0142.js 控制，防止脚本加载失败时整页空白。 */
@@ -997,7 +997,7 @@
         <p>在这里写通知，前台点顶部信封就能看到；仅在开发期使用。</p>
       </div>
       <div class="admin-head-actions">
-        <span class="admin-version" id="admin-version">v0.14.3-DEV</span>
+        <span class="admin-version" id="admin-version">v0.14.3.1</span>
         <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
         <button type="button" class="admin-gear-btn" id="admin-settings-btn"
                 title="访问密码与验证设置" aria-label="访问密码与验证设置">
@@ -1406,7 +1406,19 @@
             <span class="badge text-bg-secondary" id="v142-log-total">0</span>
           </h2>
         </div>
-        <p class="admin-hint mb-3">在工单对话里点「编写问题日志」，UID、时间、工单号会自动带入。</p>
+        <p class="admin-hint mb-3">在工单对话里点「编写问题日志」，UID、时间、工单号会自动带入；点卡片可看完整内容并切换处理状态。</p>
+        <!-- v0.14.3.1：状态筛选（对应 GET /api/admin/problem-logs?status=0|1） -->
+        <div class="v142-filter-bar" id="v142-log-filter-bar">
+          <div class="v142-filter-group">
+            <span class="v142-filter-label">状态</span>
+            <div class="v142-seg" id="v142-log-seg">
+              <button type="button" data-log-filter="all" class="is-active">全部</button>
+              <button type="button" data-log-filter="0">未解决</button>
+              <button type="button" data-log-filter="1">已解决</button>
+            </div>
+          </div>
+          <span class="admin-count" id="v142-log-filter-hint">显示全部日志</span>
+        </div>
         <div class="v142-log-list" id="v142-log-list"></div>
       </div>
     </section>
@@ -1523,8 +1535,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.14.3"></script>
-<script src="/static/access-guard.js?v=0.14.3"></script>
+  <script src="/static/auth-v012.js?v=0.14.3.1"></script>
+<script src="/static/access-guard.js?v=0.14.3.1"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -2689,7 +2701,13 @@
           // 管理员名单随「用户管理」一起加载，保证操作列与折叠面板状态同步
           loadAdminRoster();
         }
-        if (name === "user-feedback" && !userFeedbackState.loaded) { loadUserFeedback(); }
+        if (name === "user-feedback") {
+          if (!userFeedbackState.loaded) { loadUserFeedback(); }
+          // v0.14.3.1：仅停留在该 Tab 时轮询，离开立刻清定时器
+          startFeedbackPoll();
+        } else {
+          stopFeedbackPoll();
+        }
         // 提示文案 Tab：文案列表 + 帮助内容配置一起进页，只拉一次
         if (name === "tips" && !tipsState.loaded) { loadTips(); }
         if (name === "tips" && !helpState.loaded) { loadHelp(); }
@@ -3611,6 +3629,118 @@
       var userFeedbackState = { items: [], loaded: false, loading: false };
       var FEEDBACK_CONTACT_LABELS = { qq: "QQ", wechat: "微信", phone: "手机号" };
 
+      /* ---------- v0.14.3.1：用户反馈 Tab 静默轮询（15 秒） ----------
+       * 差异触发：新增工单 / 已读工单被用户追加补充后变回未读。
+       * 隐藏页面时完全停轮询；切回前台立刻拉一次再恢复定时器。
+       */
+      var FEEDBACK_POLL_MS = 15000;
+      var feedbackPoll = {
+        timer: 0,
+        activeTab: false,
+        running: false,
+        baseTitle: document.title
+      };
+
+      function feedbackIsRead(item) {
+        if (item.is_read !== undefined && item.is_read !== null) { return !!item.is_read; }
+        return Number(item.read_status || 0) === 1;
+      }
+
+      function feedbackUnreadCount(items) {
+        return (items || []).filter(function (item) { return !feedbackIsRead(item); }).length;
+      }
+
+      function updateFeedbackTitle(unread) {
+        var base = feedbackPoll.baseTitle || "通知发布台 · 智汇账";
+        document.title = unread > 0 ? "(" + unread + ") " + base : base;
+      }
+
+      function feedbackHasDiff(oldItems, newItems) {
+        var oldMap = {};
+        (oldItems || []).forEach(function (item) {
+          oldMap[String(item.id)] = feedbackIsRead(item);
+        });
+        var hasNew = false;
+        var reopened = false;
+        (newItems || []).forEach(function (item) {
+          var id = String(item.id);
+          if (!(id in oldMap)) {
+            hasNew = true;
+          } else if (oldMap[id] && !feedbackIsRead(item)) {
+            reopened = true;
+          }
+        });
+        return hasNew || reopened;
+      }
+
+      function pollFeedbackOnce(compare) {
+        if (feedbackPoll.running) { return Promise.resolve(); }
+        feedbackPoll.running = true;
+        return request("/api/admin/feedback")
+          .then(function (data) {
+            var fresh = data.feedback || [];
+            var changed = compare && userFeedbackState.loaded
+              ? feedbackHasDiff(userFeedbackState.items, fresh)
+              : false;
+            userFeedbackState.items = fresh;
+            userFeedbackState.loaded = true;
+            renderUserFeedback();
+            updateFeedbackTitle(feedbackUnreadCount(fresh));
+            if (changed) {
+              // 工单中心（admin-v0142.js 动态注入的列表）一起重渲染
+              if (window.__v0142Admin && typeof window.__v0142Admin.loadTickets === "function") {
+                window.__v0142Admin.loadTickets(false);
+              }
+              toast("叮！有新工单或补充反馈啦！");
+            }
+          })
+          .catch(function () { /* 静默轮询：网络抖动不打扰管理员 */ })
+          .then(function () { feedbackPoll.running = false; });
+      }
+
+      function startFeedbackPoll() {
+        feedbackPoll.activeTab = true;
+        if (document.hidden) { return; }
+        // 已经加载过 → 切回 Tab 时立刻静默比对一次；首次交给 loadUserFeedback
+        if (userFeedbackState.loaded) { pollFeedbackOnce(true); }
+        if (!feedbackPoll.timer) {
+          feedbackPoll.timer = window.setInterval(function () {
+            if (!document.hidden) { pollFeedbackOnce(true); }
+          }, FEEDBACK_POLL_MS);
+        }
+      }
+
+      function stopFeedbackPoll() {
+        feedbackPoll.activeTab = false;
+        if (feedbackPoll.timer) {
+          window.clearInterval(feedbackPoll.timer);
+          feedbackPoll.timer = 0;
+        }
+      }
+
+      document.addEventListener("visibilitychange", function () {
+        if (!feedbackPoll.activeTab) { return; }
+        if (document.hidden) {
+          stopFeedbackTimerOnly();
+          return;
+        }
+        // 切回前台：立刻刷新一次，再恢复 15 秒轮询
+        pollFeedbackOnce(true);
+        feedbackPoll.activeTab = true;
+        if (!feedbackPoll.timer) {
+          feedbackPoll.timer = window.setInterval(function () {
+            if (!document.hidden) { pollFeedbackOnce(true); }
+          }, FEEDBACK_POLL_MS);
+        }
+      });
+
+      function stopFeedbackTimerOnly() {
+        if (feedbackPoll.timer) {
+          window.clearInterval(feedbackPoll.timer);
+          feedbackPoll.timer = 0;
+        }
+      }
+
       function formatFeedbackTime(value) {
         return value ? String(value).replace("T", " ") : "—";
       }
@@ -3682,6 +3812,8 @@
             userFeedbackState.items = data.feedback || [];
             userFeedbackState.loaded = true;
             renderUserFeedback();
+            // v0.14.3.1：初次/手动刷新也同步标签页未读数
+            updateFeedbackTitle(feedbackUnreadCount(userFeedbackState.items));
           })
           .catch(function (error) {
             $("user-feedback-list").innerHTML =
@@ -3738,8 +3870,8 @@
     })();
   </script>
   <!-- v0.14.2：双重门禁 / 工单中心 / 问题日志 / 编号列表搜索 -->
-  <script src="/static/admin-v0142.js?v=0.14.3"></script>
+  <script src="/static/admin-v0142.js?v=0.14.3.1"></script>
   <!-- v0.14.3：全局跑马灯（后台改了临时通知，这里也能立刻看到效果） -->
-  <script src="/static/marquee-v0143.js?v=0.14.3" defer></script>
+  <script src="/static/marquee-v0143.js?v=0.14.3.1" defer></script>
 </body>
 </html>

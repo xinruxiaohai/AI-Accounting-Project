@@ -7,20 +7,20 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json?v=0.14.3">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.14.3">
+  <link rel="manifest" href="/manifest.json?v=0.14.3.1">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.14.3.1">
   <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.14.3">
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.14.3.1">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.14.3">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.3.1">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3.1">
   <!-- v0.14.3：顶部临时通知跑马灯（首页 / 登录页 / 注册页共用，叠在 auth-gate 之上） -->
-  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3">
+  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3.1">
 </head>
 <body>
 
@@ -125,7 +125,7 @@
           </svg>
         </button>
       </div>
-      <div class="sidebar-version" id="sidebar-version">v0.14.3-DEV</div>
+      <div class="sidebar-version" id="sidebar-version">v0.14.3.1</div>
     </div>
   </aside>
 
@@ -685,7 +685,7 @@
               <div class="profile-avatar" aria-hidden="true">¥</div>
               <div>
                 <h2 class="profile-title">我的账本</h2>
-                <p class="profile-sub" id="profile-version">v0.14.3-DEV</p>
+                <p class="profile-sub" id="profile-version">v0.14.3.1</p>
               </div>
             </div>
             <!-- v0.13.7 终极补丁：数据早已实时入库，旧文案「只存本机 / 不联网」严重过时 -->
@@ -1675,11 +1675,7 @@
         </div>
 
         <p class="feedback-hint">留下电话或者其他联系方式客服就会来找您啦&gt;_&lt;</p>
-        <!-- v0.14.2 模块四：抄送邮箱默认不勾选 -->
-        <div class="form-check feedback-cc-row">
-          <input class="form-check-input" type="checkbox" id="feedback-cc-email" value="1">
-          <label class="form-check-label" for="feedback-cc-email">抄送用户邮箱(选填)</label>
-        </div>
+        <!-- v0.14.3.1：移除「抄送用户邮箱(选填)」，提交 payload 也不再带 cc_email -->
         <div class="feedback-actions">
           <button class="btn btn-light" type="button" data-feedback-close>取消</button>
           <button class="btn btn-primary" type="submit" id="feedback-submit">提交反馈</button>
@@ -2470,17 +2466,17 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.14.3"></script>
-<script src="/static/access-guard.js?v=0.14.3"></script>
+<script src="/static/auth-v012.js?v=0.14.3.1"></script>
+<script src="/static/access-guard.js?v=0.14.3.1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.14.3"></script>
+<script src="/static/script.js?v=0.14.3.1"></script>
 <!-- v0.14.3：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
-<script src="/static/marquee-v0143.js?v=0.14.3" defer></script>
-<script src="/static/charts-v013.js?v=0.14.3"></script>
+<script src="/static/marquee-v0143.js?v=0.14.3.1" defer></script>
+<script src="/static/charts-v013.js?v=0.14.3.1"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.14.3"></script>
+<script src="/static/invest-v0133.js?v=0.14.3.1"></script>
 <!-- v0.14.2：权限管理 / 我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后） -->
-<script src="/static/user-feedback-v0142.js?v=0.14.3"></script>
+<script src="/static/user-feedback-v0142.js?v=0.14.3.1"></script>
 
 </body>
 </html>

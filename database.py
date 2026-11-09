@@ -7498,6 +7498,42 @@ def list_issue_logs(status=None, feedback_id=None, keyword=None, limit=200):
     finally:
         conn.close()
 
+
+def update_issue_log_status(log_id, status):
+    """v0.14.3.1：切换问题日志状态（0 未解决 / 1 已解决）。
+
+    只更新 status 一列，不重建既有表结构。返回更新后的完整记录；
+    日志不存在返回 None，非法状态抛 RecordError 由路由转成 400。
+    """
+    try:
+        flag = int(status)
+    except (TypeError, ValueError):
+        flag = -1
+    if flag not in ISSUE_LOG_STATUSES:
+        raise RecordError("状态必须是 0（未解决）或 1（已解决）")
+    try:
+        row_id = int(log_id)
+    except (TypeError, ValueError):
+        raise RecordError("日志编号必须是整数")
+    conn = get_conn()
+    try:
+        exists = conn.execute(
+            "SELECT id FROM issue_logs WHERE id = ?", (row_id,)
+        ).fetchone()
+        if exists is None:
+            return None
+        with conn:
+            conn.execute(
+                "UPDATE issue_logs SET status = ? WHERE id = ?", (flag, row_id)
+            )
+        updated = conn.execute(
+            "SELECT id, feedback_id, user_uid, content, status, created_at "
+            "  FROM issue_logs WHERE id = ?", (row_id,)
+        ).fetchone()
+        return _row_to_issue_log(updated)
+    finally:
+        conn.close()
+
 # ---------------- v0.14.3：临时滚动通知（全局跑马灯） ----------------
 #
 # 与 notifications 的区别：

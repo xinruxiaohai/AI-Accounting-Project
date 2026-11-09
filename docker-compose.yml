@@ -74,7 +74,7 @@ services:
       #   CACHE_TYPE: RedisCache
       #   CACHE_REDIS_URL: redis://redis:6379/0
       CACHE_TYPE: ${CACHE_TYPE:-SimpleCache}
-      APP_VERSION: ${APP_VERSION:-v0.14.3-DEV}
+      APP_VERSION: ${APP_VERSION:-v0.14.3.1}
       CLOUD_STORAGE_TYPE: ${CLOUD_STORAGE_TYPE:-local}
       TZ: Asia/Shanghai
     volumes:

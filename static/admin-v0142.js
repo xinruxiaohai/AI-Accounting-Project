@@ -246,8 +246,8 @@
     imageFile: null,
     searchHooks: []
   };
-  // null = 还没从服务端拿过；渲染时回落到本机归档
-  var logState = { items: null };
+  // v0.14.3.1：filter = all | 0（未解决）| 1（已解决），currentId 为详情弹窗当前日志
+  var logState = { items: null, filter: "all", currentId: null };
 
   function mapBackendStatus(raw, meta) {
     if (meta.status) { return meta.status; }
@@ -892,7 +892,11 @@
   }
 
   function loadLogs() {
-    return api("/api/admin/problem-logs").then(function (data) {
+    // v0.14.3.1：筛选条件透传后端 GET /api/admin/problem-logs?status=0|1
+    var query = logState.filter === "all"
+      ? ""
+      : "?status=" + encodeURIComponent(logState.filter);
+    return api("/api/admin/problem-logs" + query).then(function (data) {
       var rows = Array.isArray(data.logs) ? data.logs : [];
       logState.items = rows.map(normalizeLog);
       renderLogList();
@@ -901,6 +905,112 @@
       logState.items = store().logs.filter(function (l) { return l.local; });
       renderLogList();
     });
+  }
+
+  function logMatchesFilter(log) {
+    if (logState.filter === "all") { return true; }
+    var wanted = logState.filter === "1" ? "已解决" : "未解决";
+    return log.result === wanted;
+  }
+
+  function syncLogFilterHint() {
+    var hint = $("v142-log-filter-hint");
+    if (!hint) { return; }
+    hint.textContent = logState.filter === "all"
+      ? "显示全部日志"
+      : (logState.filter === "1" ? "仅显示已解决" : "仅显示未解决");
+  }
+
+  function findLog(id) {
+    var items = logState.items || store().logs;
+    for (var i = 0; i < items.length; i++) {
+      if (String(items[i].id) === String(id)) { return items[i]; }
+    }
+    return null;
+  }
+
+  /* ---------- v0.14.3.1：日志详情磨砂 Modal + 状态流转 ---------- */
+  function buildLogDetailModal() {
+    if ($("v142-log-detail-modal")) { return; }
+    var modal = document.createElement("div");
+    modal.className = "v142-modal";
+    modal.id = "v142-log-detail-modal";
+    modal.hidden = true;
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    modal.setAttribute("aria-labelledby", "v142-log-detail-title");
+    modal.innerHTML =
+      '<div class="v142-modal-backdrop" data-v142-log-detail-close></div>' +
+      '<div class="v142-modal-dialog" style="width:min(560px, calc(100vw - 32px));">' +
+      '  <div class="v142-modal-head"><div>' +
+      '    <h2 class="v142-modal-title" id="v142-log-detail-title">日志详情</h2>' +
+      '    <p class="v142-modal-sub">完整日志内容与处理状态</p>' +
+      '  </div><button class="v142-modal-close" type="button" data-v142-log-detail-close aria-label="关闭日志详情">' +
+      '    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>' +
+      "  </button></div>" +
+      '  <div class="v142-modal-body">' +
+      '    <p class="v142-log-meta" id="v142-log-detail-meta"></p>' +
+      '    <p class="v142-log-detail-badge-row"><span class="v142-badge" id="v142-log-detail-badge"></span></p>' +
+      '    <div class="v142-log-content v142-log-detail-text" id="v142-log-detail-content"></div>' +
+      "  </div>" +
+      '  <div class="v142-modal-foot">' +
+      '    <button class="v142-btn" type="button" data-v142-log-detail-close>关闭</button>' +
+      '    <button class="v142-btn is-primary" type="button" id="v142-log-toggle">标记为已解决</button>' +
+      "  </div>" +
+      "</div>";
+    document.body.appendChild(modal);
+    modal.addEventListener("click", function (event) {
+      if (event.target.closest("[data-v142-log-detail-close]")) {
+        closeModal("v142-log-detail-modal");
+      }
+    });
+    $("v142-log-toggle").addEventListener("click", toggleLogStatus);
+  }
+
+  function paintLogDetail(log) {
+    $("v142-log-detail-title").textContent = "日志 #" + log.id;
+    $("v142-log-detail-meta").textContent =
+      "UID #" + log.uid + " · 工单 #" + log.ticket_id + " · " + (log.created_at || "—");
+    var badge = $("v142-log-detail-badge");
+    badge.textContent = log.result;
+    badge.className = "v142-badge " + (log.result === "已解决" ? "is-ok" : "is-warn");
+    $("v142-log-detail-content").textContent = log.content || "（无内容）";
+    $("v142-log-toggle").textContent = log.result === "已解决" ? "标记为未解决" : "标记为已解决";
+  }
+
+  function openLogDetail(id) {
+    var log = findLog(id);
+    if (!log) { return; }
+    buildLogDetailModal();
+    logState.currentId = log.id;
+    paintLogDetail(log);
+    openModal("v142-log-detail-modal");
+  }
+
+  function toggleLogStatus() {
+    var log = findLog(logState.currentId);
+    if (!log) { return; }
+    var next = log.result === "已解决" ? 0 : 1;
+    var btn = $("v142-log-toggle");
+    btn.disabled = true;
+    api("/api/admin/problem-logs/" + encodeURIComponent(String(log.id)),
+        jsonOptions("PUT", { status: next }))
+      .then(function (data) {
+        btn.disabled = false;
+        var saved = normalizeLog(data.log || { id: log.id, status: next });
+        // 先本地同步 → 徽标与下方列表立刻更新，再按当前筛选重拉一次
+        logState.items = (logState.items || []).map(function (item) {
+          return String(item.id) === String(log.id) ? saved : item;
+        });
+        paintLogDetail(saved);
+        renderLogList();
+        toast(next === 1 ? "已标记为已解决" : "已标记为未解决");
+        return loadLogs();
+      })
+      .catch(function (error) {
+        btn.disabled = false;
+        toast((error && error.message) || "状态更新失败", true);
+      });
   }
 
   function saveLog() {
@@ -947,19 +1057,26 @@
   function renderLogList() {
     var box = $("v142-log-list");
     if (!box) { return; }
-    var items = logState.items || store().logs;
+    var all = logState.items || store().logs;
+    var items = all.filter(logMatchesFilter);
     $("v142-log-total").textContent = String(items.length);
+    syncLogFilterHint();
     box.textContent = "";
     if (!items.length) {
       var empty = document.createElement("div");
       empty.className = "v142-empty";
-      empty.textContent = "还没有问题日志，在工单对话里点「编写问题日志」就能记一条。";
+      empty.textContent = all.length
+        ? "当前筛选下没有日志，切回「全部」看看。"
+        : "还没有问题日志，在工单对话里点「编写问题日志」就能记一条。";
       box.appendChild(empty);
       return;
     }
     items.forEach(function (log) {
       var row = document.createElement("article");
-      row.className = "v142-log-row";
+      row.className = "v142-log-row is-clickable";
+      row.setAttribute("role", "button");
+      row.setAttribute("tabindex", "0");
+      row.setAttribute("data-log-id", String(log.id));
       row.innerHTML =
         '<div class="v142-log-head">' +
         '  <span class="v142-ticket-id">日志 #' + esc(log.id) + "</span>" +
@@ -969,12 +1086,38 @@
           " · " + esc(log.created_at) + "</p>" +
         '<p class="v142-log-content"></p>';
       qs(".v142-log-content", row).textContent = log.content;
+      row.addEventListener("click", function () { openLogDetail(log.id); });
+      row.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openLogDetail(log.id);
+        }
+      });
       box.appendChild(row);
     });
     var hook = ticketState.searchHooks.logs;
     if (hook) { hook.apply(); }
   }
+  function bindLogFilter() {
+    var seg = $("v142-log-seg");
+    if (!seg || seg.getAttribute("data-bound") === "1") { return; }
+    seg.setAttribute("data-bound", "1");
+    seg.addEventListener("click", function (event) {
+      var btn = event.target.closest("button[data-log-filter]");
+      if (!btn) { return; }
+      var value = btn.getAttribute("data-log-filter");
+      if (value === logState.filter) { return; }
+      logState.filter = value;
+      Array.prototype.slice.call(seg.querySelectorAll("button")).forEach(function (b) {
+        b.classList.toggle("is-active", b === btn);
+      });
+      loadLogs();
+    });
+  }
+
   function buildLogPane() {
+    // v0.14.3.1：模板直出的「全部 / 未解决 / 已解决」筛选栏
+    bindLogFilter();
     var main = qs("main.admin-page") || qs("main");
     if (!main) { return; }
     // pane 由 admin.html 模板提供；这里只负责挂搜索框（模板直出，避免 JS 未就绪时 Tab 空白）
@@ -991,10 +1134,18 @@
       '    <h2 class="admin-card-title mb-0">问题日志 <span class="badge text-bg-secondary" id="v142-log-total">0</span></h2>' +
       "  </div>" +
       '  <p class="admin-hint mb-3">从工单对话里归档的问题记录，按写入时间倒序。</p>' +
+      '  <div class="v142-filter-bar"><div class="v142-filter-group">' +
+      '    <span class="v142-filter-label">状态</span>' +
+      '    <div class="v142-seg" id="v142-log-seg">' +
+      '      <button type="button" data-log-filter="all" class="is-active">全部</button>' +
+      '      <button type="button" data-log-filter="0">未解决</button>' +
+      '      <button type="button" data-log-filter="1">已解决</button>' +
+      "    </div></div></div>" +
       '  <div class="v142-log-list" id="v142-log-list"></div>' +
       "</div>";
     main.appendChild(pane);
     ticketState.searchHooks.logs = attachListSearch("#pane-problem-logs", "#v142-log-list", "搜索日志编号 / UID / 工单号");
+    bindLogFilter();
   }
 
   /* ---------------- 弹层开关 / Esc ---------------- */
@@ -1038,6 +1189,9 @@
     }, 1200);
     document.addEventListener("keydown", function (event) {
       if (event.key !== "Escape") { return; }
+      if ($("v142-log-detail-modal") && !$("v142-log-detail-modal").hidden) {
+        closeModal("v142-log-detail-modal"); return;
+      }
       if ($("v142-log-modal") && !$("v142-log-modal").hidden) { closeModal("v142-log-modal"); return; }
       if ($("v142-chat-modal") && !$("v142-chat-modal").hidden) { closeModal("v142-chat-modal"); }
     }, true);
@@ -1054,7 +1208,20 @@
     store: store,
     openChat: openChat,
     setTicketStatus: setTicketStatus,
-    saveLog: saveLog
+    saveLog: saveLog,
+    // v0.14.3.1：日志筛选 / 详情弹窗，方便在控制台或自动化里直接驱动
+    loadLogs: loadLogs,
+    openLogDetail: openLogDetail,
+    setLogFilter: function (value) {
+      logState.filter = value;
+      var seg = $("v142-log-seg");
+      if (seg) {
+        Array.prototype.slice.call(seg.querySelectorAll("button")).forEach(function (b) {
+          b.classList.toggle("is-active", b.getAttribute("data-log-filter") === value);
+        });
+      }
+      return loadLogs();
+    }
   };
 
   if (document.readyState === "loading") {

@@ -13142,8 +13142,7 @@ async function submitFeedback(event) {
     const dateInput = $("feedback-date");
     const contactType = $("feedback-contact-type");
     const contactInfo = $("feedback-contact-info");
-    // v0.14.2：勾选才抄送，默认不勾选；未登录时邮箱为空，后端按当前用户自行补齐
-    const ccInput = $("feedback-cc-email");
+    // v0.14.3.1：表单已移除「抄送用户邮箱」开关，payload 不再携带 cc_email
     const payload = {
       issue_description: issue,
       occur_date: dateInput ? dateInput.value || "" : "",
@@ -13153,16 +13152,17 @@ async function submitFeedback(event) {
       email: (user && user.email) || "",
       nickname: (user && user.nickname) || "",
       uid: user && user.id !== undefined && user.id !== null ? user.id : "",
-      cc_email: ccInput && ccInput.checked ? (user && user.email) || "" : "",
     };
     // v0.14.0：用户反馈走独立接口（老的 /api/feedback 是 v0.10 AI 反馈，body.raw_text，不能复用）
     const submitted = await api("/api/user-feedback", jsonOptions("POST", payload));
     resetFeedbackForm();
+    // v0.14.3.1：提交成功后立刻关闭弹窗 + 清空表单 + Toast（三件事一起做）
+    closeFeedbackModal();
     // v0.15.0：新提交的工单立刻进历史列表，状态默认「待处理」
     cacheSubmittedTicket(issue, submitted);
     loadFeedbackTickets();
-    toast("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
-    feedbackStatus("反馈已提交，客服会尽快联系您 (・ω・)ノ", "success");
+    toast("反馈提交成功，客服会尽快处理！", "success");
+    feedbackStatus("反馈提交成功，客服会尽快处理！", "success");
   } catch (error) {
     feedbackStatus((error && error.message) || "提交失败，请稍后再试", "error");
   } finally {

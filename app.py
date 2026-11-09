@@ -4818,6 +4818,34 @@ def admin_problem_logs_create_alias():
     return jsonify(log=log), 201
 
 
+@app.route("/api/admin/problem-logs/<int:log_id>", methods=["PUT"])
+def admin_problem_logs_update_alias(log_id):
+    """v0.14.3.1：切换问题日志状态（0 未解决 / 1 已解决）。
+
+    前端传 status: 0|1；也兼容 result: "已解决"/"未解决"/"resolved"/"unresolved"。
+    """
+    denied = _require_rbac_admin()
+    if denied is not None:
+        return denied
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    raw = data.get("status", data.get("result"))
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if text in ("resolved", "已解决", "1"):
+            raw = 1
+        elif text in ("unresolved", "未解决", "0"):
+            raw = 0
+    try:
+        log = database.update_issue_log_status(log_id, raw)
+    except database.RecordError as exc:
+        return jsonify(error=str(exc)), 400
+    if log is None:
+        return jsonify(error="问题日志不存在"), 404
+    return jsonify(ok=True, log=log)
+
+
 @app.route("/api/feedback/<int:feedback_id>/messages", methods=["GET"])
 def feedback_messages_get_alias(feedback_id):
     """用户查看自己工单的对话流（并行前端约定的路径）。"""
@@ -4861,11 +4889,11 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.3-DEV"
+APP_VERSION_FALLBACK = "v0.14.3.1"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.14.3-DEV。
+    """返回当前统一版本号 v0.14.3.1。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿

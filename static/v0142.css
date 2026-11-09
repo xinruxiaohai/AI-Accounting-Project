@@ -539,13 +539,28 @@ html.v142-gating body > *:not(#v142-identity-gate) {
 .v142-log-meta { margin: 7px 0 0; font-size: 11.5px; color: var(--text-muted, #64748b); line-height: 1.7; overflow-wrap: anywhere; }
 .v142-log-content { margin: 9px 0 0; font-size: 13px; line-height: 1.7; color: var(--text-main, #1f2937); white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* v0.14.3.1：卡片可点开详情；详情弹窗里的长文本独立滚动，不撑爆 Modal */
+.v142-log-row.is-clickable { cursor: pointer; transition: border-color 0.15s ease, transform 0.15s ease; }
+.v142-log-row.is-clickable:hover { border-color: var(--brand-blue, #2563eb); transform: translateY(-1px); }
+.v142-log-row.is-clickable:focus-visible { outline: 2px solid var(--brand-blue, #2563eb); outline-offset: 2px; }
+.v142-log-detail-badge-row { margin: 12px 0 0; }
+.v142-log-detail-text {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line, #e6ebf2);
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  max-height: 42vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 /* ---------------- 9. 用户端对话流 / 追加补充 ---------------- */
 /* 设置弹窗的 Tab 是 flex 子项，hidden 必须显式兜底（项目历史坑） */
 .settings-tab[hidden] { display: none !important; }
-.feedback-cc-row { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+/* v0.14.3.1：移除「抄送用户邮箱(选填)」Checkbox，相关 .feedback-cc-row 样式一并删除 */
 /* 反馈入口的说明文案在窄屏会被挤成「…一条说 / 清」，改用均衡换行 */
 .help-feedback-entry .help-feedback-text small { text-wrap: balance; }
-.feedback-cc-row .form-check-label { font-size: 13px; color: var(--text-muted, #64748b); cursor: pointer; }
 .v142-uflow-note { margin: 8px 0 0; font-size: 12px; color: var(--text-muted, #64748b); line-height: 1.6; }
 .ticket-card { cursor: pointer; transition: border-color 0.15s ease; }
 .ticket-card:hover { border-color: var(--brand-blue, #2563eb); }
