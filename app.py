@@ -208,7 +208,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
-    # v0.14.3：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
+    # v0.14.3.1：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
     "/api/notices/active_temp",
     # v0.14.2：这个接口要自己给「非管理员」返回 403 + 指定提示语，
     # 不能被 before_request 的通用 401 提前拦掉（未登录也应得到 403）。
@@ -3679,7 +3679,7 @@ def publish_notification(notify_id):
     return jsonify(notification)
 
 
-# ---------------- v0.14.3：临时滚动通知（全局跑马灯） ----------------
+# ---------------- v0.14.3.1：临时滚动通知（全局跑马灯） ----------------
 #
 # 与上面 notifications 的分工：
 #   notifications = 点开看的公告（草稿/发布/封面/详情），后台第一排；

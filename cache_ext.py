@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -66,15 +67,48 @@ CACHE_TIMEOUT = 600  # 10 分钟
 # 所以写操作除了清本进程缓存，还会原子地递增这个共享文件的代际号；
 # 代际号进入 memoize 的 key，所有 worker 下一次取数自动换 key，旧值自然失效
 # （旧条目仍由 SimpleCache 的 600s 超时回收，不会无限增长）。
+def _cache_base_dir():
+    """默认的**项目目录之外**的暂存目录。
+
+    - Windows（sys.platform 以 win 开头）→ D:\\Project\\temp
+    - Linux / macOS 等 POSIX            → /tmp/zhihuizhang（在 /tmp 下，带项目名避免串号）
+    - ZHZ_CACHE_DIR 环境变量可覆盖
+
+    用 sys.platform 而不是 os.name 判断：os.name 被 mock 时 pathlib 的 Path 工厂
+    会在 Windows 上尝试实例化 PosixPath 而抛 NotImplementedError，且 macOS 同为
+    posix 却不该落到 Linux 专用路径。
+    """
+    override = (os.getenv("ZHZ_CACHE_DIR") or "").strip()
+    if override:
+        return Path(override)
+    if sys.platform.startswith("win"):
+        return Path(r"D:\Project\temp")
+    return Path("/tmp/zhihuizhang")
+
+
 def _generation_file():
-    """优先放 temp/（已被 .gitignore 忽略，不污染工作区）；不可写才退回项目根目录。"""
-    project = Path(__file__).resolve().parent
-    preferred = project / "temp" / ".cache_generation"
-    try:
-        preferred.parent.mkdir(parents=True, exist_ok=True)
-        return preferred
-    except OSError:
-        return project / ".cache_generation"
+    """跨进程缓存代际号：**只写项目目录之外的暂存区**，绝不写回项目目录。
+
+    v0.14.3.1：用户要求项目根目录绝对干净，暂存数据统一放 D:\\Project\\temp。
+    候选目录不可写时退回系统临时目录；所有写入都失败也只返回系统临时目录下的
+    路径，由 current_generation() 读失败回 0、_bump_generation() 写失败仅告警，
+    功能降级为「本进程 delete_memoized 仍生效」，**绝不在项目目录里造文件**。
+    """
+    candidates = [
+        _cache_base_dir(),
+        Path(tempfile.gettempdir()) / "zhihuizhang-cache",
+    ]
+    for base in candidates:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            # 只建目录不够，还要真能落文件；探针失败就换下一个候选
+            probe = base / (".write_probe.%d" % os.getpid())
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return base / ".cache_generation"
+        except OSError:
+            continue
+    return Path(tempfile.gettempdir()) / "zhihuizhang-cache" / ".cache_generation"
 
 
 _GENERATION_FILE = _generation_file()

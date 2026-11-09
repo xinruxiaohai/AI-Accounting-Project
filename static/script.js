@@ -9554,7 +9554,7 @@ function onAiImagePicked(event) {
   }
 })();
 
-/* ==================== v0.14.3：对外刷新入口 ==================== */
+/* ==================== v0.14.3.1：对外刷新入口 ==================== */
 
 /*
  * 跑马灯（static/marquee-v0143.js）在三种时机要跟服务端对齐一次：
@@ -9581,10 +9581,10 @@ window.__zhRefresh = function (reason) {
   }
   try {
     return Promise.resolve(refresh()).catch(function (error) {
-      console.warn("[v0.14.3] 全量刷新失败", reason || "", error);
+      console.warn("[v0.14.3.1] 全量刷新失败", reason || "", error);
     });
   } catch (error) {
-    console.warn("[v0.14.3] 全量刷新失败", reason || "", error);
+    console.warn("[v0.14.3.1] 全量刷新失败", reason || "", error);
     return Promise.resolve();
   }
 };

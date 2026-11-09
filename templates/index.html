@@ -19,12 +19,12 @@
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
   <link rel="stylesheet" href="/static/style.css?v=0.14.3.1">
   <link rel="stylesheet" href="/static/v0142.css?v=0.14.3.1">
-  <!-- v0.14.3：顶部临时通知跑马灯（首页 / 登录页 / 注册页共用，叠在 auth-gate 之上） -->
+  <!-- v0.14.3.1：顶部临时通知跑马灯（首页 / 登录页 / 注册页共用，叠在 auth-gate 之上） -->
   <link rel="stylesheet" href="/static/v0143.css?v=0.14.3.1">
 </head>
 <body>
 
-<!-- v0.14.3：全局临时通知跑马灯，紧贴顶栏下方（fixed 贴顶 + 正文让位）。
+<!-- v0.14.3.1：全局临时通知跑马灯，紧贴顶栏下方（fixed 贴顶 + 正文让位）。
      默认 hidden，由 marquee-v0143.js 拉到生效通知后再显示；登录/注册遮罩
      是 JS 动态插入的 .auth-gate，层级 6000 < 跑马灯 7000，所以登录页也可见。 -->
 <div id="global-marquee" class="global-marquee" role="status" aria-live="polite" hidden>
@@ -2470,7 +2470,7 @@
 <script src="/static/access-guard.js?v=0.14.3.1"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
 <script src="/static/script.js?v=0.14.3.1"></script>
-<!-- v0.14.3：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
+<!-- v0.14.3.1：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
 <script src="/static/marquee-v0143.js?v=0.14.3.1" defer></script>
 <script src="/static/charts-v013.js?v=0.14.3.1"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->

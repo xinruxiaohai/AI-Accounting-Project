@@ -1906,7 +1906,7 @@ def _init_db_mysql_schema_guard():
             # v0.14.2：只做幂等 ADD COLUMN 与「全新独立表」的 CREATE IF NOT EXISTS，
             # 不涉及任何既有表的重建，因此不违反「不自动改写线上 schema」的约束。
             _ensure_v0142_schema(conn)
-            # v0.14.3：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
+            # v0.14.3.1：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
             _ensure_temp_notice_schema(conn)
             _boot_temp_notices(conn)
     finally:
@@ -2366,7 +2366,7 @@ def init_db():
         with conn:
             _ensure_v0142_schema(conn)
 
-        # v0.14.3 临时滚动通知：全新独立表（幂等 CREATE IF NOT EXISTS）
+        # v0.14.3.1 临时滚动通知：全新独立表（幂等 CREATE IF NOT EXISTS）
         with conn:
             _ensure_temp_notice_schema(conn)
 
@@ -2403,7 +2403,7 @@ def init_db():
             # 账户回填放在补账户之后：新补进来的行 rowid 最大，理应排最后
             if accounts_need_order:
                 conn.execute("UPDATE accounts SET sort_order = rowid")
-            # v0.14.3：预置 / 刷新默认维护通知（重启后自动播 5 分钟）
+            # v0.14.3.1：预置 / 刷新默认维护通知（重启后自动播 5 分钟）
             _boot_temp_notices(conn)
     finally:
         conn.close()  # with 只管事务，连接必须手动关
@@ -7534,7 +7534,7 @@ def update_issue_log_status(log_id, status):
     finally:
         conn.close()
 
-# ---------------- v0.14.3：临时滚动通知（全局跑马灯） ----------------
+# ---------------- v0.14.3.1：临时滚动通知（全局跑马灯） ----------------
 #
 # 与 notifications 的区别：
 #   notifications 是「一条一条点开看的公告」，有草稿/发布状态、封面图、详情；
@@ -7663,7 +7663,7 @@ def _boot_temp_notices(conn):
             "VALUES (?, ?, ?, 1, ?, ?)",
             (TEMP_NOTICE_DEFAULT_CONTENT, start_text, end_text, start_text, start_text),
         )
-        print("[v0.14.3] 已预置默认维护通知（%d 分钟）" % TEMP_NOTICE_BOOT_MINUTES, flush=True)
+        print("[v0.14.3.1] 已预置默认维护通知（%d 分钟）" % TEMP_NOTICE_BOOT_MINUTES, flush=True)
         return
     conn.execute(
         "UPDATE temp_notices SET start_time = ?, end_time = ?, is_active = 1, "
