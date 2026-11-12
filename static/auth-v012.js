@@ -522,6 +522,10 @@
       gateError("邮箱和密码都要填");
       return;
     }
+    // v0.14.3.2：格式不合法就地拦下，绝不把请求发出去
+    if (!ensureEmailFormat(email, gateError)) {
+      return;
+    }
     // v0.13.5：强密码 + 二次确认 + 滑块只看注册视图。
     // 切到【登录】时这段完全不执行——历史账号只要非空就能发请求。
     if (gateMode === "register") {
@@ -600,6 +604,75 @@
     funnyToastTimer = window.setTimeout(function () {
       funnyToastElement.classList.remove("is-show");
     }, 4200);
+  }
+
+  /* ---------------- v0.14.3.2：邮箱格式严格校验 ---------------- */
+
+  /* 只放行真实可注册的常见后缀：.cpm / .con / .ocm 这类手误必须在发请求前就拦下，
+     否则验证码会发往不存在的域名，退信率一高整台服务器都会进黑名单。 */
+  var EMAIL_TLD_WHITELIST = [
+    "com", "cn", "net", "org", "edu", "gov", "io", "me", "top", "xyz", "vip",
+    "cc", "tv", "info", "biz", "site", "online", "tech", "cloud", "shop", "store",
+    "co", "hk", "tw", "us", "uk", "de", "fr", "jp", "kr", "sg", "au", "ca"
+  ];
+  var EMAIL_LOCAL_PATTERN = /^[A-Za-z0-9._%+-]+$/;
+  var EMAIL_LABEL_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+
+  function isEmailFormatValid(value) {
+    var email = String(value == null ? "" : value).trim();
+    if (!email || email.length > 254) {
+      return false;
+    }
+    var at = email.lastIndexOf("@");
+    if (at <= 0 || at === email.length - 1) {
+      return false;
+    }
+    var local = email.slice(0, at);
+    var domain = email.slice(at + 1).toLowerCase();
+    if (!local || local.length > 64 || !EMAIL_LOCAL_PATTERN.test(local)) {
+      return false;
+    }
+    if (
+      local.charAt(0) === "." ||
+      local.charAt(local.length - 1) === "." ||
+      local.indexOf("..") >= 0
+    ) {
+      return false;
+    }
+    var labels = domain.split(".");
+    if (labels.length < 2) {
+      return false;
+    }
+    for (var i = 0; i < labels.length; i += 1) {
+      if (!EMAIL_LABEL_PATTERN.test(labels[i])) {
+        return false;
+      }
+    }
+    return EMAIL_TLD_WHITELIST.indexOf(labels[labels.length - 1]) >= 0;
+  }
+
+  /* 统一提示：先弹 Toast，再把同一句写进调用方的行内错误位（登录页 / 设置弹窗各有一套）。 */
+  function flagEmailFormat(setMessage) {
+    var message = "邮箱格式不正确，请检查拼写";
+    if (typeof toast === "function") {
+      toast(message, "error");
+    } else {
+      showFunnyToast(message);
+    }
+    if (typeof setMessage === "function") {
+      setMessage(message);
+    }
+    return false;
+  }
+
+  function ensureEmailFormat(value, setMessage) {
+    if (!String(value == null ? "" : value).trim()) {
+      return false;
+    }
+    if (isEmailFormatValid(value)) {
+      return true;
+    }
+    return flagEmailFormat(setMessage);
   }
 
   /* ---------------- v0.12.3：滑块人机校验（原生 JS，不引第三方） ---------------- */
@@ -716,6 +789,10 @@
     var button = gateElement.querySelector("#auth-send-code");
     if (!email) {
       gateError("先填邮箱再获取验证码");
+      return;
+    }
+    // v0.14.3.2：发码前先校验格式，避免把验证码发到 .cpm 这类不存在的域名
+    if (!ensureEmailFormat(email, gateError)) {
       return;
     }
     // v0.13.5：注册视图必须先解锁滑块，才允许发送验证码
@@ -1394,6 +1471,164 @@
     document.body.removeChild(input);
   }
 
+  /* ---------------- v0.14.3.2：个人中心「手机号」绑定 / 修改 ---------------- */
+
+  var PHONE_PATTERN = /^1[3-9]\d{9}$/;
+
+  function phoneNode(id) {
+    return document.getElementById(id);
+  }
+
+  function setPhoneModalMessage(message) {
+    var box = phoneNode("phone-modal-error");
+    if (!box) {
+      return;
+    }
+    box.textContent = message || "";
+    box.hidden = !message;
+  }
+
+  /* 与后端 app._normalize_phone 保持同一套规则：+86 / 0086 / 空格 / 短横线一律剥掉。 */
+  function normalizePhoneInput(raw) {
+    var value = String(raw == null ? "" : raw).replace(/[\s\-()]/g, "");
+    if (value.indexOf("+86") === 0) {
+      value = value.slice(3);
+    } else if (value.indexOf("0086") === 0) {
+      value = value.slice(4);
+    } else if (value.length === 13 && value.indexOf("86") === 0) {
+      value = value.slice(2);
+    }
+    return value;
+  }
+
+  function openPhoneModal() {
+    var modalEl = phoneNode("phone-modal");
+    var input = phoneNode("phone-modal-input");
+    if (!modalEl || !input || !window.bootstrap) {
+      return;
+    }
+    var user = getUser() || {};
+    var phone = String(user.phone || "");
+    var title = phoneNode("phone-modal-title");
+    var unbind = phoneNode("phone-modal-unbind");
+    if (title) {
+      title.textContent = phone ? "修改手机号" : "绑定手机号";
+    }
+    if (unbind) {
+      unbind.hidden = !phone;
+    }
+    input.value = phone;
+    setPhoneModalMessage("");
+    var profileEl = phoneNode("profile-modal");
+    if (profileEl) {
+      window.bootstrap.Modal.getOrCreateInstance(profileEl).hide();
+    }
+    window.bootstrap.Modal.getOrCreateInstance(modalEl).show();
+    window.setTimeout(function () {
+      input.focus();
+      input.select();
+    }, 320);
+  }
+
+  function submitPhone(rawValue, allowEmpty) {
+    var raw = rawValue;
+    if (raw === undefined) {
+      var field = phoneNode("phone-modal-input");
+      raw = field ? field.value : "";
+    }
+    var value = normalizePhoneInput(raw);
+    if (!value && !allowEmpty) {
+      setPhoneModalMessage("请输入 11 位大陆手机号");
+      return Promise.resolve(false);
+    }
+    if (value && !PHONE_PATTERN.test(value)) {
+      setPhoneModalMessage("手机号格式不正确，请输入 11 位大陆手机号");
+      return Promise.resolve(false);
+    }
+    var submit = phoneNode("phone-modal-submit");
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "保存中…";
+    }
+    setPhoneModalMessage("");
+    return fetch("/api/auth/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone: value }),
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { ok: response.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok) {
+          setPhoneModalMessage((result.data && result.data.error) || "保存失败，请重试");
+          return false;
+        }
+        var user = result.data.user || {};
+        try {
+          localStorage.setItem(USER_KEY, JSON.stringify(user));
+        } catch (error) {
+          /* 隐私模式下写不进去也不影响本次展示 */
+        }
+        fillProfileModal(user);
+        var modalEl = phoneNode("phone-modal");
+        if (modalEl) {
+          window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
+        }
+        if (typeof toast === "function") {
+          toast(value ? "手机号更新成功" : "手机号已解绑", "success");
+        } else {
+          showFunnyToast(value ? "手机号更新成功" : "手机号已解绑");
+        }
+        return true;
+      })
+      .catch(function () {
+        setPhoneModalMessage("网络异常，请重试");
+        return false;
+      })
+      .then(function (ok) {
+        if (submit) {
+          submit.disabled = false;
+          submit.textContent = "保存";
+        }
+        return ok;
+      });
+  }
+
+  function bindPhoneModal() {
+    var modalEl = phoneNode("phone-modal");
+    if (!modalEl || modalEl.getAttribute("data-phone-bound") === "1") {
+      return;
+    }
+    modalEl.setAttribute("data-phone-bound", "1");
+    var submit = phoneNode("phone-modal-submit");
+    var unbind = phoneNode("phone-modal-unbind");
+    var input = phoneNode("phone-modal-input");
+    if (submit) {
+      submit.addEventListener("click", function () {
+        submitPhone();
+      });
+    }
+    if (input) {
+      input.addEventListener("keydown", function (event) {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitPhone();
+        }
+      });
+    }
+    if (unbind) {
+      unbind.addEventListener("click", function () {
+        if (!window.confirm("确定解除手机号绑定？解绑后该号码将不再与账号关联。")) {
+          return;
+        }
+        submitPhone("", true);
+      });
+    }
+  }
+
   function openSettingsAt(tab, focusId) {
     var modalEl = document.getElementById("settings-modal");
     if (!modalEl || !window.bootstrap) {
@@ -1623,8 +1858,11 @@
         var action = row.getAttribute("data-profile-action");
         if (action === "nickname") {
           openSettingsAt("personal", "settings-nickname");
-        } else if (action === "email" || action === "phone") {
+        } else if (action === "email") {
           openSettingsAt("account");
+        } else if (action === "phone") {
+          // v0.14.3.2：手机号改成独立磨砂 Modal，已绑定可直接修改，未绑定即绑定点
+          openPhoneModal();
         } else if (action === "member") {
           if (typeof toast === "function") {
             toast("会员体系正在筹备中，先把账记明白更重要", "info");
@@ -1814,6 +2052,14 @@
       setSettingsMessage("reset-password-error", "先填注册邮箱");
       return;
     }
+    // v0.14.3.2：设置里重置密码同样先校验邮箱格式
+    if (
+      !ensureEmailFormat(email, function (message) {
+        setSettingsMessage("reset-password-error", message);
+      })
+    ) {
+      return;
+    }
     button.disabled = true;
     button.textContent = "发送中…";
     fetch("/api/auth/send-code", {
@@ -1863,6 +2109,14 @@
       return;
     }
     setSettingsMessage("reset-password-error", "");
+    // v0.14.3.2：重置提交也走同一道格式闸门（防止用户跳过发码直接改邮箱框）
+    if (
+      !ensureEmailFormat(emailInput.value.trim(), function (message) {
+        setSettingsMessage("reset-password-error", message);
+      })
+    ) {
+      return;
+    }
     var code = codeInput.value.trim();
     if (!/^\d{6}$/.test(code)) {
       setSettingsMessage("reset-password-error", "请填 6 位邮箱验证码");
@@ -1967,6 +2221,7 @@
       modal.addEventListener("shown.bs.modal", fillAccountPane);
     }
     bindProfileUi();
+    bindPhoneModal();
   }
 
   /* ---------------- v0.12.3：登录页「忘记密码」---------------- */
@@ -2041,6 +2296,8 @@
     }
     forgotMessage("");
     forgotElement.classList.add("is-open");
+    // 弹窗是动态注入的，boot 阶段拿不到 #forgot-email，这里补挂邮箱格式守卫
+    bindEmailFormatGuards();
     window.setTimeout(function () {
       if (emailInput) {
         emailInput.focus();
@@ -2059,6 +2316,14 @@
     var button = forgotElement.querySelector("#forgot-send");
     if (!email) {
       forgotMessage("先填注册邮箱");
+      return;
+    }
+    // v0.14.3.2：忘记密码发码同样先过格式校验
+    if (
+      !ensureEmailFormat(email, function (message) {
+        forgotMessage(message);
+      })
+    ) {
       return;
     }
     button.disabled = true;
@@ -2114,6 +2379,14 @@
       forgotMessage("邮箱和 6 位验证码都要填");
       return;
     }
+    // v0.14.3.2：提交重置前再校验一次邮箱
+    if (
+      !ensureEmailFormat(email, function (message) {
+        forgotMessage(message);
+      })
+    ) {
+      return;
+    }
     if (password !== confirm) {
       forgotMessage("两次输入的新密码不一致");
       return;
@@ -2153,6 +2426,44 @@
     }
   }
 
+  /* ---------------- v0.14.3.2：邮箱输入框失焦即校验 ---------------- */
+
+  /* 注册视图的「注册」「获取验证码」在人机滑块解锁前是 disabled 的，
+     点击事件根本不会派发；所以把格式校验同时挂到 blur/change 上，
+     用户输完 4231414@qq.cpm 一离开输入框就能被拦下并看到 Toast。 */
+  function bindEmailInputGuard(input, setMessage) {
+    if (!input || input.getAttribute("data-email-guard") === "1") {
+      return;
+    }
+    input.setAttribute("data-email-guard", "1");
+    var check = function () {
+      var value = String(input.value || "").trim();
+      if (!value) {
+        return;
+      }
+      if (!isEmailFormatValid(value)) {
+        flagEmailFormat(setMessage);
+      }
+    };
+    input.addEventListener("blur", check);
+    input.addEventListener("change", check);
+  }
+
+  function bindEmailFormatGuards() {
+    bindEmailInputGuard(document.getElementById("auth-email"), function (message) {
+      gateError(message);
+    });
+    bindEmailInputGuard(document.getElementById("reset-password-email"), function (message) {
+      setSettingsMessage("reset-password-error", message);
+    });
+    var forgotInput = document.getElementById("forgot-email");
+    if (forgotInput) {
+      bindEmailInputGuard(forgotInput, function (message) {
+        forgotMessage(message);
+      });
+    }
+  }
+
   function boot() {
     // v0.13.6：先套品牌图标，避免侧边栏/登录页在首屏闪一下默认 Logo
     applyBrandLogo();
@@ -2162,6 +2473,7 @@
     // 启动即向服务端拉一次最新资料（含头像 / 昵称），保证服务重启后显示不丢
     refreshProfileFromServer();
     initAccountSettings();
+    bindEmailFormatGuards();
   }
 
   if (document.readyState === "loading") {

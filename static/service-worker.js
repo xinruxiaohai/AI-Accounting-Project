@@ -11,9 +11,9 @@
  * 样式与 auth/charts/invest 三个脚本全部落空、只剩一个空壳页面。
  * 现在按模板真实 URL 精确预缓存，并同步 bump CACHE_NAME 与模板 ?v=。
  */
-const CACHE_NAME = "ai-accounting-v0.14.3.1";
+const CACHE_NAME = "ai-accounting-v0.14.3.2";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.14.3.1";
+const ASSET_VERSION = "0.14.3.2";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",
@@ -24,6 +24,9 @@ const PRECACHE_URLS = [
   "/static/v0142.css?v=" + ASSET_VERSION,
   "/static/v0143.css",
   "/static/v0143.css?v=" + ASSET_VERSION,
+  // v0.14.3.2：手机号绑定弹窗的磨砂样式
+  "/static/v01432.css",
+  "/static/v01432.css?v=" + ASSET_VERSION,
   "/static/marquee-v0143.js?v=" + ASSET_VERSION,
   "/static/admin-v0142.js?v=" + ASSET_VERSION,
   "/static/user-feedback-v0142.js?v=" + ASSET_VERSION,

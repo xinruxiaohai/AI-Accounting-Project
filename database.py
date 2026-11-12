@@ -469,6 +469,27 @@ def update_user_nickname(user_id, nickname):
         conn.close()
 
 
+def update_user_phone(user_id, phone):
+    """v0.14.3.2：更新手机号；空串表示解绑。返回最新用户字典或 None。
+
+    号码格式由接口层统一校验（app._normalize_phone），这里只做入库前的长度兜底，
+    避免有人绕过接口直接写入超长字符串。
+    """
+    phone = (phone or "").strip()
+    conn = get_conn()
+    try:
+        with conn:
+            exists = conn.execute("SELECT id FROM users WHERE id = ?", (int(user_id),)).fetchone()
+            if exists is None:
+                return None
+            conn.execute(
+                "UPDATE users SET phone = ? WHERE id = ?", (phone[:20], int(user_id))
+            )
+        return get_user(user_id)
+    finally:
+        conn.close()
+
+
 def update_user_avatar(user_id, avatar):
     """更新头像 URL；空串表示恢复成昵称首字母。返回最新用户字典或 None。"""
     avatar = (avatar or "").strip()

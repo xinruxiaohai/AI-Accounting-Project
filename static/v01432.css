@@ -1,0 +1,129 @@
+/* ============================================================
+   v0.14.3.2 · 手机号绑定 / 修改弹窗（磨砂玻璃）
+   ------------------------------------------------------------
+   约定：
+   1. 只作用于 #phone-modal，不碰 Bootstrap 的其它 Modal；
+   2. 浅色用半透明白 + blur，[data-theme="dark"] 换成半透明深蓝；
+   3. 输入框与按钮圆角统一 12px，焦点环跟主题色走，手机端不溢出。
+   ============================================================ */
+
+.phone-modal .modal-content {
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+.phone-modal .modal-header,
+.phone-modal .modal-footer {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: transparent;
+}
+
+.phone-modal .modal-title {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+
+.phone-modal .modal-body {
+  padding-top: 8px;
+}
+
+.phone-modal .settings-hint {
+  margin-bottom: 14px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.phone-modal .form-control {
+  height: 44px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.65);
+  font-size: 16px;
+  letter-spacing: 1px;
+}
+
+.phone-modal .form-control:focus {
+  border-color: #6366f1;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.phone-modal .settings-error {
+  margin: 10px 0 0;
+  color: #dc2626;
+  font-size: 13px;
+}
+
+.phone-modal .btn {
+  border-radius: 12px;
+  padding: 8px 18px;
+}
+
+.phone-modal #phone-modal-unbind {
+  margin-right: auto;
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.28);
+}
+
+.phone-modal #phone-modal-unbind:hover {
+  background: rgba(185, 28, 28, 0.08);
+}
+
+[data-theme="dark"] .phone-modal .modal-content {
+  border-color: rgba(148, 163, 184, 0.28);
+  background: rgba(30, 41, 59, 0.74);
+  box-shadow: 0 24px 64px rgba(2, 6, 23, 0.55);
+}
+
+[data-theme="dark"] .phone-modal .settings-hint {
+  color: #94a3b8;
+}
+
+[data-theme="dark"] .phone-modal .form-control {
+  border-color: rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.55);
+  color: #e2e8f0;
+}
+
+[data-theme="dark"] .phone-modal .form-control:focus {
+  border-color: #818cf8;
+  background: rgba(15, 23, 42, 0.78);
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.22);
+}
+
+[data-theme="dark"] .phone-modal .btn-light {
+  border-color: rgba(148, 163, 184, 0.3);
+  background: rgba(148, 163, 184, 0.14);
+  color: #e2e8f0;
+}
+
+@media (max-width: 575.98px) {
+  .phone-modal .modal-dialog {
+    margin: 12px;
+  }
+
+  .phone-modal .modal-content {
+    border-radius: 18px;
+  }
+
+  .phone-modal .modal-footer {
+    gap: 8px;
+  }
+
+  .phone-modal .modal-footer .btn {
+    flex: 1 1 auto;
+  }
+
+  .phone-modal #phone-modal-unbind {
+    flex-basis: 100%;
+    margin-right: 0;
+    order: 3;
+  }
+}

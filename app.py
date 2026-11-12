@@ -28,7 +28,7 @@ from flask import (
 )
 from dotenv import load_dotenv
 from email.message import EmailMessage
-from email.utils import formataddr
+from email.utils import formataddr, formatdate
 # v0.14.1：密码哈希统一收口到 security.py（Werkzeug 加盐哈希 + 老哈希兼容升级）。
 # check_password_hash 这个名字故意保留，让下面 4 处调用一行都不用动，
 # 但实际指向兼容版 verify_password —— 老 SHA256 账号也能正常登录并被静默升级。
@@ -356,6 +356,32 @@ def _register_password_error(password):
     return None
 
 
+# ---------------- v0.14.3.2：手机号规范（个人中心绑定 / 解绑） ----------------
+
+PHONE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
+
+
+def _normalize_phone(raw):
+    """把 +86 / 0086 / 空格 / 短横线统一剥掉。返回 (手机号, 错误文案)。
+
+    空串是合法输入，表示「解除绑定」；只有既非空又不合规才回错误。
+    """
+    if raw is None:
+        return "", None
+    value = re.sub(r"[\s\-()]", "", str(raw))
+    if value.startswith("+86"):
+        value = value[3:]
+    elif value.startswith("0086"):
+        value = value[4:]
+    elif value.startswith("86") and len(value) == 13:
+        value = value[2:]
+    if not value:
+        return "", None
+    if not PHONE_PATTERN.match(value):
+        return None, "手机号格式不正确，请输入 11 位大陆手机号"
+    return value, None
+
+
 # ---------------- v0.13.4：注册邮箱验证码（真实 SMTP + 数据库哈希） ----------------
 
 EMAIL_CODE_TTL_SECONDS = 300          # 验证码 5 分钟过期
@@ -397,6 +423,9 @@ def _build_verification_email(email, code, purpose="register"):
     # 发件人显示名走 formataddr，否则中文显示名会被邮件客户端显示成乱码或整串丢弃
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = email
+    # v0.14.3.2：必须显式写 Date 头。缺这行时邮件客户端会按「无时间」处理，
+    # 显示成 1970-01-01 07:59:59（UTC 零点），极易被判成垃圾邮件。
+    msg["Date"] = formatdate(localtime=True)
     msg.set_content(
         "%s：您的%s验证码是 %s，%d 分钟内有效，请勿泄露给他人。"
         % (APP_BRAND_NAME, action, code, EMAIL_CODE_TTL_SECONDS // 60)
@@ -442,6 +471,8 @@ def _build_feedback_reply_email(to_email, ticket_id, content):
     msg["Subject"] = "【%s】您提交的工单 #%s 有了新回复" % (APP_BRAND_NAME, ticket_id)
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = to_email
+    # v0.14.3.2：同验证码邮件，工单回复邮件也必须带 Date 头。
+    msg["Date"] = formatdate(localtime=True)
     msg.set_content(
         "%s：您提交的工单 #%s 管理员已回复，内容如下：\n\n%s\n\n登录小程序查看完整对话。"
         % (APP_BRAND_NAME, ticket_id, content)
@@ -716,14 +747,39 @@ def auth_reset_password():
 @app.route("/api/auth/profile", methods=["PUT"])
 @login_required
 def auth_update_profile():
-    """改昵称（侧边栏展示用）；空值回退成邮箱前缀。"""
-    data = request.get_json(silent=True) or {}
-    nickname = data.get("nickname") if isinstance(data.get("nickname"), str) else ""
-    if len(nickname.strip()) > 20:
-        return jsonify(error="昵称最多 20 个字"), 400
-    user = database.update_user_nickname(g.current_user["id"], nickname)
-    if user is None:
-        return jsonify(error="用户不存在"), 404
+    """改昵称（侧边栏展示用）与手机号（v0.14.3.2 个人中心绑定）。
+
+    只有请求体里出现的字段才会被写入：没传 nickname 就不动昵称，
+    这样前端只传 phone 时不会被顺带改回邮箱前缀。
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    uid = g.current_user["id"]
+    touched = False
+    user = None
+
+    if "nickname" in data:
+        nickname = data.get("nickname") if isinstance(data.get("nickname"), str) else ""
+        if len(nickname.strip()) > 20:
+            return jsonify(error="昵称最多 20 个字"), 400
+        user = database.update_user_nickname(uid, nickname)
+        if user is None:
+            return jsonify(error="用户不存在"), 404
+        touched = True
+
+    if "phone" in data:
+        phone, phone_error = _normalize_phone(data.get("phone"))
+        if phone_error:
+            return jsonify(error=phone_error), 400
+        user = database.update_user_phone(uid, phone)
+        if user is None:
+            return jsonify(error="用户不存在"), 404
+        touched = True
+
+    if not touched:
+        return jsonify(error="没有需要更新的字段"), 400
     return jsonify(user=_public_user(user))
 
 
@@ -4889,7 +4945,7 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.3.1"
+APP_VERSION_FALLBACK = "v0.14.3.2"
 
 
 def detect_version():
