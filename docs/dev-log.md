@@ -612,3 +612,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **自测**：真实 Chrome CDP `temp/cdp_v0140_tst5.mjs` **20/20**（默认展开 → 折叠 `display:none` → 恢复；手动记账 0 气泡、Toast 命中、近 7 天 52→53 且能在文本里读到新账；搜索无结果时近 7 天空态、记账后自动清空搜索并恢复列表）；总资产 / 改余额 / 三处按钮几何另有 `cdp_v0140_tst3.mjs` 30/30、`cdp_invest_cash.mjs` 13/13、`cdp_bigger_adjust.mjs` 15/15。`node --check` / `py_compile` 全过，测试账单按唯一备注清理、演示数据零污染。
 - **缓存**：两处 `CACHE_NAME` → `ai-accounting-v0.14.0-tst5`，模板与 manifest 全部 `?v=0.14.0-tst5`，`APP_VERSION_FALLBACK` = `v0.14.0-TST`。
 - **踩坑**：见 `docs/bugs-and-solutions/05~09`——SW 双份版本号不同步、Bootstrap Tooltip 吞 `title`、`[hidden]` 被 `display:flex!important` 压过、动态 DOM 让 `div:last-child` 贴底失效、手动记账误触 AI 气泡。
+
+## v0.14.3.2（邮箱强校验 + 邮件时间戳修复 + 手机号修改实装）
+
+- **邮箱格式强校验**：原先注册/找回密码/设置内重置三处只判空，`4231414@qq.cpm` 这种错后缀会直接打到后端并真实退信。`auth-v012.js` 新增 `EMAIL_TLD_WHITELIST`（com/cn/net/org/edu 等常见后缀）与 `isEmailFormatValid()`（长度上限、单个 `@`、本地段点号规则、逐段 label 校验、TLD 白名单），配 `flagEmailFormat()` 统一 Toast「邮箱格式不正确，请检查拼写」并写行内错误位；`submitGate`/`sendEmailCode`/`sendResetCode`/`resetPassword`/`forgotSendCode`/`forgotSubmit` 六处入口全部前置拦截。注册按钮在滑块解锁前是 `disabled`、点击不派发，所以另外给 `#auth-email`、`#forgot-email`、`#reset-password-email` 挂了 `blur`/`change` 守卫，失焦即拦。
+- **验证码邮件 1970 时间戳**：`_build_verification_email()` 与 `_build_feedback_reply_email()` 只设了 Subject/From/To，缺 `Date` 头，客户端按无头处理回落到 1970-01-01（极易被判垃圾邮件）。两处都补 `msg["Date"] = formatdate(localtime=True)`；实测生成头为 `Wed, 11 Nov 2026 21:34:50 +0800`，真实发信 `delivered: true`。云端另执行 `timedatectl set-ntp true` 校准服务器时钟。
+- **修改手机号（全栈）**：后端 `database.update_user_phone()` + `PHONE_PATTERN`/`_normalize_phone()`（剥 `+86`/`0086`/空格/短横线，空串即解绑），`PUT /api/auth/profile` 从「只改昵称」重写为 nickname/phone 双字段、都没传回 400；前端个人中心「手机」行改为弹磨砂 Modal（`static/v01432.css`，`backdrop-filter: blur(18px) saturate(150%)`，支持解绑、Enter 提交、575.98px 断点收成整行），成功后回写 localStorage 与个人中心打码展示，Toast「手机号更新成功」。
+- **自测**：`py_compile` / `node --check` 全过；接口侧 `12345`→400、`13800138000`→200、`+86 139-0013-9000`→归一化 `13900139000`；CDP `temp/cdp_v01432_test.mjs` **19/19**（`.cpm` 失焦即 Toast 且零请求、合法邮箱可发码、磨砂弹窗与打码回显）；另用 `test@test.com` 真实走登录→改号→`/api/auth/me` 回读，结果一致后已复位号码。
+- **版本 / 缓存**：`APP_VERSION_FALLBACK` = `v0.14.3.2`，两处 `CACHE_NAME` → `ai-accounting-v0.14.3.2`，模板与 manifest 全部 `?v=0.14.3.2`，新样式 `v01432.css` 一并进预缓存。
+- **踩坑**：注册页提交/发码按钮在滑块解锁前 `disabled`，靠按钮 `click` 做拦截永远测不到，必须挂 `blur`；`.cpm` 教训说明「只校验有没有 `@`」等于没校验，白名单才能挡住拼写错的顶级域。
