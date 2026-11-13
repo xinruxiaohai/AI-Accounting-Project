@@ -208,7 +208,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
-    # v0.14.3.1：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
+    # v0.14.3.4：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
     "/api/notices/active_temp",
     # v0.14.2：这个接口要自己给「非管理员」返回 403 + 指定提示语，
     # 不能被 before_request 的通用 401 提前拦掉（未登录也应得到 403）。
@@ -356,7 +356,7 @@ def _register_password_error(password):
     return None
 
 
-# ---------------- v0.14.3.2：手机号规范（个人中心绑定 / 解绑） ----------------
+# ---------------- v0.14.3.4：手机号规范（个人中心绑定 / 解绑） ----------------
 
 PHONE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
 
@@ -423,7 +423,7 @@ def _build_verification_email(email, code, purpose="register"):
     # 发件人显示名走 formataddr，否则中文显示名会被邮件客户端显示成乱码或整串丢弃
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = email
-    # v0.14.3.2：必须显式写 Date 头。缺这行时邮件客户端会按「无时间」处理，
+    # v0.14.3.4：必须显式写 Date 头。缺这行时邮件客户端会按「无时间」处理，
     # 显示成 1970-01-01 07:59:59（UTC 零点），极易被判成垃圾邮件。
     msg["Date"] = formatdate(localtime=True)
     msg.set_content(
@@ -471,7 +471,7 @@ def _build_feedback_reply_email(to_email, ticket_id, content):
     msg["Subject"] = "【%s】您提交的工单 #%s 有了新回复" % (APP_BRAND_NAME, ticket_id)
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = to_email
-    # v0.14.3.2：同验证码邮件，工单回复邮件也必须带 Date 头。
+    # v0.14.3.4：同验证码邮件，工单回复邮件也必须带 Date 头。
     msg["Date"] = formatdate(localtime=True)
     msg.set_content(
         "%s：您提交的工单 #%s 管理员已回复，内容如下：\n\n%s\n\n登录小程序查看完整对话。"
@@ -747,7 +747,7 @@ def auth_reset_password():
 @app.route("/api/auth/profile", methods=["PUT"])
 @login_required
 def auth_update_profile():
-    """改昵称（侧边栏展示用）与手机号（v0.14.3.2 个人中心绑定）。
+    """改昵称（侧边栏展示用）与手机号（v0.14.3.4 个人中心绑定）。
 
     只有请求体里出现的字段才会被写入：没传 nickname 就不动昵称，
     这样前端只传 phone 时不会被顺带改回邮箱前缀。
@@ -3735,7 +3735,7 @@ def publish_notification(notify_id):
     return jsonify(notification)
 
 
-# ---------------- v0.14.3.1：临时滚动通知（全局跑马灯） ----------------
+# ---------------- v0.14.3.4：临时滚动通知（全局跑马灯） ----------------
 #
 # 与上面 notifications 的分工：
 #   notifications = 点开看的公告（草稿/发布/封面/详情），后台第一排；
@@ -4876,7 +4876,7 @@ def admin_problem_logs_create_alias():
 
 @app.route("/api/admin/problem-logs/<int:log_id>", methods=["PUT"])
 def admin_problem_logs_update_alias(log_id):
-    """v0.14.3.1：切换问题日志状态（0 未解决 / 1 已解决）。
+    """v0.14.3.4：切换问题日志状态（0 未解决 / 1 已解决）。
 
     前端传 status: 0|1；也兼容 result: "已解决"/"未解决"/"resolved"/"unresolved"。
     """
@@ -4945,11 +4945,11 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.3.2"
+APP_VERSION_FALLBACK = "v0.14.3.4"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.14.3.1。
+    """返回当前统一版本号 v0.14.3.4。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿

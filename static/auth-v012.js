@@ -7,7 +7,13 @@
 
   var TOKEN_KEY = "ai_accounting_token";
   var USER_KEY = "ai_accounting_user";
-  var PUBLIC_AUTH_PATHS = ["/api/auth/login", "/api/auth/register", "/api/auth/sms-login"];
+  // v0.14.3.4：找回密码三步接口也是免登录的，别把它们的 401 误判成「登录过期」
+  var PUBLIC_AUTH_PATHS = [
+    "/api/auth/login", "/api/auth/register", "/api/auth/sms-login",
+    "/api/auth/send-code", "/api/auth/verify-code", "/api/auth/reset-password"
+  ];
+  // 401 防抖：一次页面会话只弹一次登录遮罩，避免并发请求反复 showGate()
+  var gateShown = false;
 
   var originalFetch = window.fetch ? window.fetch.bind(window) : null;
 
@@ -28,6 +34,8 @@
   }
 
   function saveSession(data) {
+    // 登录成功后复位 401 防抖，之后的过期仍能被正确提示
+    gateShown = false;
     try {
       localStorage.setItem(TOKEN_KEY, data.token || "");
       localStorage.setItem(USER_KEY, JSON.stringify(data.user || {}));
@@ -85,11 +93,16 @@
             .json()
             .then(function (body) {
               if (body && body.code === "auth_required") {
-                showGate();
+                // v0.14.3.4 关键修复：立即清掉过期/失效 token。
+                // 之前只 showGate() 不清 token，导致每个请求都继续带着废 token
+                // 打后端，表现为「频繁 401 + 数据一直加载不出来」。
+                clearSession();
+                if (!gateShown) { gateShown = true; showGate(); }
               }
             })
             .catch(function () {
-              showGate();
+              clearSession();
+              if (!gateShown) { gateShown = true; showGate(); }
             });
         }
           return response;
@@ -1530,6 +1543,40 @@
     }, 320);
   }
 
+  // v0.14.3.4：Bootstrap modal 在 fade 过渡期（_isTransitioning）会静默忽略 hide()，
+  // 导致「PUT 已成功写库但弹窗卡住不关、backdrop 残留」。过渡未完成时等 shown.bs.modal
+  // 再关，并加 400ms 超时兜底，避免 shown 事件未触发也永不关闭。
+  function closePhoneModalSafely(modalEl) {
+    if (!modalEl || !window.bootstrap) {
+      return;
+    }
+    var instance;
+    try {
+      instance = window.bootstrap.Modal.getOrCreateInstance(modalEl);
+    } catch (error) {
+      return;
+    }
+    var done = false;
+    function hide() {
+      if (done) {
+        return;
+      }
+      done = true;
+      modalEl.removeEventListener("shown.bs.modal", hide);
+      try {
+        instance.hide();
+      } catch (error) {
+        /* 关闭失败不能把已成功的保存误报成失败 */
+      }
+    }
+    if (instance._isTransitioning) {
+      modalEl.addEventListener("shown.bs.modal", hide);
+      window.setTimeout(hide, 400);
+    } else {
+      hide();
+    }
+  }
+
   function submitPhone(rawValue, allowEmpty) {
     var raw = rawValue;
     if (raw === undefined) {
@@ -1567,21 +1614,21 @@
           return false;
         }
         var user = result.data.user || {};
+        // v0.14.3.4：展示层更新与 Toast 属于 UI 副作用，任何异常都不能落到下面的
+        // .catch() 被误报成「网络异常，请重试」——此时 PUT 其实已经成功写库。
         try {
           localStorage.setItem(USER_KEY, JSON.stringify(user));
-        } catch (error) {
-          /* 隐私模式下写不进去也不影响本次展示 */
+          fillProfileModal(user);
+          if (typeof toast === "function") {
+            toast(value ? "手机号更新成功" : "手机号已解绑", "success");
+          } else {
+            showFunnyToast(value ? "手机号更新成功" : "手机号已解绑");
+          }
+        } catch (uiError) {
+          console.warn("[submitPhone] 保存成功后的界面刷新异常:", uiError);
         }
-        fillProfileModal(user);
-        var modalEl = phoneNode("phone-modal");
-        if (modalEl) {
-          window.bootstrap.Modal.getOrCreateInstance(modalEl).hide();
-        }
-        if (typeof toast === "function") {
-          toast(value ? "手机号更新成功" : "手机号已解绑", "success");
-        } else {
-          showFunnyToast(value ? "手机号更新成功" : "手机号已解绑");
-        }
+        // 弹窗关闭放在 try 之外：即使展示层异常也要保证弹窗能关掉。
+        closePhoneModalSafely(phoneNode("phone-modal"));
         return true;
       })
       .catch(function () {
@@ -2079,7 +2126,7 @@
           button.textContent = "发送验证码";
           return;
         }
-        setSettingsMessage("reset-password-error", "验证码已发送（Mock 模式：请查看后端控制台）", true);
+        setSettingsMessage("reset-password-error", "验证码已发送至邮箱，请查收", true);
         var seconds = 60;
         button.textContent = seconds + "s 后重发";
         var timer = window.setInterval(function () {
@@ -2238,7 +2285,7 @@
     forgotElement.innerHTML =
       '<div class="auth-forgot-card" role="dialog" aria-modal="true" aria-labelledby="forgot-title">' +
         '<h2 id="forgot-title">找回密码</h2>' +
-        '<p class="auth-forgot-sub">输入注册邮箱，验证码由后端生成（Mock 模式，会打印在后端控制台）。</p>' +
+        '<p class="auth-forgot-sub">输入注册邮箱，我们会把 6 位验证码发送到你的邮箱。</p>' +
         '<label class="auth-label">邮箱' +
           '<input id="forgot-email" class="form-control" type="email" autocomplete="email" placeholder="注册时用的邮箱">' +
         "</label>" +

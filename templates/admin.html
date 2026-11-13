@@ -8,10 +8,10 @@
   <link rel="icon" type="image/png" href="/static/images/logo-main.png">
   <link rel="apple-touch-icon" href="/static/images/logo-main.png">
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
-  <link rel="stylesheet" href="/static/style.css?v=0.14.3.2">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3.2">
-  <!-- v0.14.3.1：顶部临时通知跑马灯 -->
-  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3.2">
+  <link rel="stylesheet" href="/static/style.css?v=0.14.3.4">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.14.3.4">
+  <!-- v0.14.3.4：顶部临时通知跑马灯 -->
+  <link rel="stylesheet" href="/static/v0143.css?v=0.14.3.4">
   <script>
     /* v0.14.2：身份核验完成前先盖住后台内容，避免管理员数据闪现。
        9 秒兜底只解除「隐藏内容」，黑屏门帘仍由 admin-v0142.js 控制，防止脚本加载失败时整页空白。 */
@@ -899,7 +899,7 @@
       font-weight: 600 !important;
       white-space: nowrap !important;
     }
-    /* v0.14.3.1：临时滚动通知（顶部跑马灯）管理面板
+    /* v0.14.3.4：临时滚动通知（顶部跑马灯）管理面板
        外层卡片 + 内层列表双层 overflow-y:auto，条目再多也只在面板里滚，
        不会把「通知发布」这一页撑到超长、也不会顶掉下面的 AI 大脑管理区。 */
     .temp-notice-card {
@@ -986,7 +986,7 @@
   </style>
 </head>
 <body>
-  <!-- v0.14.3.1：全局临时通知跑马灯（后台改完通知，这里也能立刻看到效果） -->
+  <!-- v0.14.3.4：全局临时通知跑马灯（后台改完通知，这里也能立刻看到效果） -->
   <div id="global-marquee" class="global-marquee" role="status" aria-live="polite" hidden>
     <div class="global-marquee-track"></div>
   </div>
@@ -997,7 +997,7 @@
         <p>在这里写通知，前台点顶部信封就能看到；仅在开发期使用。</p>
       </div>
       <div class="admin-head-actions">
-        <span class="admin-version" id="admin-version">v0.14.3.2</span>
+        <span class="admin-version" id="admin-version">v0.14.3.4</span>
         <a class="btn btn-outline-secondary btn-sm" href="/">← 回到记账看板</a>
         <button type="button" class="admin-gear-btn" id="admin-settings-btn"
                 title="访问密码与验证设置" aria-label="访问密码与验证设置">
@@ -1131,7 +1131,7 @@
       </section>
     </div>
 
-    <!-- v0.14.3.1：临时滚动通知（前台所有页面顶部的跑马灯） -->
+    <!-- v0.14.3.4：临时滚动通知（前台所有页面顶部的跑马灯） -->
     <div class="admin-card temp-notice-card" id="temp-notice-card">
       <h2 class="admin-card-title">
         临时滚动通知
@@ -1407,7 +1407,7 @@
           </h2>
         </div>
         <p class="admin-hint mb-3">在工单对话里点「编写问题日志」，UID、时间、工单号会自动带入；点卡片可看完整内容并切换处理状态。</p>
-        <!-- v0.14.3.1：状态筛选（对应 GET /api/admin/problem-logs?status=0|1） -->
+        <!-- v0.14.3.4：状态筛选（对应 GET /api/admin/problem-logs?status=0|1） -->
         <div class="v142-filter-bar" id="v142-log-filter-bar">
           <div class="v142-filter-group">
             <span class="v142-filter-label">状态</span>
@@ -1535,8 +1535,8 @@
 
   <div class="admin-toast" id="admin-toast"></div>
 
-  <script src="/static/auth-v012.js?v=0.14.3.2"></script>
-<script src="/static/access-guard.js?v=0.14.3.2"></script>
+  <script src="/static/auth-v012.js?v=0.14.3.4"></script>
+<script src="/static/access-guard.js?v=0.14.3.4"></script>
   <script src="/static/vendor/bootstrap.bundle.min.js"></script>
   <script>
     (function () {
@@ -2410,7 +2410,7 @@
         }
       });
 
-      /* ---------- v0.14.3.1：临时滚动通知（前台顶部跑马灯） ---------- */
+      /* ---------- v0.14.3.4：临时滚动通知（前台顶部跑马灯） ---------- */
 
       var tempNoticeState = { items: [], editingId: 0, loading: false, defaultContent: "" };
 
@@ -2703,7 +2703,7 @@
         }
         if (name === "user-feedback") {
           if (!userFeedbackState.loaded) { loadUserFeedback(); }
-          // v0.14.3.1：仅停留在该 Tab 时轮询，离开立刻清定时器
+          // v0.14.3.4：仅停留在该 Tab 时轮询，离开立刻清定时器
           startFeedbackPoll();
         } else {
           stopFeedbackPoll();
@@ -3629,7 +3629,7 @@
       var userFeedbackState = { items: [], loaded: false, loading: false };
       var FEEDBACK_CONTACT_LABELS = { qq: "QQ", wechat: "微信", phone: "手机号" };
 
-      /* ---------- v0.14.3.1：用户反馈 Tab 静默轮询（15 秒） ----------
+      /* ---------- v0.14.3.4：用户反馈 Tab 静默轮询（15 秒） ----------
        * 差异触发：新增工单 / 已读工单被用户追加补充后变回未读。
        * 隐藏页面时完全停轮询；切回前台立刻拉一次再恢复定时器。
        */
@@ -3812,7 +3812,7 @@
             userFeedbackState.items = data.feedback || [];
             userFeedbackState.loaded = true;
             renderUserFeedback();
-            // v0.14.3.1：初次/手动刷新也同步标签页未读数
+            // v0.14.3.4：初次/手动刷新也同步标签页未读数
             updateFeedbackTitle(feedbackUnreadCount(userFeedbackState.items));
           })
           .catch(function (error) {
@@ -3870,8 +3870,8 @@
     })();
   </script>
   <!-- v0.14.2：双重门禁 / 工单中心 / 问题日志 / 编号列表搜索 -->
-  <script src="/static/admin-v0142.js?v=0.14.3.2"></script>
-  <!-- v0.14.3.1：全局跑马灯（后台改了临时通知，这里也能立刻看到效果） -->
-  <script src="/static/marquee-v0143.js?v=0.14.3.2" defer></script>
+  <script src="/static/admin-v0142.js?v=0.14.3.4"></script>
+  <!-- v0.14.3.4：全局跑马灯（后台改了临时通知，这里也能立刻看到效果） -->
+  <script src="/static/marquee-v0143.js?v=0.14.3.4" defer></script>
 </body>
 </html>
