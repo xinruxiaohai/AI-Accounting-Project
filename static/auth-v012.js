@@ -1543,9 +1543,10 @@
     }, 320);
   }
 
-  // v0.14.3.4：Bootstrap modal 在 fade 过渡期（_isTransitioning）会静默忽略 hide()，
-  // 导致「PUT 已成功写库但弹窗卡住不关、backdrop 残留」。过渡未完成时等 shown.bs.modal
-  // 再关，并加 400ms 超时兜底，避免 shown 事件未触发也永不关闭。
+  // v0.14.3.4：Bootstrap 会在两种情况下静默忽略 hide()——modal 尚未 _isShown、
+  // 或正处于 fade 过渡期（_isTransitioning）。极快提交时二者都可能命中，
+  // 导致「PUT 已成功写库但弹窗卡住不关、backdrop 残留」。
+  // 因此不能只调一次：轮询重试直到弹窗确实关闭，并在 shown.bs.modal 触发时补一刀。
   function closePhoneModalSafely(modalEl) {
     if (!modalEl || !window.bootstrap) {
       return;
@@ -1556,25 +1557,48 @@
     } catch (error) {
       return;
     }
-    var done = false;
+    var MAX_ATTEMPTS = 20; // 100ms × 20 = 2s 上限
+    var attempts = 0;
+    var stopped = false;
+
     function hide() {
-      if (done) {
-        return;
-      }
-      done = true;
-      modalEl.removeEventListener("shown.bs.modal", hide);
       try {
         instance.hide();
       } catch (error) {
         /* 关闭失败不能把已成功的保存误报成失败 */
       }
     }
-    if (instance._isTransitioning) {
-      modalEl.addEventListener("shown.bs.modal", hide);
-      window.setTimeout(hide, 400);
-    } else {
+    function stop() {
+      stopped = true;
+      modalEl.removeEventListener("shown.bs.modal", onShown);
+      modalEl.removeEventListener("hidden.bs.modal", onHidden);
+    }
+    // 打开动画完成的瞬间补一刀（提交时 modal 可能还没 _isShown）
+    function onShown() {
       hide();
     }
+    // 只有真正触发 hidden 才算关闭成功，才停止轮询
+    function onHidden() {
+      stop();
+    }
+    function tick() {
+      if (stopped) {
+        return;
+      }
+      attempts += 1;
+      // 不能用「当前看起来没显示」当停止条件：提交瞬间 show class 尚未加上、
+      // display 仍是 none，会被误判成已关闭，随后动画完成弹窗就永久卡住。
+      // 固定重试 hide()；Bootstrap 对未显示/过渡期的调用有内部守护，重复无害。
+      hide();
+      if (attempts >= MAX_ATTEMPTS) {
+        stop();
+        return;
+      }
+      window.setTimeout(tick, 100);
+    }
+    modalEl.addEventListener("shown.bs.modal", onShown);
+    modalEl.addEventListener("hidden.bs.modal", onHidden);
+    tick();
   }
 
   function submitPhone(rawValue, allowEmpty) {
