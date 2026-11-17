@@ -164,8 +164,16 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 【置信度规则】
 - 每一次输出都必须带 confidence，任何意图都不能省略。
 - 这只是「模型自评」，用于前端提醒用户核对；不要因为怕错就一律写低分，也不要一律写高分。
-- **必须拉开档位**：金额、分类、时间、对方都从原话明确确定 → 90 以上；只要有一处靠推断 / 默认账户 / 猜测补全 → 70-84；语句含糊、像闲聊、金额缺失或看不懂 → 60 以下；明确听不懂（问句 / 打招呼 / 无金额无意图的编号） → 30 以下。
-- 示例对照：「买奶茶20元」给 95；「那个啥大概几十块吧」给 55；「订单202611170088」「今天天气不错」这类给 20。
+- **必须拉开档位（硬性，不得一律高分）**：
+  - 90-100：金额、类型、时间、对方、账户全部从原话明确读出，没有一个字段靠猜。
+  - 70-84：主体明确，但**至少有一处字段是靠默认值补齐 / 推断的**（用户没提账户→account 填空、没提时间→用当前时间、分类靠推断、金额由"几十块"之类估出来）。
+  - 40-69：语句含糊、金额缺失、看不清对方是谁、多个金额拿不准主笔。
+  - 0-39：明确听不懂（问句 / 打招呼 / 无金额无意图的编号 / 闲聊）。
+- **凡是有字段靠默认值补齐的，confidence 一律 < 80，绝不能给 90+**。
+- 分档示例对照（务必照此给分）：
+  - 「买奶茶20元」→ 95（金额/类型/时间都明确）；「昨天打车30」→ 92。
+  - 「买奶茶」（没说金额，金额靠猜）→ 65；「那个啥大概几十块吧」（含糊+金额估算）→ 55。
+  - 「早上买了个东西」（分类账户全靠推断）→ 60；「订单202611170088」（编号无意图）→ 20；「今天天气不错」（闲聊）→ 20；「你好」（打招呼）→ 20。
 
 【金额提取强约束（历史踩坑最多，务必遵守）】
 - 金额只认「带货币单位」或明显在花钱语境里的数字：数字后面紧跟 元 / 块 / ￥ / ¥，或句子里有「花了、买了、付了、垫付、代买、报销、借、还」等动作时代表钱的那个数。
@@ -195,8 +203,8 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 【record 规则】
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
 - 分类必须是标准分类名（交通/餐饮/购物/居住/工资/其他 等），绝对不要把商户名当分类（「滴滴」「星巴克」是商户，不是分类）。
-- 账户（v0.11.5）：account 优先从 Prompt 末尾的【用户真实账户列表】里选；用户说的是具体子账户（「微信零钱」「支付宝余额」「招行卡尾号1234」）时原样保留，不要向上合并成大类账户；用户说的是账户名的错别字/同音字（「威信」「薇信」）也先原样输出，后端会统一纠正并提示。
-- **只要句子里出现了付款渠道或账户/商户名（微信、支付宝、银行卡、信用卡、储蓄卡、现金、屈臣氏等），account 就必须填该名称，绝不能填空字符串**；只有完全没提到任何渠道时才填空。
+- 账户（v0.11.5）：**account 逐字照抄用户原话里出现的账户/渠道/商户名，一个字都不改、不补、不截**；Prompt 末尾的【用户真实账户列表】只作参考，绝不能为了"对齐列表"而把用户原话改写或截断。用户说的是具体子账户（「微信零钱」「支付宝余额」「招行卡尾号1234」）就整段原样填，不要向上合并成大类账户；错别字/同音字（「威信」「薇信」）也先原样输出，后端会统一纠正。
+- **只要句子里出现了付款渠道或账户/商户名（微信、支付宝、银行卡、信用卡、储蓄卡、现金、屈臣氏等），account 就必须逐字填该名称，绝不能填空字符串**；**反过来，用户完全没提任何账户/渠道/商户时，account 必须填空字符串 ""，绝不能凭空猜一个（不猜默认账户、不猜列表里的名字）**。
 - **子账户整段原样保留**：「微信零钱」就填「微信零钱」，绝不截成「微信」；「支付宝余额」就填「支付宝余额」。品牌+后缀是一个完整账户名。
 - **还款/商户场景也算账户**：「信用卡还款1000」account 填 "信用卡"；「在屈臣氏买洗发水」account 填 "屈臣氏"；「京东下单」填 "京东"。只要原话点名了付款渠道或商户，就填进 account。
 - 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
@@ -209,7 +217,7 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【debt 规则】
 - type：我借给别人 → "lend"；我向别人借 → "borrow"。
-- contact_name 必填，从原句提取人名；姓名必须原样保留、不得删字（如「借给小王20元」→ "小王"）。
+- contact_name 必填，**逐字照抄原句里的人名（连同前面的身份/称呼一起抄），不得删字、改字、补字**；【用户已有联系人】列表只作参考，绝不能为对齐列表而把原话人名截断或改写（「借给小王20元」→ "小王"，不擅自补成"同事小王"；「借给同事小王」→ "同事小王"，不截成"小王"）。
 - **人名连同身份前缀整段保留**：「借给同事小王20元」→ contact_name 是 "同事小王"（不是"小王"）；「借给大学室友阿杰」→ "大学室友阿杰"；「转房租给房东李姐」→ "房东李姐"。姓名前的称呼/身份是名字的一部分，绝不截掉。
 - identity/phone/wechat/name 留空；is_reimbursable 填 false。
 - account 是资金账户，没提填 ""（后端用默认账户）；date 规则同记账。
@@ -255,7 +263,7 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 
 用户：今天天气不错
-输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+输出：{{"action": "unknown", "amount": 0, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 20}}
 
 用户：买入1000元易方达蓝筹
 输出：{{"action": "invest_buy", "amount": 1000, "type": "", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买入易方达蓝筹", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "易方达蓝筹", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 90}}
@@ -269,11 +277,23 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 用户：微信零钱付款30元
 输出：{{"action": "record", "amount": 30, "type": "expense", "category": "其他", "account": "微信零钱", "to_account": "", "fee": 0, "date": "{now}", "note": "微信零钱付款", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
+用户：支付宝余额付款50
+输出：{{"action": "record", "amount": 50, "type": "expense", "category": "其他", "account": "支付宝余额", "to_account": "", "fee": 0, "date": "{now}", "note": "支付宝余额付款", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
+用户：在屈臣氏买洗发水60元
+输出：{{"action": "record", "amount": 60, "type": "expense", "category": "购物", "account": "屈臣氏", "to_account": "", "fee": 0, "date": "{now}", "note": "屈臣氏买洗发水", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
 用户：借给同事小王20元
 输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给同事小王20元", "is_reimbursable": false, "contact_name": "同事小王", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 
 用户：这个是账单类型是转账，对象是叶宇斌，金额为2元，时间是2026.11.17 18点30分
 输出：{{"action": "record", "amount": 2, "type": "transfer", "category": "", "account": "", "to_account": "叶宇斌", "fee": 0, "date": "2026-11-17 18:30", "note": "转账给叶宇斌", "is_reimbursable": false, "contact_name": "叶宇斌", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 92}}
+
+用户：买奶茶（没说金额、没说账户）
+输出：{{"action": "record", "amount": 20, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "买奶茶", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 65}}
+
+用户：用支付宝余额买菜花了30
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "购物", "account": "支付宝余额", "to_account": "", "fee": 0, "date": "{now}", "note": "买菜", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
 """
 
 
@@ -550,6 +570,17 @@ def _match_contact(name: Any, contacts: Optional[list[str]]) -> tuple[str, bool]
     similar = _closest_name(raw, contacts, CONTACT_FUZZY_CUTOFF)
     if similar and _compact_name(similar) != compact:
         return similar, True
+    # v0.15.2：包含关系兜底——用户常只说名字核心（「小王」）而库里存了全称（「同事小王」），
+    # difflib 相似度 < 0.8 匹配不上。这里只在「一方是另一方子串且长度差 <= 3」时认定为同一人，
+    # 归一到库里的全称；不解全局阈值（那会把「小王/晓王」误配）。若多个候选都包含，取最短的那个避免误配。
+    contain_hits = [
+        original for cand, original in exact.items()
+        if cand and compact and (cand in compact or compact in cand) and abs(len(cand) - len(compact)) <= 3
+    ]
+    if contain_hits:
+        chosen = min(contain_hits, key=len)
+        if chosen != raw:
+            return chosen, True
     return raw, False
 
 
@@ -794,14 +825,17 @@ def _normalize_date(value: Any, now: datetime) -> str:
     return now.strftime("%Y-%m-%d %H:%M")
 
 
-def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
+def _normalize_record(payload: dict[str, Any], now: datetime, allow_zero_amount: bool = False) -> dict[str, Any]:
     record_type = _as_text(payload.get("type")).lower()
     if record_type not in RECORD_TYPES:
         record_type = "expense"
 
     amount = _as_amount(payload.get("amount"), "amount")
-    if amount <= 0:
-        raise AIServiceError("金额必须大于 0，模型给的是 %r" % payload.get("amount"))
+    if amount <= 0 and not allow_zero_amount:
+        # v0.15.2：绝不猜金额——没有金额就不造数，也不抛裸异常让接口 502。
+        # 抛出带 NEED_AMOUNT 标记的异常，由 _normalize_intent 兜底成合法 need_confirm JSON。
+        raise AIServiceError("NEED_AMOUNT:没识别到金额，请补充金额后再记账")
+    # 多轮补改 allow_zero_amount=True 时保留 0，由后端 _apply_ai_correction 继承原值，不猜数。
 
     fee = _as_amount(payload.get("fee", 0), "fee")
     to_account = _as_text(payload.get("to_account"))
@@ -1065,6 +1099,7 @@ def _normalize_intent(
     accounts: Optional[list[str]] = None,
     contacts: Optional[list[str]] = None,
     invest_accounts: Optional[list[str]] = None,
+    is_revision: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise AIServiceError("模型返回的不是 JSON 对象")
@@ -1094,7 +1129,9 @@ def _normalize_intent(
     # 同时 confidence 落低位可正常触发前端黄牌提醒用户核对。
     # 注意：这里只动 AI 解析层，不碰任何写库 / 余额 / 平账逻辑。
     try:
-        result = _normalize_record(payload, now) if action == "record" else None
+        # v0.15.2：多轮补改时模型常把 amount 留空表示"沿用原值"，后端 _apply_ai_correction
+        # 本就会继承；此时 amount<=0 不触发 NEED_AMOUNT，保留 0 交给后端继承，绝不猜数。
+        result = _normalize_record(payload, now, allow_zero_amount=(is_revision and action == "record")) if action == "record" else None
         if action == "debt":
             result = _normalize_debt(payload, now)
         elif action == "add_contact":
@@ -1102,12 +1139,25 @@ def _normalize_intent(
         elif action == "invest_buy":
             result = _normalize_invest(payload, now, accounts, invest_accounts)
     except AIServiceError as exc:
+        reason = str(exc)
+        # v0.15.2：没有金额是「需用户补充」而非「无法理解」，返回 need_confirm 让前端提示补金额；
+        # 仍是 unknown action（不写库、不猜金额、绝不 502），但 note 给出可操作的中文提示。
+        if reason.startswith("NEED_AMOUNT:"):
+            return {
+                "action": "unknown",
+                "confidence": min(confidence, 30),
+                "auto_corrected": [],
+                "auto_corrected_msg": "",
+                "status": "need_confirm",
+                "note": reason.split(":", 1)[1],
+                "degraded_reason": reason,
+            }
         return {
             "action": "unknown",
             "confidence": min(confidence, 40),
             "auto_corrected": [],
             "auto_corrected_msg": "",
-            "degraded_reason": str(exc),
+            "degraded_reason": reason,
         }
 
     corrections = _apply_fuzzy_names(result, action, accounts, contacts)
@@ -1164,7 +1214,10 @@ def _chat(
     except json.JSONDecodeError as error:
         raise AIServiceError("模型返回的不是合法 JSON：%s" % error)
 
-    return _normalize_intent(payload, now, accounts, contacts, invest_accounts)
+    return _normalize_intent(
+        payload, now, accounts, contacts, invest_accounts,
+        is_revision=previous_record is not None,
+    )
 
 
 def parse_intent(
