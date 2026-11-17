@@ -53,6 +53,27 @@ IMAGE_WARN_BYTES = 5 * 1024 * 1024
 IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_MIME_FALLBACK = "image/jpeg"
 
+# v0.15.2 分类闭集：取不到用户真实分类时的兜底清单（与 database.CATEGORY_SEEDS 一级分类一致）。
+# 正常路径走 _vision_category_names()，按当前登录用户的 categories 表动态生成，
+# 否则自造分类（学杂费/体检服务费…）会凭空在库里建出用户没见过的分类。
+VISION_CATEGORY_FALLBACK = (
+    "餐饮",
+    "交通",
+    "购物",
+    "娱乐",
+    "居住",
+    "医疗",
+    "人情",
+    "其他",
+    "工资薪酬",
+    "兼职外快",
+    "投资理财",
+    "退款/报销",
+    "红包/礼金",
+    "其他收入",
+    "转账",
+)
+
 # v0.13.3：新增 invest_buy（买入 / 加仓投资标的）。
 # F10 警告：忘记把新 action 加进这里，模型再准也会被 _normalize_intent 打成 unknown。
 ACTIONS = ("record", "debt", "add_contact", "invest_buy", "unknown")
@@ -303,11 +324,13 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
-- 字段键名固定为下面 15 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
+- 字段键名固定为下面 16 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
   action          字符串，只能是 "record"（记账）、"debt"（借贷）、"unknown"（不是账单/看不清）
   amount          数字，本笔交易金额，必须大于 0，不带货币符号
   type            只能是 "expense"（支出）、"income"（收入/退款）、"transfer"（账户转账）；action="debt" 时只能是 "lend"（借出）或 "borrow"（借入），绝不能是 income/expense/transfer
-  category        字符串，标准分类名；action="record" 时**必须非空**，无法归类时必须填 "其他"，绝不能输出空字符串 ""
+  category        字符串，**只能从下面给定的分类清单里选一个**；action="record" 时**必须非空**，清单里没有匹配的才填 "其他"，绝不能输出空字符串 ""，也绝不能自造清单外的新分类
+  trade_no        字符串，交易单号：微信「交易单号」（28 位数字）、支付宝「订单号」、财付通/电商「商户单号」；只抄单据上那一串原始字符，没有就填 ""。**绝不把金额、时间、卡号、手机号、条形码当单号**
+                  抄写规范（重要，28 位数字最容易漏位）：请**每 4 位一组、用空格分隔**输出，例如 4500 0003 9720 2611 1532 9619 8063；后端会自动去掉空格。抄完自己数一遍：交易单号应为 28 位（约 7 组），少一位就重抄
   account         字符串，付款账户名，截图能看出来才填，否则 ""
   to_account      字符串，转账时填收款方（人名就填人名）；必须是截图里真实出现的文字，不得编造
   fee             数字，手续费，没有填 0
@@ -333,7 +356,19 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 - **人名忠实原图、逐字照抄**：「转账-转给妈呀!」→ "妈呀"（不能是"妈"/"妈妈"）；「转给叶宇彬」→ "叶宇彬"（不能改成同音字"叶宇斌"）。不得改字、不得吞字、不得截成姓或名。
 - 「支付/付款/消费/商户扣款/买了」→ expense；「收款/退款/红包/工资到账」→ income（金额填正数）。
 - **聊天截图判定**：截图主体是对话气泡、内容是「借钱/还钱/欠钱」且能看到金额 → action="debt"，type 只能填 "lend"（借出）或 "borrow"（借入），**绝不能填 income/expense/transfer**；看不出借入还是借出的按 "lend"，对方名字原样填 contact_name。若只是闲聊、没有明确金额 → action="unknown"。
-- 分类映射：拼多多/淘宝/淘宝平台商户/天猫/京东/超市/便利店/全家/屈臣氏/日用品 → 购物；益禾堂/奶茶/咖啡/外卖/餐厅/堂食/餐饮 → 餐饮；滴滴/地铁/公交/加油 → 交通；房租/水电/话费 → 居住；学校/教育 → 其他；**任何 action="record" 的截图 category 都必须非空，判断不了就填 "其他"，绝不留空**。
+- **分类闭集（v0.15.2）**：category 只能从下面这份「本用户真实分类清单」里逐字选一个：
+  __CATEGORY_LIST__
+  规则：清单里有语义匹配的就选它；**没有匹配的一律填 "其他"**；**严禁自造清单外的分类名**（如「学杂费」「体检服务费」这类看着更准但不在清单里的词，一律是错的）。
+  **「其他」是最后一档，不是默认档**：只要商户/商品能对上下面任何一条对照，「其他」就是错答案。宁可归到稍微笼统的一级分类，也不要一律落「其他」。
+- 常见商户→分类对照（只用来在清单内择优，清单里没这一项就落 "其他"）：
+  拼多多/淘宝/淘宝平台商户/天猫/京东/超市/便利店/小卖部/全家/屈臣氏/日用品/商场 → 购物；
+  益禾堂/奶茶/咖啡/外卖/餐厅/堂食/食堂/饭店 → 餐饮；
+  滴滴/地铁/公交/打车/出租车/加油/停车/高速 → 交通；
+  房租/水电/燃气/话费/物业 → 居住；
+  学费/学杂费/培训/驾校/报名费 → 教育（清单里有「教育」就选教育，没有就选 "其他"）；
+  体检/挂号/门诊/药品/医院 → 医疗；
+  红包/随礼/请客 → 人情；工资/薪水 → 工资薪酬；基金/黄金/股票/理财买入 → 投资理财；退款/报销到账 → 退款/报销。
+- **任何 action="record" 的截图 category 都必须非空，判断不了就填 "其他"，绝不留空**。
 - account：付款方式按截图原文完整填写，如「零钱通」「微信零钱」「支付宝余额」「亲属卡(君利洗窗帘～张海军)」「招商银行储蓄卡」，不得向上合并成「微信」「支付宝」或截断后缀。
 - 收款方/商户名填 to_account 时只填名字本身，不要填收单机构（如「财付通支付科技有限公司」不是收款方）。
 
@@ -343,23 +378,32 @@ VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户�
 - 只有日期填 00:00；完全没有时间用当前时间 __NOW__（今天 __TODAY__）。
 
 【示例】
-截图内容：支付成功 / 麦当劳 / 实付 ¥30.00 / 2026-10-28 12:31
-输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+截图内容：支付成功 / 麦当劳 / 实付 ¥30.00 / 2026-10-28 12:31 / 交易单号 42000003226202610285412345678
+输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "trade_no": "42000003226202610285412345678", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
 
-截图内容：拼多多 / −11.93 / 支付时间 2026年11月15日 00:49:04 / 商户单号 XP2026111500101405551683001730 / 支付方式 亲属卡(君利洗窗帘～张海军)
-输出：{"action": "record", "amount": 11.93, "type": "expense", "category": "购物", "account": "亲属卡(君利洗窗帘～张海军)", "to_account": "拼多多", "fee": 0, "date": "2026-11-15 00:49", "note": "拼多多", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+截图内容：拼多多 / −11.93 / 支付时间 2026年11月15日 00:49:04 / 交易单号 4500000397202611153296198063 / 商户单号 XP2026111500101405551683001730 / 支付方式 亲属卡(君利洗窗帘～张海军)
+输出：{"action": "record", "amount": 11.93, "type": "expense", "category": "购物", "trade_no": "4500000397202611153296198063", "account": "亲属卡(君利洗窗帘～张海军)", "to_account": "拼多多", "fee": 0, "date": "2026-11-15 00:49", "note": "拼多多", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+（同一页既有「交易单号」又有「商户单号」时，抄交易单号 4500…，不要抄商户单号 XP…）
 
 截图内容：淘宝平台商户 / −7.11 / 支付时间 2026年11月12日 23:08:08 / 交易单号 4500000397202611123711908057 / 商户单号 11230600726111249776230604367
-输出：{"action": "record", "amount": 7.11, "type": "expense", "category": "购物", "account": "", "to_account": "淘宝平台商户", "fee": 0, "date": "2026-11-12 23:08", "note": "淘宝平台商户", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+输出：{"action": "record", "amount": 7.11, "type": "expense", "category": "购物", "trade_no": "4500000397202611123711908057", "account": "", "to_account": "淘宝平台商户", "fee": 0, "date": "2026-11-12 23:08", "note": "淘宝平台商户", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
 
 截图内容：转账-转给妈呀! / −1500.00 / 当前状态 对方已收钱 / 转账说明 微信转账 / 转账时间 2026年11月13日 11:55:19 / 收款时间 2026年11月13日 12:19:20 / 支付方式 零钱通 / 转账单号 1000050001202611130234926904387
-输出：{"action": "record", "amount": 1500, "type": "transfer", "category": "其他", "account": "零钱通", "to_account": "妈呀", "fee": 0, "date": "2026-11-13 11:55", "note": "转账给妈呀", "is_reimbursable": false, "contact_name": "妈呀", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
+输出：{"action": "record", "amount": 1500, "type": "transfer", "category": "其他", "trade_no": "1000050001202611130234926904387", "account": "零钱通", "to_account": "妈呀", "fee": 0, "date": "2026-11-13 11:55", "note": "转账给妈呀", "is_reimbursable": false, "contact_name": "妈呀", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
 
-截图内容：转账 / 转账-转给叶宇彬 / ¥2.00 / 转账时间 2026年11月17日 18:30 / 收款时间 18:46
-输出：{"action": "record", "amount": 2, "type": "transfer", "category": "其他", "account": "", "to_account": "叶宇彬", "fee": 0, "date": "2026-11-17 18:30", "note": "转账给叶宇彬", "is_reimbursable": false, "contact_name": "叶宇彬", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
+截图内容：转账 / 转账-转给叶宇彬 / ¥2.00 / 转账时间 2026年11月17日 18:30 / 收款时间 18:46 / 转账单号 1000050001202611170036201778467
+输出：{"action": "record", "amount": 2, "type": "transfer", "category": "其他", "trade_no": "1000050001202611170036201778467", "account": "", "to_account": "叶宇彬", "fee": 0, "date": "2026-11-17 18:30", "note": "转账给叶宇彬", "is_reimbursable": false, "contact_name": "叶宇彬", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
+
+截图内容：东莞市机动车驾驶培训行业协会 / −1500.00 / 支付时间 2026年11月13日 11:48:36 / 商品 学费监管费 / 交易单号 4500000515202611137910899380
+输出：{"action": "record", "amount": 1500, "type": "expense", "category": "其他", "trade_no": "4500000515202611137910899380", "account": "银联商务支付股份有限公司", "to_account": "东莞市机动车驾驶培训行业协会", "fee": 0, "date": "2026-11-13 11:48", "note": "学费监管费", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 90}
+（清单里没有「教育」就填「其他」；绝不能自造「学杂费」这种清单外分类。若清单里有「教育」，这里应写 "教育"）
+
+截图内容：银行短信「【中国移动】您尾号5284的储蓄卡11月09日16:48消费人民币9.97元，余额xxx」（短信里没有交易单号）
+输出：{"action": "record", "amount": 9.97, "type": "expense", "category": "其他", "trade_no": "", "account": "6212****5284", "to_account": "中国移动集团", "fee": 0, "date": "2026-11-09 16:48", "note": "中国移动 话费", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 80}
+（没有单号就填 ""，绝不编造；卡号、手机号、时间都不能当单号）
 
 截图内容：聊天对话 / "上次借你的200记得还我" / 2026-11-15
-输出：{"action": "debt", "amount": 200, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "2026-11-15 00:00", "note": "借出200", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 70}
+输出：{"action": "debt", "amount": 200, "type": "lend", "category": "", "trade_no": "", "account": "", "to_account": "", "fee": 0, "date": "2026-11-15 00:00", "note": "借出200", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 70}
 
 截图内容：一张猫的照片
 输出：{"action": "unknown", "confidence": 10}
@@ -793,6 +837,26 @@ def _as_confidence(value: Any, default: int = 80) -> int:
     return max(0, min(100, number))
 
 
+_TRADE_NO_STRIP_RE = re.compile(r"[^0-9A-Za-z]")
+
+
+def _normalize_trade_no(value: Any) -> str:
+    """交易单号归一化（v0.15.2）：只留字母数字，8~64 位才认，否则视为「没有单号」。
+
+    两道闸门是为了挡住模型把别的东西当单号：
+    - 长度 < 8 一律丢：金额（11.93）、日期片段（20261115 有 8 位但下面还有一道）、短卡号后缀；
+    - 必须含数字：纯字母串当不了任何一家平台的单号。
+    归一化后与 database.find_record_by_trade_no 的口径一致（只剔空白 → 只留字母数字），
+    这样同一个单号只要 OCR 出空格/换行差异，仍然能命中同一条记录。
+    """
+    text = _TRADE_NO_STRIP_RE.sub("", str(value or ""))
+    if not (8 <= len(text) <= 64):
+        return ""
+    if not any(ch.isdigit() for ch in text):
+        return ""
+    return text
+
+
 # 标准分类的兜底：先按 AI 给的分类名精确映射，再按「包含关系」取最长命中的键，
 # 这样「滴滴出行-快车」「星巴克咖啡」也能落到交通/餐饮，不会在库里长出商户分类。
 def _normalize_category(value: Any) -> str:
@@ -863,6 +927,11 @@ def _normalize_record(payload: dict[str, Any], now: datetime, allow_zero_amount:
     }
     if degraded_reason:
         result["degraded_reason"] = degraded_reason
+    # v0.15.2：交易单号透传（只有真识别到才带这个键，文本记账的返回结构不受影响）。
+    # records.trade_no 由 app.py 建账后写入，去重 L2 优先用它；没有单号时 L2 回落三元组。
+    trade_no = _normalize_trade_no(payload.get("trade_no"))
+    if trade_no:
+        result["trade_no"] = trade_no
     return result
 
 
@@ -1272,6 +1341,95 @@ def _split_data_url(image: str) -> tuple[str, str]:
     return data.strip(), mime
 
 
+def _vision_category_names() -> list[str]:
+    """取「当前用户」真实一级分类名（与 GET /api/categories 同源），失败回落内置标准集。
+
+    只在视觉识别拼分类闭集时调用：
+    - 延迟 import database，避免 ai_service ↔ database 形成模块级循环依赖；
+    - 任何异常都吞掉并回落到 VISION_CATEGORY_FALLBACK —— 取不到分类不该让整张图识别失败；
+    - 只取一级分类：二级分类（三餐/外卖/日用品…）是「记账时可选更细」，让模型直接输出
+      二级名会绕开 ensure_category 的父子关系，反而长出重复分类。
+    """
+    try:
+        import database  # noqa: PLC0415 - 延迟导入，见 docstring
+
+        tree = database.list_categories_tree()
+    except Exception:  # noqa: BLE001 - 取不到就用兜底清单
+        return list(VISION_CATEGORY_FALLBACK)
+    names: list[str] = []
+    seen: set[str] = set()
+    for node in tree or []:
+        name = str(node.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names or list(VISION_CATEGORY_FALLBACK)
+
+
+def _category_line(names: list[str]) -> str:
+    """把分类清单渲染成「餐饮」「交通」… 的提示词片段（引号让模型当字面量抄）。"""
+    return "、".join("「%s」" % name for name in names)
+
+
+# v0.15.2 分类闭集的「执行层」：光靠提示词约束，glm-4v-flash 仍会两种错——
+# ① 自造清单外的词（学杂费/体检服务费）；② 过度保守一律落「其他」（淘宝/红包都归其他）。
+# 这里在归一化之后按商户关键词做一次确定性收敛，保证「分类一定在用户字典里，且能对上就别落其他」。
+# 只用一级分类关键词，且目标分类必须真在用户字典里，否则继续往下落。
+_VISION_CATEGORY_KEYWORDS = (
+    (("淘宝", "天猫", "拼多多", "京东", "超市", "便利店", "小卖部", "商场", "屈臣氏",
+      "日用品", "网购", "旗舰店", "专卖店"), "购物"),
+    (("食堂", "餐饮", "饭店", "餐厅", "奶茶", "咖啡", "外卖", "益禾堂", "麦当劳",
+      "肯德基", "烧烤", "火锅", "面馆", "小吃"), "餐饮"),
+    (("地铁", "公交", "打车", "出租车", "滴滴", "加油", "停车", "高速", "火车",
+      "机票", "车费"), "交通"),
+    (("房租", "物业", "水电", "燃气", "话费", "宽带", "移动", "联通", "电信"), "居住"),
+    (("医院", "体检", "挂号", "门诊", "药品", "药房", "诊所"), "医疗"),
+    (("学费", "学杂", "培训", "驾校", "报名费", "考试"), "教育"),
+    (("红包", "随礼", "礼金", "份子"), "人情"),
+    (("退款", "退货", "报销"), "退款/报销"),
+    (("基金", "黄金", "股票", "理财", "余额宝", "定投", "买入"), "投资理财"),
+    (("工资", "薪水", "薪资", "奖金"), "工资薪酬"),
+    (("提现", "签到", "转入", "返现", "奖励", "利息"), "其他收入"),
+)
+
+# 收入方向优先落这几个（收入账目用购物/餐饮去归类没有意义）
+_VISION_INCOME_PREFERENCE = ("其他收入", "红包/礼金", "退款/报销", "工资薪酬", "投资理财", "其他")
+
+
+def _clamp_vision_category(category, blob: str, allowed: list[str], record_type: str) -> str:
+    """把视觉模型给的分类卡进「本用户真实分类」闭集（只用于截图识别，不碰文本记账）。
+
+    顺序：模型给的词本身在字典里 → 原样保留；否则按关键词收敛；再不行才落「其他」。
+    收入账目单独一套兜底顺序，避免「现金红包」被商户关键词拉去「购物」。
+    """
+    allowed_set = {str(name) for name in allowed}
+    name = str(category or "").strip()
+    # 「其他」是兜底档、不是合法答案里的最优解：模型经常偷懒一律给「其他」，
+    # 所以「其他」也要继续往下走关键词，能升级到具体分类就升级。
+    if name and name in allowed_set and name != "其他":
+        return name
+
+    text = str(blob or "")
+    if record_type == "income":
+        for keywords, target in _VISION_CATEGORY_KEYWORDS:
+            if target not in allowed_set or not any(key in text for key in keywords):
+                continue
+            # 收入只接受「收入语义」的分类（退款/红包/工资/理财/其他收入）
+            if target in ("退款/报销", "红包/礼金", "工资薪酬", "投资理财", "其他收入"):
+                return target
+        for target in _VISION_INCOME_PREFERENCE:
+            if target in allowed_set:
+                return target
+        return "其他" if "其他" in allowed_set else name
+
+    for keywords, target in _VISION_CATEGORY_KEYWORDS:
+        if target in allowed_set and any(key in text for key in keywords):
+            return target
+    if "其他" in allowed_set:
+        return "其他"
+    return name
+
+
 def _build_vision_messages(
     image_base64: str,
     mime: str,
@@ -1284,6 +1442,8 @@ def _build_vision_messages(
     prompt = VISION_PROMPT.replace(
         "__TODAY__", now.strftime("%Y-%m-%d")
     ).replace("__NOW__", now.strftime("%Y-%m-%d %H:%M"))
+    # v0.15.2：分类闭集按当前用户的真实分类动态注入（每张图一次查询，开销可忽略）
+    prompt = prompt.replace("__CATEGORY_LIST__", _category_line(_vision_category_names()))
     prompt += _accounts_block(accounts, contacts) + _memory_block(memories)
     return [
         {
@@ -1371,7 +1531,23 @@ def parse_image(
     payload = _parse_vision_json(content)
 
     # 复用文本版的归一化：金额校验、日期换算、报销字段、账户模糊匹配都走同一套规则
-    return _normalize_intent(payload, moment, accounts, contacts)
+    result = _normalize_intent(payload, moment, accounts, contacts)
+
+    # v0.15.2 分类闭集执行层（仅截图识别）：把 category 收敛到本用户真实分类名。
+    # 提示词负责「让模型别说错」，这里负责「说错了也不落库成新分类」——两者缺一不可：
+    # 实测只靠提示词仍有 淘宝/红包 落「其他」、体检服务费自造词 两类问题。
+    if result.get("action") == "record" and result.get("type") in ("expense", "income"):
+        blob = " ".join(
+            str(result.get(key) or "")
+            for key in ("note", "to_account", "category", "account")
+        )
+        result["category"] = _clamp_vision_category(
+            result.get("category"),
+            blob,
+            _vision_category_names(),
+            result.get("type") or "expense",
+        )
+    return result
 
 
 def generate_notification(
