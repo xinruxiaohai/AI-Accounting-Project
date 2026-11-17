@@ -1,0 +1,301 @@
+/* ============================================================
+   BIZ-V0151 · 业务专项覆盖层（月度结账 / 周期模板 / 报销进阶）
+   ------------------------------------------------------------
+   加载顺序：style.css → F 主题层 → 本文件（同权重靠末尾覆盖）。
+   语义色走 CSS 变量（var(--color-expense/income)），随六套主题自动换色；
+   不碰 .fab 定位 / 16px 防缩放 / 真机安全区 / 任何账务逻辑。
+   ============================================================ */
+
+.biz-v0151 {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.biz-panel .panel-head {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* ---------- ① 月度结账单卡 ---------- */
+.biz-month-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.biz-month-input {
+  width: 148px;
+  max-width: 42vw;
+}
+
+.biz-month-body {
+  padding: 12px 2px 2px;
+}
+
+.biz-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.biz-sum-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.biz-sum-cell > span {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.biz-sum-cell > strong {
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+}
+
+.biz-subtitle {
+  margin: 16px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.biz-cat-row {
+  margin-bottom: 10px;
+}
+
+.biz-cat-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.biz-cat-amt {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.biz-cat-track,
+.biz-reimb-track {
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 99px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.biz-cat-bar {
+  height: 100%;
+  border-radius: 99px;
+  background: var(--brand-blue);
+}
+
+.biz-months-hint {
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+/* ---------- ② 周期账单模板 ---------- */
+.biz-tpl-form {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.biz-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.biz-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.biz-form-wide {
+  grid-column: 1 / -1;
+}
+
+.biz-form-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.biz-tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.biz-tpl-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.biz-tpl-item.is-off {
+  opacity: 0.62;
+}
+
+.biz-tpl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.biz-tpl-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.biz-tpl-meta,
+.biz-tpl-note {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.biz-tpl-active {
+  color: var(--color-income);
+}
+
+.biz-tpl-off {
+  color: var(--text-dim);
+}
+
+.biz-tpl-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* ---------- ③ 报销进阶 ---------- */
+.biz-reimb-filter {
+  width: auto;
+  min-width: 116px;
+  max-width: 40vw;
+}
+
+.biz-reimb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+.biz-reimb-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.biz-reimb-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.biz-reimb-tag {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 99px;
+}
+
+.biz-reimb-tag.biz-pending,
+.biz-reimb-bar.biz-pending {
+  color: var(--color-expense);
+  background: var(--color-expense-soft);
+}
+
+.biz-reimb-tag.biz-partial,
+.biz-reimb-bar.biz-partial {
+  color: var(--warm-accent, #b45309);
+  background: var(--warm-accent-soft, rgba(180, 83, 9, 0.14));
+}
+
+.biz-reimb-tag.biz-done,
+.biz-reimb-bar.biz-done {
+  color: var(--color-income);
+  background: var(--color-income-soft);
+}
+
+.biz-reimb-bar {
+  height: 100%;
+  border-radius: 99px;
+}
+
+.biz-reimb-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.biz-reimb-nums {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .biz-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .biz-form-grid { grid-template-columns: 1fr; }
+  .biz-tpl-item { flex-direction: column; align-items: stretch; }
+  .biz-tpl-actions { justify-content: flex-start; }
+  .biz-reimb-filter { min-width: 0; flex: 1 1 40%; }
+}
+
+
+/* ============================================================
+ * v0.15.2 追加：分类占比条语义配色 + 报销空态收紧
+ * 说明：原实现用 linear-gradient(var(--brand-blue), var(--warm-accent))，
+ *       --warm-accent 在当前主题是棕/橙，导致同一图里蓝棕橙混排、无语义。
+ * 现改为：支出统一主色系——按序号取不同深浅（非按分类名哈希），收入单独一色。
+ * ============================================================ */
+.biz-cats .biz-cat-row:nth-child(6n+2) .biz-cat-bar { background: var(--brand-blue) !important; }
+.biz-cats .biz-cat-row:nth-child(6n+3) .biz-cat-bar { background: color-mix(in srgb, var(--brand-blue), #0b1220 18%) !important; }
+.biz-cats .biz-cat-row:nth-child(6n+4) .biz-cat-bar { background: color-mix(in srgb, var(--brand-blue), #0b1220 34%) !important; }
+.biz-cats .biz-cat-row:nth-child(6n+5) .biz-cat-bar { background: color-mix(in srgb, var(--brand-blue), #ffffff 24%) !important; }
+.biz-cats .biz-cat-row:nth-child(6n+6) .biz-cat-bar { background: color-mix(in srgb, var(--brand-blue), #ffffff 40%) !important; }
+.biz-cats .biz-cat-row:nth-child(6n+7) .biz-cat-bar { background: color-mix(in srgb, var(--brand-blue), #ffffff 56%) !important; }
+/* 收入分类（若出现）单独一色，与支出一眼区分 */
+.biz-cats .biz-cat-row.is-income .biz-cat-bar { background: var(--color-income) !important; }
+
+/* 报销进度空态：收紧行高，不再占满整块 */
+.biz-reimb-list { padding-top: 6px !important; }
+.biz-reimb-list .feed-empty { padding: 14px 12px !important; margin: 0 !important; line-height: 1.45 !important; }

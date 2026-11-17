@@ -7957,6 +7957,461 @@ def apply_holding_quotes(account_name, price_map, user_id=None):
             return updated, skipped, None
     finally:
         conn.close()
+
+
+# ==================== BIZ-V0151 业务专项（G）：月度结账 / 周期模板 / 报销进阶 ====================
+# 边界：本段由 Agent G 追加，全部 SQL 带 user_id，不改任何既有表结构。
+# 复用 get_statistics / _RECORD_SELECT / reimburse_record 的口径，绝不另起一套财务规则。
+
+
+def monthly_settlement(month, user_id=None):
+    """月度结账单卡：按月汇总收支、分类支出占比、可翻月的月份列表。
+
+    口径与 get_statistics 完全一致：只算 type in ('income','expense')、
+    deleted_at IS NULL、按 user_id 过滤；transfer 不计收支。
+    month 形如 'YYYY-MM'，非法输入返回 None（路由层转 400）。
+    """
+    uid = _resolve_user_id(user_id)
+    if not isinstance(month, str) or not re.match(r"^\d{4}-\d{2}$", month):
+        return None
+    year, mon = int(month[:4]), int(month[5:7])
+    if not (1 <= mon <= 12):
+        return None
+    if year < 1970 or year > 2999:
+        return None
+    start = "%04d-%02d-01 00:00" % (year, mon)
+    if mon == 12:
+        end = "%04d-01-01 00:00" % (year + 1)
+    else:
+        end = "%04d-%02d-01 00:00" % (year, mon + 1)
+
+    conn = get_conn()
+    try:
+        total = conn.execute(
+            "SELECT "
+            "  COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) AS income, "
+            "  COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END),0) AS expense, "
+            "  SUM(CASE WHEN type IN ('income','expense') THEN 1 ELSE 0 END) AS cnt "
+            "FROM records WHERE user_id = ? AND deleted_at IS NULL "
+            "  AND type IN ('income','expense') AND date >= ? AND date < ?",
+            (uid, start, end),
+        ).fetchone()
+        cat_rows = conn.execute(
+            "SELECT COALESCE(category,'未分类') AS name, SUM(amount) AS amt, COUNT(*) AS cnt "
+            "FROM records WHERE user_id = ? AND deleted_at IS NULL AND type = 'expense' "
+            "  AND date >= ? AND date < ? GROUP BY COALESCE(category,'未分类') "
+            "ORDER BY amt DESC",
+            (uid, start, end),
+        ).fetchall()
+        month_rows = conn.execute(
+            "SELECT DISTINCT substr(date,1,7) AS ym FROM records "
+            "WHERE user_id = ? AND deleted_at IS NULL AND type IN ('income','expense') "
+            "  AND date IS NOT NULL AND date <> '' ORDER BY ym DESC",
+            (uid,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    income = round(float(total["income"] or 0), 2)
+    expense = round(float(total["expense"] or 0), 2)
+    categories = []
+    for row in cat_rows:
+        amt = round(float(row["amt"] or 0), 2)
+        categories.append({
+            "name": row["name"] or "未分类",
+            "amount": amt,
+            "count": int(row["cnt"] or 0),
+            "pct": round(amt / expense * 100, 2) if expense > 0 else 0.0,
+        })
+    return {
+        "month": month,
+        "income": income,
+        "expense": expense,
+        "net": round(income - expense, 2),
+        "count": int(total["cnt"] or 0),
+        "categories": categories,
+        "available_months": [r["ym"] for r in month_rows if r["ym"]],
+    }
+
+
+def _biz_tpl_row(row):
+    """周期模板行 -> 前端字典（bool 用 int，日期字段一律字符串兜底）。"""
+    keys = row.keys()
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"] if "user_id" in keys else _uid(),
+        "name": row["name"] or "",
+        "record_type": row["record_type"] or "expense",
+        "amount": round(float(row["amount"] or 0), 2),
+        "category_id": row["category_id"],
+        "account": row["account"] or "",
+        "note": row["note"] or "",
+        "day_of_month": int(row["day_of_month"] or 1),
+        "last_posted_at": row["last_posted_at"] or "",
+        "is_active": int(row["is_active"] or 0),
+        "created_at": row["created_at"] or "",
+    }
+
+
+def list_recurring_templates(user_id=None):
+    """列出当前用户的周期模板，按 到期日 -> id 排序。"""
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM recurring_templates WHERE user_id = ? "
+            "ORDER BY day_of_month ASC, id ASC",
+            (uid,),
+        ).fetchall()
+        return [_biz_tpl_row(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def _biz_clamp_day(day, year, mon):
+    """把 29-31 夹到短月最后一天（设计文档 D11 的月末溢出坑）。"""
+    import calendar
+    day = max(1, min(31, int(day)))
+    return min(day, calendar.monthrange(year, mon)[1])
+
+
+def create_recurring_template(data, user_id=None):
+    """新增周期模板，返回 (字典, 错误)。只提醒 + 手动生成，绝不自动写账/改余额。"""
+    uid = _resolve_user_id(user_id)
+    data = data or {}
+    name = str(data.get("name") or "").strip()
+    if not name:
+        return None, "模板名称不能为空"
+    record_type = str(data.get("record_type") or "expense").strip()
+    if record_type not in ("expense", "income"):
+        return None, "record_type 只能是 expense / income"
+    try:
+        amount = round(float(data.get("amount") or 0), 2)
+    except (TypeError, ValueError):
+        return None, "金额不是有效数字"
+    if amount <= 0:
+        return None, "金额必须大于 0"
+    try:
+        day = int(data.get("day_of_month") or 1)
+    except (TypeError, ValueError):
+        return None, "到期日不是有效数字"
+    if day < 1 or day > 31:
+        return None, "到期日必须在 1-31 之间"
+    category_id = data.get("category_id")
+    if category_id in ("", None):
+        category_id = None
+    else:
+        try:
+            category_id = int(category_id)
+        except (TypeError, ValueError):
+            return None, "分类 id 不是有效数字"
+        c = get_conn()
+        try:
+            row = c.execute(
+                "SELECT id FROM categories WHERE id = ? AND user_id = ?",
+                (category_id, uid),
+            ).fetchone()
+            if row is None:
+                return None, "分类不存在"
+        finally:
+            c.close()
+    account = str(data.get("account") or "").strip()
+    note = str(data.get("note") or "").strip()
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO recurring_templates "
+                " (user_id, name, record_type, amount, category_id, account, note, day_of_month, "
+                "  last_posted_at, is_active, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 1, datetime('now','localtime'))",
+                (uid, name, record_type, amount, category_id, account, note, day),
+            )
+            tid = cur.lastrowid
+        row = conn.execute(
+            "SELECT * FROM recurring_templates WHERE id = ? AND user_id = ?", (tid, uid)
+        ).fetchone()
+        return _biz_tpl_row(row), None
+    finally:
+        conn.close()
+
+
+def update_recurring_template(template_id, data, user_id=None):
+    """编辑周期模板；只改传入字段，全部带 user_id。返回 (字典, 错误)。"""
+    uid = _resolve_user_id(user_id)
+    data = data or {}
+    allowed = ("name", "record_type", "amount", "category_id", "account", "note",
+               "day_of_month", "is_active")
+    fields, params = [], []
+    if "name" in data:
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return None, "模板名称不能为空"
+        fields.append("name = ?")
+        params.append(name)
+    if "record_type" in data:
+        rt = str(data.get("record_type") or "").strip()
+        if rt not in ("expense", "income"):
+            return None, "record_type 只能是 expense / income"
+        fields.append("record_type = ?")
+        params.append(rt)
+    if "amount" in data:
+        try:
+            amt = round(float(data.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            return None, "金额不是有效数字"
+        if amt <= 0:
+            return None, "金额必须大于 0"
+        fields.append("amount = ?")
+        params.append(amt)
+    if "day_of_month" in data:
+        try:
+            day = int(data.get("day_of_month") or 0)
+        except (TypeError, ValueError):
+            return None, "到期日不是有效数字"
+        if day < 1 or day > 31:
+            return None, "到期日必须在 1-31 之间"
+        fields.append("day_of_month = ?")
+        params.append(day)
+    if "category_id" in data:
+        cid = data.get("category_id")
+        if cid in ("", None):
+            cid = None
+        else:
+            try:
+                cid = int(cid)
+            except (TypeError, ValueError):
+                return None, "分类 id 不是有效数字"
+        fields.append("category_id = ?")
+        params.append(cid)
+    if "account" in data:
+        fields.append("account = ?")
+        params.append(str(data.get("account") or "").strip())
+    if "note" in data:
+        fields.append("note = ?")
+        params.append(str(data.get("note") or "").strip())
+    if "is_active" in data:
+        fields.append("is_active = ?")
+        params.append(1 if data.get("is_active") else 0)
+    if not fields:
+        return None, "没有可更新的字段"
+
+    conn = get_conn()
+    try:
+        with conn:
+            params.extend([template_id, uid])
+            cur = conn.execute(
+                "UPDATE recurring_templates SET " + ", ".join(fields) +
+                " WHERE id = ? AND user_id = ?",
+                params,
+            )
+            if cur.rowcount <= 0:
+                return None, "模板不存在"
+        row = conn.execute(
+            "SELECT * FROM recurring_templates WHERE id = ? AND user_id = ?",
+            (template_id, uid),
+        ).fetchone()
+        return _biz_tpl_row(row), None
+    finally:
+        conn.close()
+
+
+def delete_recurring_template(template_id, user_id=None):
+    """删除周期模板（仅删模板，不碰任何账目与余额）。返回是否命中。"""
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "DELETE FROM recurring_templates WHERE id = ? AND user_id = ?",
+                (template_id, uid),
+            )
+            return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def recurring_due_reminders(user_id=None):
+    """到期提醒：到期日 <= 今天 且 本月尚未手动生成的启用模板。
+
+    只回读数、不写库、不改余额；由路由层合并进通知中心列表。
+    """
+    uid = _resolve_user_id(user_id)
+    today = datetime.date.today()
+    ym = today.strftime("%Y-%m")
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM recurring_templates WHERE user_id = ? AND is_active = 1 "
+            "ORDER BY day_of_month ASC, id ASC",
+            (uid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    reminders = []
+    for row in rows:
+        tpl = _biz_tpl_row(row)
+        due = _biz_clamp_day(tpl["day_of_month"], today.year, today.month)
+        posted = str(tpl["last_posted_at"] or "")[:7] == ym
+        if today.day >= due and not posted:
+            reminders.append({
+                "id": "biz-recurring-%d-%s" % (tpl["id"], ym),
+                "title": "周期账单到期提醒",
+                "content": "「%s」本月 %d 日应记 ¥%.2f，还没手动生成。点这里去处理。" %
+                           (tpl["name"], due, tpl["amount"]),
+                "publish_date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "visible_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "image_url": "",
+                "status": "published",
+                "template_id": tpl["id"],
+                "kind": "recurring_due",
+            })
+    return reminders
+
+
+def generate_recurring_bill(template_id, data, user_id=None):
+    """手动生成账单：走 add_record() 统一写账 + 联动 accounts.balance。
+
+    这是唯一会动余额的入口，且必须由用户点击触发（路由层不提供任何自动定时器）。
+    data 可覆盖 account / date / amount / note；date 为空时取本月到期日（已夹短月）。
+    生成成功后把模板 last_posted_at 记成本月，避免重复提醒。
+    返回 (新账目字典, 错误)。
+    """
+    uid = _resolve_user_id(user_id)
+    data = data or {}
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM recurring_templates WHERE id = ? AND user_id = ? "
+            "AND is_active = 1",
+            (template_id, uid),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None, "模板不存在或已停用"
+    tpl = _biz_tpl_row(row)
+    account = str(data.get("account") or tpl["account"] or "").strip()
+    if not account:
+        return None, "请指定入账账户"
+    today = datetime.date.today()
+    due = _biz_clamp_day(tpl["day_of_month"], today.year, today.month)
+    date_text = str(data.get("date") or "").strip() or \
+        "%04d-%02d-%02d 00:00" % (today.year, today.month, due)
+    amount = tpl["amount"]
+    if "amount" in data and data.get("amount") not in (None, ""):
+        try:
+            amount = round(float(data.get("amount")), 2)
+        except (TypeError, ValueError):
+            return None, "金额不是有效数字"
+        if amount <= 0:
+            return None, "金额必须大于 0"
+    note = str(data.get("note") or tpl["note"] or "").strip()
+    if not note:
+        note = "周期账单 · " + tpl["name"]
+    cat_name = "其他"
+    if tpl["category_id"] is not None:
+        c = get_conn()
+        try:
+            crow = c.execute(
+                "SELECT name FROM categories WHERE id = ? AND user_id = ?",
+                (tpl["category_id"], uid),
+            ).fetchone()
+            if crow is not None:
+                cat_name = crow["name"]
+        finally:
+            c.close()
+
+    # 统一走 add_record —— 它内部在同一事务里 _apply_effects 联动余额。
+    new_id, err = add_record(
+        amount, cat_name, note, date_text, account=account,
+        record_type=tpl["record_type"], category_id=tpl["category_id"],
+    )
+    if err is not None:
+        return None, err
+    # 记录本次手动生成，仅更新模板表，不碰账目/余额
+    stamp_conn = get_conn()
+    try:
+        with stamp_conn:
+            stamp_conn.execute(
+                "UPDATE recurring_templates SET last_posted_at = ? "
+                "WHERE id = ? AND user_id = ?",
+                (datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), template_id, uid),
+            )
+    finally:
+        stamp_conn.close()
+    record = get_record(new_id)
+    return record, None
+
+
+def list_reimbursements(contact_id=None, status=None, user_id=None):
+    """报销进阶列表：带进度（已报 / 应报）与报销人，可按报销人 / 状态筛选。
+
+    口径对齐 get_statistics 的报销聚合：user_id + type='expense'
+    + is_reimbursable=1 + deleted_at IS NULL。status: all/pending/partial/done。
+    """
+    uid = _resolve_user_id(user_id)
+    sql = _RECORD_SELECT + " WHERE r.deleted_at IS NULL AND r.user_id = ? " \
+        "AND r.type = 'expense' AND r.is_reimbursable = 1"
+    params = [uid]
+    if contact_id not in (None, ""):
+        try:
+            params.append(int(contact_id))
+        except (TypeError, ValueError):
+            return []
+        sql += " AND r.reimbursement_contact_id = ?"
+    conn = get_conn()
+    try:
+        rows = conn.execute(sql + " ORDER BY r.id DESC", params).fetchall()
+    finally:
+        conn.close()
+    out = []
+    for row in rows:
+        rec = dict(row)
+        rec["date"] = normalize_date(rec.get("date"))
+        total = round(float(rec.get("total_reimbursement") or 0), 2)
+        paid = round(float(rec.get("reimbursed_amount") or 0), 2)
+        remaining = round(max(total - paid, 0), 2)
+        if total <= 0:
+            state = "pending"
+            pct = 0.0
+        elif paid <= 0:
+            state = "pending"
+            pct = 0.0
+        elif remaining <= 0.005:
+            state = "done"
+            pct = 100.0
+        else:
+            state = "partial"
+            pct = round(paid / total * 100, 2)
+        rec["reimburse_total"] = total
+        rec["reimburse_paid"] = paid
+        rec["reimburse_remaining"] = remaining
+        rec["reimburse_pct"] = pct
+        rec["reimburse_state"] = state
+        if status and status != "all" and state != status:
+            continue
+        out.append(rec)
+    return out
+
+
+def list_reimbursement_contacts(user_id=None):
+    """报销人下拉：本用户所有报销账目涉及的联系人，按名字去重。"""
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT c.id, c.name FROM contacts c "
+            "JOIN records r ON r.reimbursement_contact_id = c.id AND r.user_id = c.user_id "
+            "WHERE r.user_id = ? AND r.deleted_at IS NULL AND r.type = 'expense' "
+            "  AND r.is_reimbursable = 1 ORDER BY c.name",
+            (uid,),
+        ).fetchall()
+        return [{"id": r["id"], "name": r["name"] or ""} for r in rows]
+    finally:
+        conn.close()
+
+
 # ==================== v0.15.2 截图去重（D）：L1 字节级 + L2 交易指纹 ====================
 # 判据来源：docs/prompts/50-v0152-vision-accuracy.md 第十节 + temp/ai-qa-v0152-vision/FINDINGS-dedup.md
 # 实测铁证：整图感知哈希在本场景不可用（同一笔 dHash=4，不同笔 dHash=0），故**绝不用图片相似度**。

@@ -15022,3 +15022,63 @@ body.is-sidebar-collapsed #sidebar-toggle {
     overscroll-behavior-y: none;
   }
 }
+
+
+/* =====================================================================
+ * v0.15.2 布局回归修复（Agent G 第二轮）· 仅文件末尾追加
+ * 不改 6196-6260 既有行，也不改 14971-14976；靠「同权重 + 末尾 + !important」覆盖。
+ *
+ * 背景：上一轮把 #biz-v0151-root 三面板插进 #page-assets；而资产页在 ≥1024px 被末尾
+ *       覆盖层锁成 height:calc(100vh-64px) + flex 列 + overflow:hidden!important，
+ *       .assets-split 又是 flex:1 1 auto，三面板抢走全部高度，.accounts-panel 只剩 2px。
+ * 方案：桌面端让「资产分栏」固定占满首屏内容区（视口 - 顶栏 64 - 上下 padding 48），
+ *       业务面板自然顺排在下方，整块 section 可纵向滚动；左右两栏仍各自内部滚动，
+ *       完整保留 v0.10.2「锁死一屏 + 双栏独立滚动」语义。
+ * 作用域：仅 ≥1024px；≤1023.98px 的上下堆叠 + 页面滚动规则完全不动。
+ * ===================================================================== */
+@media (min-width: 1024px) {
+  /* 1) 解除 section 的锁死裁切，改为整页纵向滚动（横向继续裁切防溢出）。
+        height/max-height 沿用 14042 行覆盖层的 calc(100vh - 64px)，此处只放开 overflow。 */
+  #page-assets.active {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+  }
+
+  /* 2) 资产分栏固定占满「首屏内容区」高度，不再 flex 撑满/被压缩；
+        下方 biz 面板自然顺排，由 section 滚动揭示。min-height 兜底小桌面。 */
+  #page-assets .assets-split {
+    flex: 0 0 auto !important;
+    height: calc(100vh - var(--topbar-h) - 48px) !important;
+    max-height: calc(100vh - var(--topbar-h) - 48px) !important;
+    overflow: hidden !important;
+  }
+
+  /* 3) 业务面板不参与 flex 收缩，保持自然高度，稳定排在资产分栏之后。 */
+  #page-assets .biz-v0151 {
+    flex: 0 0 auto !important;
+  }
+}
+
+/* =====================================================================
+ * v0.15.2 移动端账户行断行修复（≤767.98px）· 仅文件末尾追加
+ * 目标：账户名允许两行（超两行才省略），副标题单行省略；
+ *       消除「储蓄账 / 户」被拆行 + 窄屏「储蓄卡」被截成「储蓄…」。
+ * 追加覆盖 14883 段里 .account-row-sub{white-space:normal} 的拆行，不改原行。
+ * ===================================================================== */
+@media (max-width: 767.98px) {
+  .account-row-name {
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical !important;
+    -webkit-line-clamp: 2 !important;
+    white-space: normal !important;
+    overflow: hidden !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .account-row-sub {
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+}

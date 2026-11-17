@@ -5696,5 +5696,145 @@ def not_found(_error):
     return render_template("404.html"), 404
 
 
+
+# ==================== BIZ-V0151 业务专项路由：月度结账 / 周期模板 / 报销进阶 ====================
+# Agent G 追加，全部走 database 层函数（SQL 自带 user_id），不改图片区 / K 线区任何一行。
+# 财务红线：唯一动余额的入口是 /generate，且只经 database.generate_recurring_bill -> add_record。
+
+
+@app.route("/api/biz/monthly-settlement", methods=["GET"])
+@login_required
+def biz_monthly_settlement():
+    """月度结账单卡：?month=YYYY-MM。口径与 /api/statistics 一致。"""
+    month = (request.args.get("month") or "").strip()
+    if not month:
+        month = datetime.date.today().strftime("%Y-%m")
+    result = database.monthly_settlement(month, user_id=database.current_user_id())
+    if result is None:
+        return jsonify(error="month 必须是有效的 YYYY-MM"), 400
+    return jsonify(result)
+
+
+@app.route("/api/biz/recurring/templates", methods=["GET"])
+@login_required
+def biz_recurring_list():
+    return jsonify(templates=database.list_recurring_templates(user_id=database.current_user_id()))
+
+
+@app.route("/api/biz/recurring/templates", methods=["POST"])
+@login_required
+def biz_recurring_create():
+    data = request.get_json(silent=True) or {}
+    tpl, error = database.create_recurring_template(data, user_id=database.current_user_id())
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(template=tpl), 201
+
+
+@app.route("/api/biz/recurring/templates/<int:template_id>", methods=["PUT"])
+@login_required
+def biz_recurring_update(template_id):
+    data = request.get_json(silent=True) or {}
+    tpl, error = database.update_recurring_template(
+        template_id, data, user_id=database.current_user_id()
+    )
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(template=tpl)
+
+
+@app.route("/api/biz/recurring/templates/<int:template_id>", methods=["DELETE"])
+@login_required
+def biz_recurring_delete(template_id):
+    if not database.delete_recurring_template(template_id, user_id=database.current_user_id()):
+        return jsonify(error="模板不存在"), 404
+    return jsonify(ok=True)
+
+
+@app.route("/api/biz/recurring/reminders", methods=["GET"])
+@login_required
+def biz_recurring_reminders():
+    """到期提醒（只读）：前端合并进通知中心，不落库、不改余额。"""
+    return jsonify(notifications=database.recurring_due_reminders(
+        user_id=database.current_user_id()
+    ))
+
+
+@app.route("/api/biz/recurring/templates/<int:template_id>/generate", methods=["POST"])
+@login_required
+def biz_recurring_generate(template_id):
+    """手动生成账单（唯一动余额入口，绝无自动定时器）。body 可带 account/date/amount/note。"""
+    data = request.get_json(silent=True) or {}
+    record, error = database.generate_recurring_bill(
+        template_id, data, user_id=database.current_user_id()
+    )
+    if error:
+        return jsonify(error=error), 400
+    return jsonify(record=record)
+
+
+@app.route("/api/biz/reimbursements", methods=["GET"])
+@login_required
+def biz_reimbursements():
+    """报销列表：?contact_id=&status=all|pending|partial|done。"""
+    contact_id = (request.args.get("contact_id") or "").strip()
+    status = (request.args.get("status") or "all").strip()
+    rows = database.list_reimbursements(
+        contact_id=contact_id or None, status=status,
+        user_id=database.current_user_id(),
+    )
+    contacts = database.list_reimbursement_contacts(user_id=database.current_user_id())
+    return jsonify(reimbursements=rows, contacts=contacts)
+
+
+@app.route("/api/biz/reimbursements/export", methods=["GET"])
+@login_required
+def biz_reimbursements_export():
+    """报销记录导出 CSV（UTF-8 BOM，Excel 不乱码）。筛选条件与列表一致。"""
+    contact_id = (request.args.get("contact_id") or "").strip()
+    status = (request.args.get("status") or "all").strip()
+    rows = database.list_reimbursements(
+        contact_id=contact_id or None, status=status,
+        user_id=database.current_user_id(),
+    )
+    buffer = io.StringIO()
+    buffer.write(chr(0xFEFF))
+    crlf = chr(13) + chr(10)
+    headers = ["日期", "类型", "分类", "账户", "报销人", "账目金额",
+               "应报销", "已报销", "待报销", "报销进度", "状态", "备注"]
+    buffer.write(",".join(headers) + crlf)
+
+    def cell(value):
+        text = "" if value is None else str(value)
+        if any(ch in text for ch in (",", '"', chr(13), chr(10))):
+            return '"' + text.replace('"', '""') + '"'
+        return text
+
+    state_label = {"pending": "待报销", "partial": "部分报销", "done": "已报销完"}
+    for rec in rows:
+        values = [
+            '="%s"' % (rec.get("date") or ""),
+            "支出",
+            rec.get("category") or "",
+            rec.get("account") or "",
+            rec.get("reimbursement_contact_name") or "",
+            "%.2f" % round(float(rec.get("amount") or 0), 2),
+            "%.2f" % round(float(rec.get("reimburse_total") or 0), 2),
+            "%.2f" % round(float(rec.get("reimburse_paid") or 0), 2),
+            "%.2f" % round(float(rec.get("reimburse_remaining") or 0), 2),
+            "%.1f%%" % float(rec.get("reimburse_pct") or 0),
+            state_label.get(rec.get("reimburse_state"), ""),
+            rec.get("note") or "",
+        ]
+        buffer.write(",".join(cell(v) for v in values) + crlf)
+
+    filename = "reimbursements-%s.csv" % datetime.datetime.now().strftime("%Y%m%d-%H%M")
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="%s"' % filename},
+    )
+
+
 if __name__ == "__main__":
     app.run(debug=False)
