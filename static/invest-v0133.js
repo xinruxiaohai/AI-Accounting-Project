@@ -2809,7 +2809,15 @@ function investKlineChartInit() {
   return chart;
 }
 
-function investKlineOption(points) {
+function investKlineOption(points, payload) {
+  // 场外基金走净值聚合（source === "eastmoney-fund"），volume 恒 0；
+  // 股票 / ETF / 降级模拟曲线有真实成交量。无成交量时整块隐藏副图。
+  const source = (payload && payload.source) || "";
+  const hasVolume =
+    source !== "eastmoney-fund" &&
+    points.some(function (point) {
+      return investKlineNum(point.volume) > 0;
+    });
   const dates = points.map(function (point) {
     return String(point.date || "");
   });
@@ -2832,6 +2840,115 @@ function investKlineOption(points) {
   });
   const visibleBars = 90;
   const start = dates.length > visibleBars ? 100 - (visibleBars / dates.length) * 100 : 0;
+
+  // 画布高度：CSS 已把 #invest-kline-chart 钉成固定高度（桌面 420 / 移动 360），读不到时兜底 420
+  const chartEl = document.getElementById("invest-kline-chart");
+  const canvasHeight = chartEl && chartEl.clientHeight ? chartEl.clientHeight : 420;
+  const GRID_LEFT = 62;
+  const GRID_RIGHT = 18;
+  const GRID_TOP = 24;
+  // rotate:42 日期标签的垂直占位（margin 10 + 字面投影 + 安全余量）
+  const LABEL_ZONE = 52;
+  const SLIDER_BOTTOM = 10;
+  const SLIDER_HEIGHT = 18;
+  // 副图底边距：给 slider 上方留白，保证 grid[1] 底边永远在 slider 顶边之上
+  const VOLUME_BOTTOM = 62;
+
+  // 停牌 / 净值无波动（open=close=high=low 全同）时，主图 scale:true 会算成 min==max 的空轴，
+  // min/max 各加 ±0.5% 呼吸空间；全 0 的极端值退化为 ±0.5 绝对值
+  let priceMin;
+  let priceMax;
+  if (points.length) {
+    let lo = Infinity;
+    let hi = -Infinity;
+    points.forEach(function (point) {
+      const low = investKlineNum(point.low);
+      const high = investKlineNum(point.high);
+      if (low < lo) {
+        lo = low;
+      }
+      if (high > hi) {
+        hi = high;
+      }
+    });
+    if (Number.isFinite(lo) && Number.isFinite(hi) && lo === hi) {
+      const pad = Math.abs(hi) * 0.005 || 0.5;
+      priceMin = lo - pad;
+      priceMax = hi + pad;
+    }
+  }
+
+  // grid 布局：按画布实测高度分配「主图 / 日期标签 / 副图 / 缩放条」，自上而下互不重叠。
+  // 副图高度 ≈ 画布 16%（36~72px 夹紧）；单图模式主图底边 = 缩放条顶边再往上留一个标签区。
+  const grids = [];
+  if (hasVolume) {
+    const volumeHeight = Math.round(Math.min(Math.max(canvasHeight * 0.16, 36), 72));
+    const volumeTop = canvasHeight - VOLUME_BOTTOM - volumeHeight;
+    const mainHeight = Math.max(volumeTop - LABEL_ZONE - GRID_TOP, 60);
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: GRID_TOP, height: mainHeight });
+    grids.push({
+      left: GRID_LEFT,
+      right: GRID_RIGHT,
+      bottom: VOLUME_BOTTOM,
+      height: volumeHeight,
+    });
+  } else {
+    const mainHeight = Math.max(
+      canvasHeight - GRID_TOP - (SLIDER_BOTTOM + SLIDER_HEIGHT + LABEL_ZONE + 4),
+      60
+    );
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: GRID_TOP, height: mainHeight });
+  }
+
+  const sparseLabels = points.length > 180;
+  const xAxisMain = {
+    type: "category",
+    data: dates,
+    // 单点时居中画，避免蜡烛贴着左边缘被裁掉一半
+    boundaryGap: points.length <= 1,
+    axisLine: { lineStyle: { color: "#cbd5e1" } },
+    axisTick: { show: false },
+    splitLine: { show: false },
+    // 日期刻度完整保留（年-月-日），旋转 + hideOverlap 防重叠；
+    // 点数超过 180 时按 auto 间隔抽稀，避免刻度挤成一团
+    axisLabel: {
+      color: "#64748b",
+      fontSize: 10,
+      rotate: 42,
+      hideOverlap: true,
+      margin: 10,
+      interval: sparseLabels ? "auto" : undefined,
+    },
+  };
+  const xAxisSub = {
+    type: "category",
+    gridIndex: 1,
+    data: dates,
+    boundaryGap: points.length <= 1,
+    axisLine: { lineStyle: { color: "#cbd5e1" } },
+    axisTick: { show: false },
+    splitLine: { show: false },
+    axisLabel: { show: false },
+  };
+  const yAxisMain = {
+    scale: true,
+    splitNumber: 5,
+    min: priceMin,
+    max: priceMax,
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { lineStyle: { color: "rgba(15,23,42,0.08)", type: "dashed" } },
+    axisLabel: { color: "#64748b", fontSize: 11, margin: 10, formatter: investKlinePriceText },
+  };
+  const yAxisVolume = {
+    gridIndex: 1,
+    // 成交量轴：min:0 + 不印刻度不画分割线，全 0 也不会被算出 0~1 的空刻度
+    min: 0,
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: { show: false },
+    axisLabel: { show: false },
+  };
 
   return {
     animation: false,
@@ -2878,8 +2995,10 @@ function investKlineOption(points) {
               percent.toFixed(2) +
               "%</span>",
           ],
-          ["成交量", investKlineVolumeText(point.volume)],
         ];
+        if (hasVolume) {
+          rows.push(["成交量", investKlineVolumeText(point.volume)]);
+        }
         return rows
           .map(function (row) {
             return (
@@ -2895,73 +3014,19 @@ function investKlineOption(points) {
       },
     },
     axisPointer: { link: [{ xAxisIndex: "all" }] },
-    grid: [
-      { left: 62, right: 18, top: 24, height: "56%" },
-      { left: 62, right: 18, bottom: 66, height: 54 },
-    ],
-    xAxis: [
-      {
-        type: "category",
-        data: dates,
-        boundaryGap: false,
-        axisLine: { lineStyle: { color: "#cbd5e1" } },
-        axisTick: { show: false },
-        splitLine: { show: false },
-        // 日期刻度完整保留（年-月-日），旋转 + hideOverlap 防重叠
-        axisLabel: { color: "#64748b", fontSize: 10, rotate: 42, hideOverlap: true, margin: 10 },
-      },
-      {
-        type: "category",
-        gridIndex: 1,
-        data: dates,
-        boundaryGap: false,
-        axisLine: { lineStyle: { color: "#cbd5e1" } },
-        axisTick: { show: false },
-        splitLine: { show: false },
-        axisLabel: { show: false },
-      },
-    ],
-    yAxis: [
-      {
-        scale: true,
-        splitNumber: 5,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { lineStyle: { color: "rgba(15,23,42,0.08)", type: "dashed" } },
-        axisLabel: { color: "#64748b", fontSize: 11, margin: 10, formatter: investKlinePriceText },
-      },
-      {
-        gridIndex: 1,
-        scale: true,
-        splitNumber: 2,
-        axisLine: { show: false },
-        axisTick: { show: false },
-        splitLine: { show: false },
-        axisLabel: {
-          color: "#94a3b8",
-          fontSize: 10,
-          formatter: function (value) {
-            const num = Number(value);
-            if (num >= 100000000) {
-              return (num / 100000000).toFixed(1) + "亿";
-            }
-            if (num >= 10000) {
-              return (num / 10000).toFixed(0) + "万";
-            }
-            return String(num);
-          },
-        },
-      },
-    ],
+    grid: grids,
+    xAxis: hasVolume ? [xAxisMain, xAxisSub] : [xAxisMain],
+    yAxis: hasVolume ? [yAxisMain, yAxisVolume] : [yAxisMain],
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: start, end: 100 },
+      { type: "inside", xAxisIndex: hasVolume ? [0, 1] : [0], start: start, end: 100 },
       {
         type: "slider",
-        xAxisIndex: [0, 1],
+        xAxisIndex: hasVolume ? [0, 1] : [0],
         start: start,
         end: 100,
-        bottom: 14,
-        height: 20,
+        // slider 钉死在画布最底部，不与任何 grid 重叠
+        bottom: SLIDER_BOTTOM,
+        height: SLIDER_HEIGHT,
         borderColor: "rgba(15,23,42,0.08)",
         fillerColor: "rgba(67,56,202,0.12)",
         handleStyle: { color: "#6366f1" },
@@ -2969,28 +3034,43 @@ function investKlineOption(points) {
         textStyle: { color: "#94a3b8", fontSize: 10 },
       },
     ],
-    series: [
-      {
-        name: "K线",
-        type: "candlestick",
-        data: candles,
-        itemStyle: {
-          color: INVEST_UP_COLOR,
-          color0: INVEST_DOWN_COLOR,
-          borderColor: INVEST_UP_COLOR,
-          borderColor0: INVEST_DOWN_COLOR,
-        },
-        barMaxWidth: 14,
-      },
-      {
-        name: "成交量",
-        type: "bar",
-        xAxisIndex: 1,
-        yAxisIndex: 1,
-        data: volumes,
-        barMaxWidth: 14,
-      },
-    ],
+    series: hasVolume
+      ? [
+          {
+            name: "K线",
+            type: "candlestick",
+            data: candles,
+            itemStyle: {
+              color: INVEST_UP_COLOR,
+              color0: INVEST_DOWN_COLOR,
+              borderColor: INVEST_UP_COLOR,
+              borderColor0: INVEST_DOWN_COLOR,
+            },
+            barMaxWidth: 14,
+          },
+          {
+            name: "成交量",
+            type: "bar",
+            xAxisIndex: 1,
+            yAxisIndex: 1,
+            data: volumes,
+            barMaxWidth: 14,
+          },
+        ]
+      : [
+          {
+            name: "K线",
+            type: "candlestick",
+            data: candles,
+            itemStyle: {
+              color: INVEST_UP_COLOR,
+              color0: INVEST_DOWN_COLOR,
+              borderColor: INVEST_UP_COLOR,
+              borderColor0: INVEST_DOWN_COLOR,
+            },
+            barMaxWidth: 14,
+          },
+        ],
   };
 }
 
@@ -3019,7 +3099,7 @@ function investKlineRender(payload) {
     return;
   }
   wrap.classList.remove("is-loading", "is-empty");
-  chart.setOption(investKlineOption(points), true);
+  chart.setOption(investKlineOption(points, payload), true);
   chart.resize();
 
   const noteEl = document.getElementById("ik-note");
