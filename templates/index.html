@@ -27,6 +27,8 @@
   <link rel="stylesheet" href="/static/v01435.css?v=0.15">
   <!-- v0.15.2：账户与分类实体图标 logo 呈现层（放在最后覆盖 object-fit） -->
   <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15">
+  <!-- v0.15.2 · Agent A：移动端页面栈（账户 → 全屏二级页），桌面端一条规则都不生效 -->
+  <link rel="stylesheet" href="/static/mobile-stack-v0152.css?v=0.15">
 </head>
 <body>
 
@@ -2522,6 +2524,8 @@
 <script src="/static/access-guard.js?v=0.15"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
 <script src="/static/script.js?v=0.15"></script>
+<!-- v0.15.2 · Agent A：包装 script.js 的 selectAccount，实现移动端页面栈（不改 script.js 本体） -->
+<script src="/static/mobile-stack-v0152.js?v=0.15" defer></script>
 <!-- v0.15：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
 <script src="/static/marquee-v0143.js?v=0.15" defer></script>
 <script src="/static/charts-v013.js?v=0.15"></script>
