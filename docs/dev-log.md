@@ -621,3 +621,13 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **自测**：`py_compile` / `node --check` 全过；接口侧 `12345`→400、`13800138000`→200、`+86 139-0013-9000`→归一化 `13900139000`；CDP `temp/cdp_v01432_test.mjs` **19/19**（`.cpm` 失焦即 Toast 且零请求、合法邮箱可发码、磨砂弹窗与打码回显）；另用 `test@test.com` 真实走登录→改号→`/api/auth/me` 回读，结果一致后已复位号码。
 - **版本 / 缓存**：`APP_VERSION_FALLBACK` = `v0.14.3.2`，两处 `CACHE_NAME` → `ai-accounting-v0.14.3.2`，模板与 manifest 全部 `?v=0.14.3.2`，新样式 `v01432.css` 一并进预缓存。
 - **踩坑**：注册页提交/发码按钮在滑块解锁前 `disabled`，靠按钮 `click` 做拦截永远测不到，必须挂 `blur`；`.cpm` 教训说明「只校验有没有 `@`」等于没校验，白名单才能挡住拼写错的顶级域。
+
+## v0.15（四大模块并行：移动端 UI / AI 识别精度 / 原图识别后压缩 / 投资 K 线）
+
+- **移动端 UI（Agent A）**：头像入口根因是 `#sidebar-avatar` 挂在侧边栏内、移动端侧栏隐藏后无处显示——在 topbar 新增 `#topbar-avatar`，复用同一套 `applyAvatar()`/`openAvatarLightbox()`（未造第二套数据源）；筛选面板改「默认收起 + chip 展开」，8 项控件/重置/统计全保留；新增 `v01435.css` 暖色令牌与卡片层级。头像靠左微调用三列 `grid-template-areas:"avatar title actions"/"search search search"` 把头像放到最左列（x 140.4→12，与搜索框左对齐），纯 grid 无绝对定位 hack，桌面 `display:none` 零回归。CDP 红基线 8/10→15/15，9/9 位置断言通过。
+- **AI 文本识别（Agent B）**：SYSTEM_PROMPT 补「中文大写/口语金额按数值填」（两元=2、一块五=1.5）、转账缺账户/无金额/非法 type 的归一化兜底（绝不 502）、confidence 分档；真实 venv 测 66 case，历史踩坑（人名含数字、日期含数字、多轮全量覆盖与余额回滚）均修复；薄弱项仍是账户/联系人召回与 confidence 校准（已排后续轮）。
+- **AI 图像识别 + 压缩顺序（Agent D）**：VISION_PROMPT 加转账判定、双时间禁令（取转账时间不取收款时间）、人名逐字照抄、category 非空、单号抗干扰、真实图 few-shot + 视觉专用 JSON 容错；5 张真实财付通截图准确率 4/10→10/10。链路改「前端原图直传（readOriginalImageFile）→ 视觉模型识别原图 → 识别成功后服务端 Pillow 压缩落盘（21.2%）」，5MB 改告警线、20MB 硬上限，Pillow 缺失降级原图不回滚账目；端到端 15/15。
+- **投资 K 线（Agent E）**：新增 `/api/invest/kline`（日/周/月 klt=101/102/103、前复权）、`/api/invest/quote`、`POST /api/invest/quotes/sync` + 30 分钟进程缓存 + 东财失败降级 mock（永不 500）；ECharts candlestick + 成交量副图、三周期 Tab、双 Y 轴/tooltip OHLC+涨跌幅/dataZoom、涨红跌绿；30 分钟自动同步（页面隐藏跳过）+ 手动刷新防抖。接口 38/38、uid 隔离与「只改 current_price 不碰余额」断言通过；真机 CDP 待补。
+- **踩坑**：多 agent 并行改同一文件（`ai_service.py`/`app.py`）被覆盖两次——收尾必须 grep 自身标记 + 对方标记双向确认；app.py 图片区与 K 线区共存时，任一 agent 不得整段覆盖对方区块。
+- **版本 / 缓存**：`APP_VERSION_FALLBACK` = v0.15，SW `ai-accounting-v0.15`，模板与 manifest 27 处 `?v=0.15`，旧标记 0；commit `47b50ec` 推 main，云端已部署并核验 `{"version":"v0.15"}`。
+- **依赖**：requirements 新增 `Pillow>=10.0`（不装则压缩降级原图落盘）。

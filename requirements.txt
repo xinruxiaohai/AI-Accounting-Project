@@ -15,3 +15,7 @@ PyMySQL>=1.1
 Werkzeug>=3.0
 # Gunicorn：容器生产入口，必须 -w 1（见 Dockerfile 注释）
 gunicorn>=21.2
+# --- v0.15 新增 ---
+# Pillow：截图记账「原图识别 → 识别后服务端压缩落盘」（app.py 的 _compress_ai_image）。
+# 不装时自动降级为原图落盘（功能不坏但无压缩收益）；装了才真正压缩到约 21% 体积。
+Pillow>=10.0
