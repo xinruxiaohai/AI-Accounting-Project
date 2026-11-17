@@ -7,7 +7,7 @@
 
   var TOKEN_KEY = "ai_accounting_token";
   var USER_KEY = "ai_accounting_user";
-  // v0.14.3.4：找回密码三步接口也是免登录的，别把它们的 401 误判成「登录过期」
+  // v0.15：找回密码三步接口也是免登录的，别把它们的 401 误判成「登录过期」
   var PUBLIC_AUTH_PATHS = [
     "/api/auth/login", "/api/auth/register", "/api/auth/sms-login",
     "/api/auth/send-code", "/api/auth/verify-code", "/api/auth/reset-password"
@@ -93,7 +93,7 @@
             .json()
             .then(function (body) {
               if (body && body.code === "auth_required") {
-                // v0.14.3.4 关键修复：立即清掉过期/失效 token。
+                // v0.15 关键修复：立即清掉过期/失效 token。
                 // 之前只 showGate() 不清 token，导致每个请求都继续带着废 token
                 // 打后端，表现为「频繁 401 + 数据一直加载不出来」。
                 clearSession();
@@ -535,7 +535,7 @@
       gateError("邮箱和密码都要填");
       return;
     }
-    // v0.14.3.2：格式不合法就地拦下，绝不把请求发出去
+    // v0.15：格式不合法就地拦下，绝不把请求发出去
     if (!ensureEmailFormat(email, gateError)) {
       return;
     }
@@ -619,7 +619,7 @@
     }, 4200);
   }
 
-  /* ---------------- v0.14.3.2：邮箱格式严格校验 ---------------- */
+  /* ---------------- v0.15：邮箱格式严格校验 ---------------- */
 
   /* 只放行真实可注册的常见后缀：.cpm / .con / .ocm 这类手误必须在发请求前就拦下，
      否则验证码会发往不存在的域名，退信率一高整台服务器都会进黑名单。 */
@@ -804,7 +804,7 @@
       gateError("先填邮箱再获取验证码");
       return;
     }
-    // v0.14.3.2：发码前先校验格式，避免把验证码发到 .cpm 这类不存在的域名
+    // v0.15：发码前先校验格式，避免把验证码发到 .cpm 这类不存在的域名
     if (!ensureEmailFormat(email, gateError)) {
       return;
     }
@@ -1420,6 +1420,12 @@
       document.getElementById("sidebar-avatar-img"),
       user
     );
+    // v0.15：移动端顶栏头像复用同一份 user 数据 + 同一个 applyAvatar，绝不造第二套数据源
+    applyAvatar(
+      document.getElementById("topbar-avatar-letter"),
+      document.getElementById("topbar-avatar-img"),
+      user
+    );
     var avatarBtn = document.getElementById("sidebar-avatar");
     if (avatarBtn) {
       var uidText = user.id === undefined || user.id === null ? "" : "UID " + user.id;
@@ -1484,7 +1490,7 @@
     document.body.removeChild(input);
   }
 
-  /* ---------------- v0.14.3.2：个人中心「手机号」绑定 / 修改 ---------------- */
+  /* ---------------- v0.15：个人中心「手机号」绑定 / 修改 ---------------- */
 
   var PHONE_PATTERN = /^1[3-9]\d{9}$/;
 
@@ -1543,7 +1549,7 @@
     }, 320);
   }
 
-  // v0.14.3.4：Bootstrap 会在两种情况下静默忽略 hide()——modal 尚未 _isShown、
+  // v0.15：Bootstrap 会在两种情况下静默忽略 hide()——modal 尚未 _isShown、
   // 或正处于 fade 过渡期（_isTransitioning）。极快提交时二者都可能命中，
   // 导致「PUT 已成功写库但弹窗卡住不关、backdrop 残留」。
   // 因此不能只调一次：轮询重试直到弹窗确实关闭，并在 shown.bs.modal 触发时补一刀。
@@ -1638,7 +1644,7 @@
           return false;
         }
         var user = result.data.user || {};
-        // v0.14.3.4：展示层更新与 Toast 属于 UI 副作用，任何异常都不能落到下面的
+        // v0.15：展示层更新与 Toast 属于 UI 副作用，任何异常都不能落到下面的
         // .catch() 被误报成「网络异常，请重试」——此时 PUT 其实已经成功写库。
         try {
           localStorage.setItem(USER_KEY, JSON.stringify(user));
@@ -1899,6 +1905,11 @@
       // v0.13.7：交互降级——侧边栏头像只开个人中心，大图预览要进个人中心再点头像
       avatarBtn.addEventListener("click", openProfileModal);
     }
+    // v0.15：移动端顶栏头像直接复用现有 Lightbox（含更换头像逻辑），不另写一套
+    var topbarAvatar = document.getElementById("topbar-avatar");
+    if (topbarAvatar) {
+      topbarAvatar.addEventListener("click", openAvatarLightbox);
+    }
     if (profileEl && window.bootstrap) {
       profileEl.addEventListener("shown.bs.modal", function () {
         fillProfileModal(getUser() || {});
@@ -1932,7 +1943,7 @@
         } else if (action === "email") {
           openSettingsAt("account");
         } else if (action === "phone") {
-          // v0.14.3.2：手机号改成独立磨砂 Modal，已绑定可直接修改，未绑定即绑定点
+          // v0.15：手机号改成独立磨砂 Modal，已绑定可直接修改，未绑定即绑定点
           openPhoneModal();
         } else if (action === "member") {
           if (typeof toast === "function") {
@@ -2123,7 +2134,7 @@
       setSettingsMessage("reset-password-error", "先填注册邮箱");
       return;
     }
-    // v0.14.3.2：设置里重置密码同样先校验邮箱格式
+    // v0.15：设置里重置密码同样先校验邮箱格式
     if (
       !ensureEmailFormat(email, function (message) {
         setSettingsMessage("reset-password-error", message);
@@ -2180,7 +2191,7 @@
       return;
     }
     setSettingsMessage("reset-password-error", "");
-    // v0.14.3.2：重置提交也走同一道格式闸门（防止用户跳过发码直接改邮箱框）
+    // v0.15：重置提交也走同一道格式闸门（防止用户跳过发码直接改邮箱框）
     if (
       !ensureEmailFormat(emailInput.value.trim(), function (message) {
         setSettingsMessage("reset-password-error", message);
@@ -2389,7 +2400,7 @@
       forgotMessage("先填注册邮箱");
       return;
     }
-    // v0.14.3.2：忘记密码发码同样先过格式校验
+    // v0.15：忘记密码发码同样先过格式校验
     if (
       !ensureEmailFormat(email, function (message) {
         forgotMessage(message);
@@ -2450,7 +2461,7 @@
       forgotMessage("邮箱和 6 位验证码都要填");
       return;
     }
-    // v0.14.3.2：提交重置前再校验一次邮箱
+    // v0.15：提交重置前再校验一次邮箱
     if (
       !ensureEmailFormat(email, function (message) {
         forgotMessage(message);
@@ -2497,7 +2508,7 @@
     }
   }
 
-  /* ---------------- v0.14.3.2：邮箱输入框失焦即校验 ---------------- */
+  /* ---------------- v0.15：邮箱输入框失焦即校验 ---------------- */
 
   /* 注册视图的「注册」「获取验证码」在人机滑块解锁前是 disabled 的，
      点击事件根本不会派发；所以把格式校验同时挂到 blur/change 上，

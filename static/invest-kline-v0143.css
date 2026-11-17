@@ -1,0 +1,204 @@
+/* 智汇账 · 投资 K 线弹窗（v0.15）
+ *
+ * 独立文件而不是塞进 v01432.css：那个文件别的同学正在改，
+ * 这里全部选择器都以 #invest-kline-modal / #invest-pane-holdings 开头，不外溢。
+ */
+
+#invest-pane-holdings .invest-holding {
+  cursor: pointer;
+}
+
+#invest-pane-holdings .invest-holding:hover {
+  background: rgba(99, 102, 241, 0.06);
+}
+
+#invest-pane-holdings .invest-holding:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 2px;
+}
+
+/* ---------- 磨砂弹窗 ---------- */
+#invest-kline-modal .modal-dialog {
+  max-width: 880px;
+  width: calc(100% - 24px);
+}
+
+#invest-kline-modal .modal-content {
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24);
+  overflow: hidden;
+}
+
+#invest-kline-modal .modal-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 14px 18px 10px;
+}
+
+#invest-kline-modal .ik-head-main {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+#invest-kline-modal .ik-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0;
+}
+
+#invest-kline-modal .ik-code {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
+
+#invest-kline-modal .ik-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+#invest-kline-modal .ik-price-last {
+  font-size: 18px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+#invest-kline-modal .ik-price-change {
+  font-size: 13px;
+  font-weight: 500;
+  color: #64748b;
+}
+
+#invest-kline-modal .ik-price-change.is-up { color: #e2483d; }   /* 中国习惯：涨红 */
+#invest-kline-modal .ik-price-change.is-down { color: #17a06a; } /* 跌绿 */
+
+#invest-kline-modal .ik-period-tabs {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.06);
+  margin-top: 10px;
+}
+
+#invest-kline-modal .ik-period-tab {
+  border: 0;
+  background: transparent;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1;
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.16s ease, color 0.16s ease;
+}
+
+#invest-kline-modal .ik-period-tab:hover { color: #1e293b; }
+
+#invest-kline-modal .ik-period-tab.is-active {
+  background: #ffffff;
+  color: #4338ca;
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+}
+
+#invest-kline-modal .modal-body {
+  padding: 8px 12px 12px;
+  overflow-x: hidden;
+}
+
+#invest-kline-modal .ik-chart-wrap {
+  position: relative;
+  width: 100%;
+  height: min(58vh, 460px);
+  min-height: 300px;
+}
+
+#invest-kline-modal #invest-kline-chart {
+  width: 100%;
+  height: 100%;
+}
+
+#invest-kline-modal .ik-state {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  text-align: center;
+  padding: 16px;
+  font-size: 13px;
+  color: #64748b;
+  background: rgba(255, 255, 255, 0.72);
+  border-radius: 12px;
+}
+
+#invest-kline-modal .ik-chart-wrap.is-loading .ik-state,
+#invest-kline-modal .ik-chart-wrap.is-empty .ik-state {
+  display: flex;
+}
+
+#invest-kline-modal .ik-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #334155;
+}
+
+#invest-kline-modal .ik-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(67, 56, 202, 0.2);
+  border-top-color: #4338ca;
+  animation: ik-spin 0.8s linear infinite;
+}
+
+@keyframes ik-spin {
+  to { transform: rotate(360deg); }
+}
+
+#invest-kline-modal .ik-footnote {
+  margin: 6px 6px 0;
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 移动端 ---------- */
+@media (max-width: 576px) {
+  #invest-kline-modal .modal-dialog {
+    width: calc(100% - 16px);
+    margin: 8px auto;
+  }
+
+  #invest-kline-modal .modal-header { padding: 12px 14px 8px; }
+
+  #invest-kline-modal .ik-title { font-size: 15px; }
+
+  #invest-kline-modal .ik-chart-wrap {
+    height: min(52vh, 360px);
+    min-height: 260px;
+  }
+
+  #invest-kline-modal .ik-period-tab { padding: 6px 11px; font-size: 12px; }
+}

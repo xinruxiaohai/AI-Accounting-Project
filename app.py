@@ -12,6 +12,7 @@ import re
 import secrets
 import smtplib
 import subprocess
+import threading
 import time
 import uuid
 
@@ -58,7 +59,10 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "static", "uploads")
 # 用户头像独立子目录：与账单截图 / 通知配图隔离，避免被截图清理逻辑误删
 AVATAR_DIR = os.path.join(UPLOAD_DIR, "avatars")
 ALLOWED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+# 原图直传：5MB 只是告警线（识别不受影响），20MB 是防内存滥用的硬上限。
+# 落盘前由 _compress_ai_image 用 Pillow 压缩，展示/存储用压缩图。
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+AI_IMAGE_WARN_BYTES = 5 * 1024 * 1024
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(AVATAR_DIR, exist_ok=True)
 
@@ -208,7 +212,7 @@ AUTH_PUBLIC_PATHS = {
     "/api/access/config",
     "/api/access/verify",
     "/api/version",
-    # v0.14.3.4：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
+    # v0.15：页面顶部跑马灯。登录页 / 注册页同样要显示，未登录也必须能取。
     "/api/notices/active_temp",
     # v0.14.2：这个接口要自己给「非管理员」返回 403 + 指定提示语，
     # 不能被 before_request 的通用 401 提前拦掉（未登录也应得到 403）。
@@ -356,7 +360,7 @@ def _register_password_error(password):
     return None
 
 
-# ---------------- v0.14.3.4：手机号规范（个人中心绑定 / 解绑） ----------------
+# ---------------- v0.15：手机号规范（个人中心绑定 / 解绑） ----------------
 
 PHONE_PATTERN = re.compile(r"^1[3-9]\d{9}$")
 
@@ -423,7 +427,7 @@ def _build_verification_email(email, code, purpose="register"):
     # 发件人显示名走 formataddr，否则中文显示名会被邮件客户端显示成乱码或整串丢弃
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = email
-    # v0.14.3.4：必须显式写 Date 头。缺这行时邮件客户端会按「无时间」处理，
+    # v0.15：必须显式写 Date 头。缺这行时邮件客户端会按「无时间」处理，
     # 显示成 1970-01-01 07:59:59（UTC 零点），极易被判成垃圾邮件。
     msg["Date"] = formatdate(localtime=True)
     msg.set_content(
@@ -471,7 +475,7 @@ def _build_feedback_reply_email(to_email, ticket_id, content):
     msg["Subject"] = "【%s】您提交的工单 #%s 有了新回复" % (APP_BRAND_NAME, ticket_id)
     msg["From"] = formataddr((APP_BRAND_NAME, MAIL_USER)) if MAIL_USER else APP_BRAND_NAME
     msg["To"] = to_email
-    # v0.14.3.4：同验证码邮件，工单回复邮件也必须带 Date 头。
+    # v0.15：同验证码邮件，工单回复邮件也必须带 Date 头。
     msg["Date"] = formatdate(localtime=True)
     msg.set_content(
         "%s：您提交的工单 #%s 管理员已回复，内容如下：\n\n%s\n\n登录小程序查看完整对话。"
@@ -747,7 +751,7 @@ def auth_reset_password():
 @app.route("/api/auth/profile", methods=["PUT"])
 @login_required
 def auth_update_profile():
-    """改昵称（侧边栏展示用）与手机号（v0.14.3.4 个人中心绑定）。
+    """改昵称（侧边栏展示用）与手机号（v0.15 个人中心绑定）。
 
     只有请求体里出现的字段才会被写入：没传 nickname 就不动昵称，
     这样前端只传 phone 时不会被顺带改回邮箱前缀。
@@ -1739,7 +1743,8 @@ def create_record_by_ai_stream():
 
 # ---------------- 截图记账（v0.11）：Base64 图片 -> 视觉模型 -> 落盘 + 入库 ----------------
 
-# 常见图片 MIME 与落盘后缀的对应关系；前端 Canvas 压缩后基本都是 image/jpeg
+# 常见图片 MIME 与落盘后缀的对应关系。前端现在上传原图（jpg/png/webp 都可能），
+# 识别成功后由 _compress_ai_image 统一压成 JPEG，这里仍保留全量映射做兜底。
 AI_IMAGE_MIME_EXTENSIONS = {
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",
@@ -1750,7 +1755,10 @@ AI_IMAGE_MIME_EXTENSIONS = {
 
 
 def _decode_ai_image(image_base64, mime):
-    """把前端传来的 Base64（可带 dataURL 前缀）解成 (bytes, 真实 MIME, 错误信息)。"""
+    """把前端传来的【原图】Base64（可带 dataURL 前缀）解成 (bytes, 真实 MIME, 错误信息)。
+
+    这里只做合法性与 20MB 硬上限校验；5MB 以上只告警不拦截，原图原样交给视觉模型。
+    """
     data = image_base64.strip()
     if data.startswith("data:"):
         header, _, data = data.partition(",")
@@ -1762,13 +1770,67 @@ def _decode_ai_image(image_base64, mime):
         return None, mime, "图片数据不是合法的 Base64"
     if not raw:
         return None, mime, "图片内容是空的，请重新选择截图"
+    if len(raw) > AI_IMAGE_WARN_BYTES:
+        print(
+            "[ai_image] 收到原图 %.1fMB（告警线 %.0fMB），继续用原图识别"
+            % (len(raw) / 1024.0 / 1024.0, AI_IMAGE_WARN_BYTES / 1024.0 / 1024.0)
+        )
     if len(raw) > MAX_UPLOAD_BYTES:
-        return None, mime, "图片不能超过 5MB，请压缩后再试"
+        return None, mime, "图片不能超过 20MB，请裁剪后再试"
     return raw, mime, None
 
 
+def _compress_ai_image(raw, mime):
+    """识别成功后把原图压成 JPEG 展示图，返回 (压缩字节, 用于落盘的 MIME)。
+
+    设计要点：
+    - 输入是【原图】（供 AI 识别的那一份），输出是【压缩图】（仅供展示/存储），
+      两者字节语义不同，调用方必须先识别成功、再调本函数，压缩失败也绝不回滚账目。
+    - 依赖 Pillow（requirements 尚未列入）：模块不可用时返回 (raw, mime) 原样落盘，
+      保证功能可用；报告里给出「requirements.txt 增加 Pillow」的依赖建议。
+    - 最长边 1600px（比旧前端 800px 更清晰）、JPEG quality 82、RGB 铺白底去透明通道，
+      体积通常降到原图的 1/3~1/10，文字在相册放大时仍可读。
+    """
+    try:
+        from PIL import Image
+        import io
+    except ImportError:
+        print("[ai_image] Pillow 未安装，跳过服务端压缩，按原图落盘")
+        return raw, mime
+    try:
+        image = Image.open(io.BytesIO(raw))
+        image.load()
+        # 透明 PNG/WebP 转 JPEG 前铺白底，避免透明区域变黑块
+        if image.mode in ("RGBA", "LA") or (
+            image.mode == "P" and "transparency" in image.info
+        ):
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image.convert("RGBA"), mask=image.convert("RGBA").split()[-1])
+            image = background
+        elif image.mode != "RGB":
+            image = image.convert("RGB")
+        max_side = 1600
+        if max(image.size) > max_side:
+            image.thumbnail((max_side, max_side))
+        output = io.BytesIO()
+        image.save(output, format="JPEG", quality=82, optimize=True)
+        compressed = output.getvalue()
+        if not compressed or len(compressed) >= len(raw):
+            # 压缩没收益（极小图 / 已经是高压缩 JPEG）：原样落盘，避免反而变大
+            return raw, mime
+        return compressed, "image/jpeg"
+    except Exception as error:
+        # 压缩失败绝不影响已识别账目，只记录并退回原图
+        print("[ai_image] 服务端压缩失败，按原图落盘：%s" % error)
+        return raw, mime
+
+
 def _save_ai_image_to_disk(raw, mime):
-    """把截图落盘到 static/uploads/，返回 (访问路径, 错误信息)。"""
+    """把【压缩后】的截图字节落盘到 static/uploads/，返回 (访问路径, 错误信息)。
+
+    注意：这里写入的是 _compress_ai_image 的输出（展示图/压缩图），
+    不是给视觉模型识别用的原图；原图只存在于请求内存里，不落盘。
+    """
     mime = (mime or "").lower()
     if not mime.startswith("image/"):
         return None, "只支持图片文件（jpg / png / webp / gif）"
@@ -1809,10 +1871,14 @@ def _remove_saved_image(image_path):
 
 @app.route("/api/records/ai/image", methods=["POST"])
 def create_record_by_ai_image():
-    """截图记账：前端 Canvas 压缩后的 Base64 -> 视觉模型识别 -> 原图落盘 + 账目入库。
+    """截图记账：前端上传的【原图 Base64】-> 视觉模型识别 -> 服务端压缩 -> 压缩图落盘 + 账目入库。
 
-    请求体 {"image": "data:image/jpeg;base64,..."}（也可只传裸 Base64 + mime）。
-    成功返回与 /api/records/ai 同构的 201，额外带 image_path，前端据此显示「查看原图」。
+    链路语义：
+      1. 前端不再做 Canvas 压缩，直接把原图 File 读成 Base64 上传，保留 dataURL 前缀与原始 MIME；
+      2. 本接口把原图原样送 ai_service.parse_image 识别（不提前压缩，保住小字/金额细节）；
+      3. 识别成功后再用 _compress_ai_image 生成压缩图，_save_ai_image_to_disk 只落压缩图；
+      4. 压缩失败只告警、按原图落盘，绝不回滚已识别的账目。
+    成功返回与 /api/records/ai 同构的 201，额外带 image_path，前端据此显示「查看截图」。
     """
     data = request.get_json(silent=True) or {}
     image = data.get("image")
@@ -1862,8 +1928,12 @@ def create_record_by_ai_image():
                 409,
             )
 
+    # 识别完成后才压缩：raw 是给视觉模型看的原图，compressed 只用于展示/存储。
+    # 放在所有可能 return 4xx 的校验之后，保证「压缩失败不影响账目入库」。
+    compressed, mime = _compress_ai_image(raw, mime)
+
     # 先落盘再入库：图片路径要跟着账目一起写，避免「账记了、图丢了」
-    image_path, error_message = _save_ai_image_to_disk(raw, mime)
+    image_path, error_message = _save_ai_image_to_disk(compressed, mime)
     if error_message is not None:
         return jsonify(error=error_message), 400
 
@@ -3198,6 +3268,216 @@ def invest_board():
     return jsonify(board)
 
 
+# ---------------- 投资 K 线 / 行情（v0.15） ----------------
+# 数据链路：东方财富历史 K 线（push2his，无鉴权）→ 30 分钟进程内缓存 → 前端 ECharts。
+# 上游任何异常都必须降级为本地点位（source="mock"）并显式 degraded，绝不 500。
+_INVEST_KLINE_TTL_SECONDS = 30 * 60
+_INVEST_KLINE_PERIODS = ("day", "week", "month")
+_INVEST_KLINE_CACHE_MAX = 256
+_INVEST_QUOTE_MAX_CODES = 20
+_invest_kline_cache = {}
+_invest_kline_cache_lock = threading.Lock()
+
+
+def _invest_time_text():
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _invest_kline_cache_get(key):
+    now = time.time()
+    with _invest_kline_cache_lock:
+        entry = _invest_kline_cache.get(key)
+        if not entry:
+            return None
+        if now - entry["at"] > _INVEST_KLINE_TTL_SECONDS:
+            _invest_kline_cache.pop(key, None)
+            return None
+        return entry["payload"]
+
+
+def _invest_kline_cache_put(key, payload):
+    with _invest_kline_cache_lock:
+        if len(_invest_kline_cache) >= _INVEST_KLINE_CACHE_MAX:
+            overflow = _INVEST_KLINE_CACHE_MAX // 4
+            for old_key, _ in sorted(
+                _invest_kline_cache.items(), key=lambda kv: kv[1]["at"]
+            )[: max(1, overflow)]:
+                _invest_kline_cache.pop(old_key, None)
+        _invest_kline_cache[key] = {"at": time.time(), "payload": payload}
+
+
+def _invest_fetch_quotes(codes):
+    """批量取行情：东财优先，异常/空结果降级本地参考价，返回 (quotes, degraded, notice)。"""
+    try:
+        quotes = invest_eastmoney.fetch_quote_batch(codes)
+    except Exception as exc:  # noqa: BLE001 - 上游异常一律降级，不许冒泡成 500
+        app.logger.warning("[行情] 东方财富报价失败，降级本地参考价: %s", exc)
+        return invest_mock.quote_batch(codes), True, "行情服务暂时不可用，当前为本地参考价，仅供界面预览"
+    if not quotes:
+        return invest_mock.quote_batch(codes), True, "东方财富未返回报价，当前为本地参考价，仅供界面预览"
+    return quotes, False, None
+
+
+@app.route("/api/invest/kline", methods=["GET"])
+@login_required
+def invest_kline():
+    """历史 K 线：?code=600519&period=day|week|month&limit=240。
+
+    返回标准化 OHLCV：{code, period, name, source, count, points:[{date,open,close,low,high,volume}]}
+    30 分钟内同一 (code, period, limit) 命中服务端缓存（cached=true）。
+    """
+    code = (request.args.get("code") or "").strip()
+    if not code:
+        return jsonify(error="请传入标的代码"), 400
+    if len(code) > 20:
+        return jsonify(error="标的代码最长 20 个字符"), 400
+
+    period = (request.args.get("period") or "day").strip().lower()
+    if period not in _INVEST_KLINE_PERIODS:
+        return jsonify(error="period 仅支持 day / week / month"), 400
+
+    raw_limit = request.args.get("limit")
+    if raw_limit in (None, ""):
+        limit = invest_eastmoney.KLINE_DEFAULT_LIMITS.get(period, 240)
+    else:
+        try:
+            limit = int(float(raw_limit))
+        except (TypeError, ValueError):
+            return jsonify(error="limit 必须是正整数"), 400
+        if limit <= 0:
+            return jsonify(error="limit 必须是正整数"), 400
+    limit = max(1, min(limit, invest_eastmoney.KLINE_MAX_LIMIT))
+
+    cache_key = (code.upper(), period, limit)
+    cached_payload = _invest_kline_cache_get(cache_key)
+    if cached_payload is not None:
+        data = dict(cached_payload)
+        data["cached"] = True
+        return jsonify(**data)
+
+    degraded = False
+    notice = None
+    try:
+        result = invest_eastmoney.fetch_kline(code, period, limit)
+    except Exception as exc:  # noqa: BLE001 - 断网/上游改版都只降级
+        app.logger.warning("[K线] 东方财富不可用，降级本地模拟曲线: %s", exc)
+        result = {
+            "code": code,
+            "period": period,
+            "name": invest_mock.display_name(code),
+            "source": "mock",
+            "points": invest_mock.synthetic_kline(code, period, limit),
+        }
+        degraded = True
+        notice = "行情服务暂时不可用，当前为本地模拟曲线，仅供界面预览"
+
+    points = result.get("points") or []
+    payload = {
+        "code": result.get("code") or code,
+        "period": result.get("period") or period,
+        "name": result.get("name") or invest_mock.display_name(code),
+        "source": result.get("source") or "eastmoney",
+        "degraded": degraded,
+        "notice": notice,
+        "count": len(points),
+        "points": points,
+        "cached": False,
+        "fetched_at": _invest_time_text(),
+    }
+    # 只缓存成功结果：断网时每次重试都能重新试探上游，不被坏结果锁 30 分钟
+    if not degraded and points:
+        _invest_kline_cache_put(cache_key, payload)
+    return jsonify(**payload)
+
+
+@app.route("/api/invest/quote", methods=["GET"])
+@login_required
+def invest_quote():
+    """批量报价：?code=600519,510300 → {total, requested, items:[{code,name,price,...}]}。"""
+    raw = request.args.get("codes") or request.args.get("code") or ""
+    codes = []
+    seen = set()
+    for part in re.split(r"[,;，；\s]+", raw):
+        code = part.strip()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    if not codes:
+        return jsonify(error="请传入标的代码"), 400
+    if len(codes) > _INVEST_QUOTE_MAX_CODES:
+        return jsonify(error="一次最多查询 %d 个标的" % _INVEST_QUOTE_MAX_CODES), 400
+
+    quotes, degraded, notice = _invest_fetch_quotes(codes)
+    items = quotes or []
+    payload = {
+        "total": len(items),
+        "requested": len(codes),
+        "items": items,
+        "degraded": degraded,
+    }
+    if notice:
+        payload["notice"] = notice
+    return jsonify(**payload)
+
+
+@app.route("/api/invest/quotes/sync", methods=["POST"])
+@login_required
+def invest_quotes_sync():
+    """把最新行情价写回持仓：只 UPDATE holdings.current_price，不碰份额/成本/余额。"""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+    account = body.get("account")
+    if not isinstance(account, str) or not account.strip():
+        return jsonify(error="请先指定要同步的投资账户"), 400
+    account = account.strip()
+
+    items, error = database.list_holding_tickers(account)
+    if error is not None:
+        return jsonify(error=error), _invest_status(error)
+
+    tickers = [it["ticker"] for it in (items or []) if (it.get("ticker") or "").strip()]
+    if not tickers:
+        return jsonify(
+            account=account,
+            updated=0,
+            skipped=0,
+            missing=0,
+            quotes=[],
+            degraded=False,
+            notice="这个账户还没有带标的代码的持仓",
+            synced_at=_invest_time_text(),
+        )
+
+    quotes, degraded, notice = _invest_fetch_quotes(tickers)
+    price_map = {}
+    for quote in quotes or []:
+        try:
+            price = float(quote.get("price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if price > 0:
+            price_map[str(quote.get("code") or "").strip()] = price
+
+    updated, skipped, apply_error = database.apply_holding_quotes(account, price_map)
+    if apply_error is not None:
+        return jsonify(error=apply_error), _invest_status(apply_error)
+
+    payload = {
+        "account": account,
+        "updated": updated,
+        "skipped": skipped,
+        "missing": max(0, len(tickers) - len(price_map)),
+        "quotes": quotes or [],
+        "degraded": degraded,
+        "synced_at": _invest_time_text(),
+    }
+    if notice:
+        payload["notice"] = notice
+    return jsonify(**payload)
+
+
 @app.route("/api/invest/platforms", methods=["GET"])
 @login_required
 def list_invest_platforms():
@@ -3735,7 +4015,7 @@ def publish_notification(notify_id):
     return jsonify(notification)
 
 
-# ---------------- v0.14.3.4：临时滚动通知（全局跑马灯） ----------------
+# ---------------- v0.15：临时滚动通知（全局跑马灯） ----------------
 #
 # 与上面 notifications 的分工：
 #   notifications = 点开看的公告（草稿/发布/封面/详情），后台第一排；
@@ -4876,7 +5156,7 @@ def admin_problem_logs_create_alias():
 
 @app.route("/api/admin/problem-logs/<int:log_id>", methods=["PUT"])
 def admin_problem_logs_update_alias(log_id):
-    """v0.14.3.4：切换问题日志状态（0 未解决 / 1 已解决）。
+    """v0.15：切换问题日志状态（0 未解决 / 1 已解决）。
 
     前端传 status: 0|1；也兼容 result: "已解决"/"未解决"/"resolved"/"unresolved"。
     """
@@ -4945,11 +5225,11 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.14.3.4"
+APP_VERSION_FALLBACK = "v0.15"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.14.3.4。
+    """返回当前统一版本号 v0.15。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿

@@ -470,7 +470,7 @@ def update_user_nickname(user_id, nickname):
 
 
 def update_user_phone(user_id, phone):
-    """v0.14.3.2：更新手机号；空串表示解绑。返回最新用户字典或 None。
+    """v0.15：更新手机号；空串表示解绑。返回最新用户字典或 None。
 
     号码格式由接口层统一校验（app._normalize_phone），这里只做入库前的长度兜底，
     避免有人绕过接口直接写入超长字符串。
@@ -1927,7 +1927,7 @@ def _init_db_mysql_schema_guard():
             # v0.14.2：只做幂等 ADD COLUMN 与「全新独立表」的 CREATE IF NOT EXISTS，
             # 不涉及任何既有表的重建，因此不违反「不自动改写线上 schema」的约束。
             _ensure_v0142_schema(conn)
-            # v0.14.3.1：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
+            # v0.15：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
             _ensure_temp_notice_schema(conn)
             _boot_temp_notices(conn)
     finally:
@@ -2387,7 +2387,7 @@ def init_db():
         with conn:
             _ensure_v0142_schema(conn)
 
-        # v0.14.3.1 临时滚动通知：全新独立表（幂等 CREATE IF NOT EXISTS）
+        # v0.15 临时滚动通知：全新独立表（幂等 CREATE IF NOT EXISTS）
         with conn:
             _ensure_temp_notice_schema(conn)
 
@@ -2424,7 +2424,7 @@ def init_db():
             # 账户回填放在补账户之后：新补进来的行 rowid 最大，理应排最后
             if accounts_need_order:
                 conn.execute("UPDATE accounts SET sort_order = rowid")
-            # v0.14.3.1：预置 / 刷新默认维护通知（重启后自动播 5 分钟）
+            # v0.15：预置 / 刷新默认维护通知（重启后自动播 5 分钟）
             _boot_temp_notices(conn)
     finally:
         conn.close()  # with 只管事务，连接必须手动关
@@ -3343,9 +3343,11 @@ def _row_to_platform(row):
 def _row_to_holding(row):
     """持仓行 → 字典。**市值 / 盈亏只在服务端算**（设计 §8：禁止前端二次计算）。
 
-    D8：current_price 存 0 表示未接行情，读取时统一回落 cost_price，
-    `price` 就是对外可见的单价；未来接行情只改这一处函数，前端零改动。
-    D9：day_pl 固定占位（未接行情），未来补了 prev_close 再改成 available=True。
+    D8：current_price 存 0 表示还没同步过行情，读取时统一回落 cost_price；
+    同步过之后（v0.14.4 起 /api/invest/quotes/sync 会写这一列）就用行情价。
+    `price` 始终是对外可见的单价，前端零改动。
+    D9：day_pl 仍是占位 —— 行情接口给的 prev_close 没有入库存，当日盈亏要等
+    下一轮补 prev_close 列（改表结构需单独评审，本轮不动）。
     """
     shares = round(float(row["shares"] or 0), 4)
     cost_price = round(float(row["cost_price"] or 0), 4)
@@ -3367,6 +3369,8 @@ def _row_to_holding(row):
         "cost_price": cost_price,
         "current_price": current_price,
         "price": price,
+        # v0.14.4：告诉前端这个单价是行情价还是成本价回落，界面据此标注「行情/成本」
+        "price_source": "market" if current_price > 0 else "cost",
         "cost_total": cost_total,
         "market_value": market_value,
         "pl": profit,
@@ -7521,7 +7525,7 @@ def list_issue_logs(status=None, feedback_id=None, keyword=None, limit=200):
 
 
 def update_issue_log_status(log_id, status):
-    """v0.14.3.1：切换问题日志状态（0 未解决 / 1 已解决）。
+    """v0.15：切换问题日志状态（0 未解决 / 1 已解决）。
 
     只更新 status 一列，不重建既有表结构。返回更新后的完整记录；
     日志不存在返回 None，非法状态抛 RecordError 由路由转成 400。
@@ -7555,7 +7559,7 @@ def update_issue_log_status(log_id, status):
     finally:
         conn.close()
 
-# ---------------- v0.14.3.1：临时滚动通知（全局跑马灯） ----------------
+# ---------------- v0.15：临时滚动通知（全局跑马灯） ----------------
 #
 # 与 notifications 的区别：
 #   notifications 是「一条一条点开看的公告」，有草稿/发布状态、封面图、详情；
@@ -7684,7 +7688,7 @@ def _boot_temp_notices(conn):
             "VALUES (?, ?, ?, 1, ?, ?)",
             (TEMP_NOTICE_DEFAULT_CONTENT, start_text, end_text, start_text, start_text),
         )
-        print("[v0.14.3.1] 已预置默认维护通知（%d 分钟）" % TEMP_NOTICE_BOOT_MINUTES, flush=True)
+        print("[v0.15] 已预置默认维护通知（%d 分钟）" % TEMP_NOTICE_BOOT_MINUTES, flush=True)
         return
     conn.execute(
         "UPDATE temp_notices SET start_time = ?, end_time = ?, is_active = 1, "
@@ -7821,5 +7825,103 @@ def delete_temp_notice(notice_id):
                 "DELETE FROM temp_notices WHERE id = ?", (int(notice_id),)
             )
             return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ==========================================================================
+# v0.14.4：持仓行情价同步（K 线弹窗 / 定时行情）
+#
+# 红线：只写 holdings.current_price 这一列。份额、成本、账户余额一律不碰，
+# 不写 records，不改表结构 / 外键 / 索引；所有 SQL 都带 user_id 隔离。
+# ==========================================================================
+
+
+def list_holding_tickers(account_name):
+    """某投资账户下所有持仓的标的清单（去重前保序），给行情同步用。
+
+    返回 (items, 错误信息)，items = [{ticker, name, asset_type}]。
+    刻意不返回金额 / 份额：同步链路只需要「要查哪些代码」。
+    """
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, _uid())
+            if error is not None:
+                return None, error
+            rows = conn.execute(
+                "SELECT h.ticker, h.name, h.asset_type FROM holdings h "
+                "JOIN invest_platforms p ON p.id = h.platform_id "
+                "WHERE h.user_id = ? AND p.user_id = ? AND p.account = ? "
+                "ORDER BY h.id",
+                (_uid(), _uid(), account["name"]),
+            ).fetchall()
+            items = []
+            seen = set()
+            for row in rows:
+                ticker = (row["ticker"] or "").strip()
+                key = ticker or ("name:" + (row["name"] or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(
+                    {
+                        "ticker": ticker,
+                        "name": row["name"] or "",
+                        "asset_type": row["asset_type"] or DEFAULT_ASSET_TYPE,
+                    }
+                )
+            return items, None
+    finally:
+        conn.close()
+
+
+def apply_holding_quotes(account_name, price_map, user_id=None):
+    """把行情价写回 holdings.current_price，返回 (updated, skipped, 错误信息)。
+
+    price_map: {ticker: price}；没有价格 / 价格非法（<= 0）的持仓计入 skipped，
+    保持原值不动（宁可不更新，也不写 0 把市值打回成本价）。
+    """
+    uid = _resolve_user_id(user_id)
+    if not isinstance(price_map, dict) or not price_map:
+        return 0, 0, None
+    normalized = {}
+    for key, value in price_map.items():
+        ticker = str(key or "").strip()
+        try:
+            price = round(float(value), 4)
+        except (TypeError, ValueError):
+            continue
+        if ticker and price > 0:
+            normalized[ticker] = price
+    if not normalized:
+        return 0, len(price_map), None
+
+    conn = get_conn()
+    try:
+        with conn:
+            account, error = _require_invest_account(conn, account_name, uid)
+            if error is not None:
+                return 0, 0, error
+            rows = conn.execute(
+                "SELECT h.id, h.ticker FROM holdings h "
+                "JOIN invest_platforms p ON p.id = h.platform_id "
+                "WHERE h.user_id = ? AND p.user_id = ? AND p.account = ?",
+                (uid, uid, account["name"]),
+            ).fetchall()
+            updated = 0
+            skipped = 0
+            for row in rows:
+                price = normalized.get((row["ticker"] or "").strip())
+                if price is None:
+                    skipped += 1
+                    continue
+                conn.execute(
+                    "UPDATE holdings SET current_price = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND user_id = ?",
+                    (price, int(row["id"]), uid),
+                )
+                updated += 1
+            return updated, skipped, None
     finally:
         conn.close()

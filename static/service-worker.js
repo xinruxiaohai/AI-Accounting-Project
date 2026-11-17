@@ -1,4 +1,4 @@
-/* 智汇账 · Service Worker（v0.14.3.4）
+/* 智汇账 · Service Worker（v0.15）
  *
  * 目标：装到桌面后是真正的全屏独立窗口，断网也能打开完整界面。
  * 策略：
@@ -11,9 +11,9 @@
  * 样式与 auth/charts/invest 三个脚本全部落空、只剩一个空壳页面。
  * 现在按模板真实 URL 精确预缓存，并同步 bump CACHE_NAME 与模板 ?v=。
  */
-const CACHE_NAME = "ai-accounting-v0.14.3.4";
+const CACHE_NAME = "ai-accounting-v0.15";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.14.3.4";
+const ASSET_VERSION = "0.15";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",
@@ -24,9 +24,12 @@ const PRECACHE_URLS = [
   "/static/v0142.css?v=" + ASSET_VERSION,
   "/static/v0143.css",
   "/static/v0143.css?v=" + ASSET_VERSION,
-  // v0.14.3.4：手机号绑定弹窗的磨砂样式
+  // v0.15：手机号绑定弹窗 / 找回密码弹窗的磨砂样式
   "/static/v01432.css",
   "/static/v01432.css?v=" + ASSET_VERSION,
+  // v0.15：移动端 UI 优化末尾覆盖层（头像入口 / 筛选折叠 / 暖色强调）
+  "/static/v01435.css",
+  "/static/v01435.css?v=" + ASSET_VERSION,
   "/static/marquee-v0143.js?v=" + ASSET_VERSION,
   "/static/admin-v0142.js?v=" + ASSET_VERSION,
   "/static/user-feedback-v0142.js?v=" + ASSET_VERSION,

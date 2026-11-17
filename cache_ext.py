@@ -89,7 +89,7 @@ def _cache_base_dir():
 def _generation_file():
     """跨进程缓存代际号：**只写项目目录之外的暂存区**，绝不写回项目目录。
 
-    v0.14.3.1：用户要求项目根目录绝对干净，暂存数据统一放 D:\\Project\\temp。
+    v0.15：用户要求项目根目录绝对干净，暂存数据统一放 D:\\Project\\temp。
     候选目录不可写时退回系统临时目录；所有写入都失败也只返回系统临时目录下的
     路径，由 current_generation() 读失败回 0、_bump_generation() 写失败仅告警，
     功能降级为「本进程 delete_memoized 仍生效」，**绝不在项目目录里造文件**。

@@ -1,0 +1,183 @@
+/* ============================================================
+   v0.15 · 移动端 UI 优化末尾覆盖层
+   ------------------------------------------------------------
+   约定（与 v0142 / v0143 / v01432 一脉相承）：
+   1. 本文件在 style.css 之后加载，同权重靠后覆盖；只在必要时用 !important。
+   2. 暖色强调色是「界面装饰色」，绝不碰 --color-expense / --color-income
+      等财务语义色（支出红、收入绿的口径不变）。
+   3. 头像复用 #sidebar-avatar 的 applyAvatar + openAvatarLightbox，零新增逻辑。
+   4. 保留 16px 防缩放、真机安全区、.fab / .fab.fab-menu 定位规则。
+   ============================================================ */
+
+:root {
+  --warm-accent: #d97706;
+  --warm-accent-ink: #b45309;
+  --warm-accent-soft: rgba(217, 119, 6, 0.12);
+}
+
+[data-theme="dark"] {
+  --warm-accent: #f59e0b;
+  --warm-accent-ink: #fbbf24;
+  --warm-accent-soft: rgba(245, 158, 11, 0.16);
+}
+
+/* ---------- 1. 顶栏头像：桌面隐藏，移动端露出 ---------- */
+.topbar-avatar {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* 头像脱离右侧图标组后成为顶栏首个子元素：三列布局把它钉在最左（贴左内边距），
+     标题居中，通知/主题/AI/记一笔仍在右侧 auto 列；桌面端不命中本块、保持原样。 */
+  .topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "avatar title actions"
+      "search search search";
+  }
+  .topbar-avatar {
+    grid-area: avatar;
+  }
+  .topbar-title {
+    grid-area: title;
+  }
+  .topbar-actions {
+    grid-area: actions;
+  }
+  .topbar-search {
+    grid-area: search;
+  }
+  .topbar-avatar {
+    display: inline-grid !important;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    line-height: 0;
+  }
+  .topbar-avatar .brand-avatar,
+  .topbar-avatar .brand-avatar-img {
+    width: 30px;
+    height: 30px;
+    box-shadow: 0 0 0 2px var(--warm-accent), 0 2px 8px rgba(15, 23, 42, 0.2);
+  }
+  /* 与通知 / 设置图标合理显隐折叠：导出（我的页有入口）与云同步（当前维护中）让位给头像 */
+  #export-btn,
+  .topbar-sync {
+    display: none !important;
+  }
+  /* 缩小顶部工具栏：收紧标题行间距，搜索仍独占一行 */
+  .topbar {
+    gap: 6px 8px;
+  }
+  .topbar-title {
+    font-size: 15px;
+  }
+}
+
+/* ---------- 2. 筛选面板：默认收起 + chip 展开 ---------- */
+.bills-filter-toggle {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .bills-filter-panel {
+    padding: 10px 12px;
+  }
+  .bills-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 6px 12px;
+    border: 1px solid var(--warm-accent);
+    border-radius: 999px;
+    background: var(--warm-accent-soft);
+    color: var(--warm-accent-ink);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .bills-filter-toggle svg {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+  }
+  .bills-filter-chevron {
+    transition: transform 0.2s ease;
+  }
+  .bills-filter-panel.is-filter-open .bills-filter-chevron {
+    transform: rotate(180deg);
+  }
+  .bills-filter-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--warm-accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  /* [hidden] 必须 !important，避免被上面的 display:inline-flex 覆盖（历史坑 07） */
+  .bills-filter-badge[hidden] {
+    display: none !important;
+  }
+  /* 默认收起；仅 .is-filter-open 时展开。桌面端下面另有常驻规则 */
+  .bills-filter-panel .bills-filters-body {
+    display: none;
+  }
+  .bills-filter-panel.is-filter-open .bills-filters-body {
+    display: block;
+    margin-top: 10px;
+  }
+  .bills-filter-panel .bills-summary {
+    margin-top: 8px;
+  }
+}
+
+/* 桌面端：筛选常驻展开，chip 永不出场 */
+@media (min-width: 768.02px) {
+  .bills-filter-toggle {
+    display: none !important;
+  }
+  .bills-filter-panel .bills-filters-body {
+    display: block !important;
+  }
+}
+
+/* ---------- 3. 视觉靠拢参考：暖色强调 / 圆角阴影层级 / 留白节奏 ---------- */
+@media (max-width: 768px) {
+  /* 卡片圆角与柔和阴影层级；不动财务语义色 */
+  .content .panel {
+    border-radius: 18px;
+    box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+  }
+  [data-theme="dark"] .content .panel {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  }
+  /* 底部 Tab 激活态改暖色强调 */
+  .mtab-item.active {
+    color: var(--warm-accent-ink) !important;
+    background: var(--warm-accent-soft) !important;
+  }
+  /* 悬浮记账按钮：暖色渐变，仅改配色不改定位（定位继续走 style.css 的 .fab/.fab.fab-menu） */
+  .fab-ball,
+  .fab-menu .fab-ball {
+    background: linear-gradient(135deg, #f59e0b, #ea580c) !important;
+    box-shadow: 0 12px 26px rgba(234, 88, 12, 0.42), 0 2px 6px rgba(15, 23, 42, 0.18) !important;
+  }
+  /* 空状态复用现有 .empty-icon 插画，仅放大并染暖色 */
+  .bills-table-panel .empty-icon {
+    width: 64px;
+    height: 64px;
+    color: var(--warm-accent);
+  }
+}

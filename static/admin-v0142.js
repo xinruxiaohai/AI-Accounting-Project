@@ -246,7 +246,7 @@
     imageFile: null,
     searchHooks: []
   };
-  // v0.14.3.1：filter = all | 0（未解决）| 1（已解决），currentId 为详情弹窗当前日志
+  // v0.15：filter = all | 0（未解决）| 1（已解决），currentId 为详情弹窗当前日志
   var logState = { items: null, filter: "all", currentId: null };
 
   function mapBackendStatus(raw, meta) {
@@ -892,7 +892,7 @@
   }
 
   function loadLogs() {
-    // v0.14.3.1：筛选条件透传后端 GET /api/admin/problem-logs?status=0|1
+    // v0.15：筛选条件透传后端 GET /api/admin/problem-logs?status=0|1
     var query = logState.filter === "all"
       ? ""
       : "?status=" + encodeURIComponent(logState.filter);
@@ -929,7 +929,7 @@
     return null;
   }
 
-  /* ---------- v0.14.3.1：日志详情磨砂 Modal + 状态流转 ---------- */
+  /* ---------- v0.15：日志详情磨砂 Modal + 状态流转 ---------- */
   function buildLogDetailModal() {
     if ($("v142-log-detail-modal")) { return; }
     var modal = document.createElement("div");
@@ -1116,7 +1116,7 @@
   }
 
   function buildLogPane() {
-    // v0.14.3.1：模板直出的「全部 / 未解决 / 已解决」筛选栏
+    // v0.15：模板直出的「全部 / 未解决 / 已解决」筛选栏
     bindLogFilter();
     var main = qs("main.admin-page") || qs("main");
     if (!main) { return; }
@@ -1209,7 +1209,7 @@
     openChat: openChat,
     setTicketStatus: setTicketStatus,
     saveLog: saveLog,
-    // v0.14.3.1：日志筛选 / 详情弹窗，方便在控制台或自动化里直接驱动
+    // v0.15：日志筛选 / 详情弹窗，方便在控制台或自动化里直接驱动
     loadLogs: loadLogs,
     openLogDetail: openLogDetail,
     setLogFilter: function (value) {

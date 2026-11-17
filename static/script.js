@@ -7341,13 +7341,50 @@ function compressImageFile(file) {
   });
 }
 
-// 压缩后的最长边：800px 足够认清账单文字，又能把几 MB 的原图压到几十 KB
+// 旧前端压缩参数：只供借贷凭证上传继续复用；AI 截图识别已改为原图直传 + 服务端压缩。
 const SHOT_MAX_SIDE = 800;
 const SHOT_JPEG_QUALITY = 0.82;
 
+/**
+ * v0.15：AI 截图记账改为【原图直传】——不再走 Canvas 缩放/重编码，
+ * 直接把用户选中的 File 读成 dataURL（保留原始 dataURL 前缀与 MIME），
+ * 让视觉模型看到未损失文字细节的原图；压缩推迟到服务端识别成功后进行。
+ */
+function readOriginalImageFile(file) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onerror = function () {
+      reject(new Error("读取图片失败，请重新选择"));
+    };
+    reader.onload = function () {
+      const dataUrl = String(reader.result || "");
+      if (!dataUrl) {
+        reject(new Error("图片内容为空，请重新选择"));
+        return;
+      }
+      // 只读取尺寸用于「识别中」气泡提示，绝不做 canvas.toDataURL 重编码
+      const image = new Image();
+      image.onload = function () {
+        resolve({
+          dataUrl: dataUrl,
+          mime: file.type || "image/jpeg",
+          width: image.naturalWidth || image.width,
+          height: image.naturalHeight || image.height,
+        });
+      };
+      image.onerror = function () {
+        // 尺寸读不到也照样上传原图，不能因为预览失败阻断识别
+        resolve({ dataUrl: dataUrl, mime: file.type || "image/jpeg", width: 0, height: 0 });
+      };
+      image.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /** 截图识别接口：force=true 表示用户已确认「仍然记账」，跳过 10 分钟防重 */
-function postShotImage(compressed, force) {
-  const body = { image: compressed.dataUrl, mime: compressed.mime };
+function postShotImage(original, force) {
+  const body = { image: original.dataUrl, mime: original.mime };
   if (force) {
     body.force = true;
   }
@@ -7371,11 +7408,12 @@ async function uploadShotForAi(file, index, total) {
     bubbleStatus(bubble, "识别中" + progressText + "…");
   }
   try {
-    const compressed = await compressImageFile(file);
+    const original = await readOriginalImageFile(file);
     if (bubble) {
-      bubbleStatus(bubble, "识别中" + progressText + "（" + compressed.width + "×" + compressed.height + "）…");
+      const sizeText = original.width ? "（原图 " + original.width + "×" + original.height + "）" : "";
+      bubbleStatus(bubble, "识别中" + progressText + sizeText + "…");
     }
-    let data = await postShotImage(compressed, false);
+    let data = await postShotImage(original, false);
     // 防重：后端判定 10 分钟内相似账目时不保存，弹窗确认后带 force 重发同一张图
     if (data && data.status === "duplicate") {
       const accepted = await openDuplicateModal(data.duplicate, data.parsed);
@@ -7388,7 +7426,7 @@ async function uploadShotForAi(file, index, total) {
       if (bubble) {
         bubbleStatus(bubble, "已确认，重新识别" + progressText + "…");
       }
-      data = await postShotImage(compressed, true);
+      data = await postShotImage(original, true);
       if (data && data.status === "duplicate") {
         throw new Error("后端仍判定为重复账目，请稍后再试");
       }
@@ -9554,7 +9592,7 @@ function onAiImagePicked(event) {
   }
 })();
 
-/* ==================== v0.14.3.1：对外刷新入口 ==================== */
+/* ==================== v0.15：对外刷新入口 ==================== */
 
 /*
  * 跑马灯（static/marquee-v0143.js）在三种时机要跟服务端对齐一次：
@@ -9581,10 +9619,10 @@ window.__zhRefresh = function (reason) {
   }
   try {
     return Promise.resolve(refresh()).catch(function (error) {
-      console.warn("[v0.14.3.1] 全量刷新失败", reason || "", error);
+      console.warn("[v0.15] 全量刷新失败", reason || "", error);
     });
   } catch (error) {
-    console.warn("[v0.14.3.1] 全量刷新失败", reason || "", error);
+    console.warn("[v0.15] 全量刷新失败", reason || "", error);
     return Promise.resolve();
   }
 };
@@ -12666,6 +12704,41 @@ function readBillsFilterFromInputs() {
   billsFilter.dateTo = ($("bills-date-to") && $("bills-date-to").value) || "";
   billsFilter.amountMin = ($("bills-amount-min") && $("bills-amount-min").value) || "";
   billsFilter.amountMax = ($("bills-amount-max") && $("bills-amount-max").value) || "";
+  updateBillsFilterBadge();
+}
+
+/* v0.15：筛选 chip 上的「已启用条件数」角标（只读取现有 billsFilter，无第二套状态） */
+function updateBillsFilterBadge() {
+  const badge = $("bills-filter-badge");
+  if (!badge) {
+    return;
+  }
+  const keys = ["search", "type", "account", "dateFrom", "dateTo", "amountMin", "amountMax"];
+  let count = 0;
+  keys.forEach(function (key) {
+    if (billsFilter[key] !== "" && billsFilter[key] != null) {
+      count += 1;
+    }
+  });
+  badge.textContent = String(count);
+  if (count > 0) {
+    badge.removeAttribute("hidden");
+  } else {
+    badge.setAttribute("hidden", "");
+  }
+}
+
+/* v0.15：筛选折叠——桌面常驻展开，移动端默认收起；切换只改 class + aria，不动筛选逻辑 */
+function setBillsFilterOpen(open) {
+  const panel = $("bills-filter-panel");
+  const toggle = $("bills-filters-toggle");
+  if (!panel) {
+    return;
+  }
+  panel.classList.toggle("is-filter-open", !!open);
+  if (toggle) {
+    toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
 }
 
 function bindV010Events() {
@@ -12714,7 +12787,20 @@ function bindV010Events() {
       resetBillsFilterInputs();
       buildBillsTree();
       renderBillsTable();
+      updateBillsFilterBadge();
     });
+  }
+
+  // v0.15：筛选 chip 折叠开关。桌面默认展开（chip 由 CSS 隐藏），移动端默认收起。
+  const filterToggle = $("bills-filters-toggle");
+  if (filterToggle) {
+    const isMobile = window.matchMedia && window.matchMedia("(max-width: 768px)").matches;
+    setBillsFilterOpen(!isMobile);
+    filterToggle.addEventListener("click", function () {
+      const panel = $("bills-filter-panel");
+      setBillsFilterOpen(!(panel && panel.classList.contains("is-filter-open")));
+    });
+    updateBillsFilterBadge();
   }
 
   // 年月树
@@ -13142,7 +13228,7 @@ async function submitFeedback(event) {
     const dateInput = $("feedback-date");
     const contactType = $("feedback-contact-type");
     const contactInfo = $("feedback-contact-info");
-    // v0.14.3.1：表单已移除「抄送用户邮箱」开关，payload 不再携带 cc_email
+    // v0.15：表单已移除「抄送用户邮箱」开关，payload 不再携带 cc_email
     const payload = {
       issue_description: issue,
       occur_date: dateInput ? dateInput.value || "" : "",
@@ -13156,7 +13242,7 @@ async function submitFeedback(event) {
     // v0.14.0：用户反馈走独立接口（老的 /api/feedback 是 v0.10 AI 反馈，body.raw_text，不能复用）
     const submitted = await api("/api/user-feedback", jsonOptions("POST", payload));
     resetFeedbackForm();
-    // v0.14.3.1：提交成功后立刻关闭弹窗 + 清空表单 + Toast（三件事一起做）
+    // v0.15：提交成功后立刻关闭弹窗 + 清空表单 + Toast（三件事一起做）
     closeFeedbackModal();
     // v0.15.0：新提交的工单立刻进历史列表，状态默认「待处理」
     cacheSubmittedTicket(issue, submitted);

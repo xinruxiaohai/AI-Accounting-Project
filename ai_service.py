@@ -45,8 +45,12 @@ API_KEY_ENV = "ZHIPU_API_KEY"
 REQUEST_TIMEOUT = 20.0
 # 视觉模型要先把图片编码进上下文，明显比纯文本慢，单独给更长的超时
 VISION_TIMEOUT = 45.0
-# 智谱多模态接口对单张图片有大小限制，前端会先压缩到 1600px / JPEG 0.82，这里再兜一层
-IMAGE_MAX_BYTES = 5 * 1024 * 1024
+# v0.15：改为「原图识别、识别后再压缩落盘」。
+# 5MB 只是告警线（手机原图普遍 < 2MB，超过 5MB 说明可能是相机原片，记日志提醒）；
+# 真正的硬上限放到 20MB：既挡住恶意超大 Base64 打爆内存，又不会把合法原图拦在识别之前。
+# 智谱网关若自身拒绝更大图片，会由 _client().chat.completions.create 抛错，parse_image 转成 502 如实告知。
+IMAGE_WARN_BYTES = 5 * 1024 * 1024
+IMAGE_MAX_BYTES = 20 * 1024 * 1024
 IMAGE_MIME_FALLBACK = "image/jpeg"
 
 # v0.13.3：新增 invest_buy（买入 / 加仓投资标的）。
@@ -159,7 +163,9 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 【置信度规则】
 - 每一次输出都必须带 confidence，任何意图都不能省略。
-- 这只是「模型自评」，用于前端提醒用户核对；不要因为怕错就一律写低分。
+- 这只是「模型自评」，用于前端提醒用户核对；不要因为怕错就一律写低分，也不要一律写高分。
+- **必须拉开档位**：金额、分类、时间、对方都从原话明确确定 → 90 以上；只要有一处靠推断 / 默认账户 / 猜测补全 → 70-84；语句含糊、像闲聊、金额缺失或看不懂 → 60 以下；明确听不懂（问句 / 打招呼 / 无金额无意图的编号） → 30 以下。
+- 示例对照：「买奶茶20元」给 95；「那个啥大概几十块吧」给 55；「订单202611170088」「今天天气不错」这类给 20。
 
 【金额提取强约束（历史踩坑最多，务必遵守）】
 - 金额只认「带货币单位」或明显在花钱语境里的数字：数字后面紧跟 元 / 块 / ￥ / ¥，或句子里有「花了、买了、付了、垫付、代买、报销、借、还」等动作时代表钱的那个数。
@@ -167,8 +173,14 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
   「测试乙41215 买了奶茶20元」→ amount 是 20，测试乙41215 是人名，原样保留，绝不拆成 6607712.5 之类；
   「3月8日买花38元」→ amount 是 38，日期里的 3、8 不是金额；
   「给小王转500」→ amount 是 500，小王不是数字。
-- 一句话里有多个数字时，取真正要记的那一笔金额；手续费单独填 fee。
+- 一句话里有多个数字时，取真正要记的那一笔金额；手续费单独填 fee。**绝不能把多笔金额相加**：「吃饭花了68块，还买了瓶水3块」amount 是 68（主笔），不是 71；只把明确标为手续费的数放进 fee。
 - 人名一律原样保留：不得删字、不得去掉「测试」等前缀、不得把名字里的数字挪进 amount。
+- **中文大写/口语金额按数值填**：「两元」=2、「一块五」=1.5、「十元」=10、「一百二」=120、「三块五」=3.5、「两百五十」=250。
+
+【时间格式归一（务必遵守）】
+- date 统一输出 "YYYY-MM-DD HH:MM"。用户口语里的「2026.11.17」「2026/11/17」「11月17日」都要写成 2026-11-17；「18点30分」「18点30」「下午6点30」都要写成 18:30（24 小时制，下午需 +12）。
+- 只有日期没有时刻时补 " 00:00"；有明确时刻必须用原话的时刻，不要用当前时间覆盖。
+- 示例：「时间是2026.11.17 18点30分」→ date 是 "2026-11-17 18:30"。
 
 【意图判断】
 - action = "record"：用户在记一笔自己的收支、替别人代买/垫付，或账户转账，例如「昨天打车30」「工资到账8000」「帮同事代买咖啡30」。
@@ -184,16 +196,21 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 - 分类：打车/地铁/公交 → 交通；吃饭/外卖/奶茶/咖啡 → 餐饮；买菜/日用品/超市 → 购物；房租/水电/话费 → 居住；工资/奖金/退款 → 对应收入类分类；判断不了填 "其他"。
 - 分类必须是标准分类名（交通/餐饮/购物/居住/工资/其他 等），绝对不要把商户名当分类（「滴滴」「星巴克」是商户，不是分类）。
 - 账户（v0.11.5）：account 优先从 Prompt 末尾的【用户真实账户列表】里选；用户说的是具体子账户（「微信零钱」「支付宝余额」「招行卡尾号1234」）时原样保留，不要向上合并成大类账户；用户说的是账户名的错别字/同音字（「威信」「薇信」）也先原样输出，后端会统一纠正并提示。
+- **只要句子里出现了付款渠道或账户/商户名（微信、支付宝、银行卡、信用卡、储蓄卡、现金、屈臣氏等），account 就必须填该名称，绝不能填空字符串**；只有完全没提到任何渠道时才填空。
+- **子账户整段原样保留**：「微信零钱」就填「微信零钱」，绝不截成「微信」；「支付宝余额」就填「支付宝余额」。品牌+后缀是一个完整账户名。
+- **还款/商户场景也算账户**：「信用卡还款1000」account 填 "信用卡"；「在屈臣氏买洗发水」account 填 "屈臣氏"；「京东下单」填 "京东"。只要原话点名了付款渠道或商户，就填进 account。
 - 类型：「花了/买了/付了」→ expense；「收到/工资/奖金/退款」→ income；「从A转到B」→ transfer，account 转出、to_account 转入；多个金额取最主要那笔，手续费单独填 fee。
 - 时间：今天是 {today}（{weekday}），当前时间 {now}；「昨天/前天/上周五」换算成具体日期；没提时间用 {now}；只提日期时刻填 00:00。
 - 报销（代买/垫付）：用户替别人或公司花钱、之后要收回来时，is_reimbursable 填 true；
   「帮小明买咖啡30」→ contact_name 是 "小明"；「帮同事代买咖啡30」「给公司垫付打车50 报销」没有具体姓名 → contact_name 留 "";
   普通自己花钱记账 is_reimbursable 填 false、contact_name 留 ""。
 - 报销和借贷别混淆：之后对方要「还我」的是 debt；我先垫钱、走公司/个人报销流程的是 record + is_reimbursable。
+- **补充修改时的覆盖优先**：如果这次输入带有原账单上下文，且用户明确说「改成 X / 换成 X / 用 X 付的 / 金额改成 X」，这个点名的新值必须覆盖原账单的旧值（如「改成用支付宝付的」→ account 必须是"支付宝"，不能沿用原来的"微信"）；只有用户没提到的字段才继承原值。点名覆盖优先于继承。
 
 【debt 规则】
 - type：我借给别人 → "lend"；我向别人借 → "borrow"。
 - contact_name 必填，从原句提取人名；姓名必须原样保留、不得删字（如「借给小王20元」→ "小王"）。
+- **人名连同身份前缀整段保留**：「借给同事小王20元」→ contact_name 是 "同事小王"（不是"小王"）；「借给大学室友阿杰」→ "大学室友阿杰"；「转房租给房东李姐」→ "房东李姐"。姓名前的称呼/身份是名字的一部分，绝不截掉。
 - identity/phone/wechat/name 留空；is_reimbursable 填 false。
 - account 是资金账户，没提填 ""（后端用默认账户）；date 规则同记账。
 
@@ -248,53 +265,84 @@ SYSTEM_PROMPT = """你是中文记账助手，先判断用户这句话的意图�
 
 用户：从微信转入5000到天天基金
 输出：{{"action": "record", "amount": 5000, "type": "transfer", "category": "", "account": "微信", "to_account": "天天基金", "fee": 0, "date": "{now}", "note": "微信转入天天基金", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 92}}
+
+用户：微信零钱付款30元
+输出：{{"action": "record", "amount": 30, "type": "expense", "category": "其他", "account": "微信零钱", "to_account": "", "fee": 0, "date": "{now}", "note": "微信零钱付款", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
+用户：借给同事小王20元
+输出：{{"action": "debt", "amount": 20, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "{now}", "note": "借给同事小王20元", "is_reimbursable": false, "contact_name": "同事小王", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 95}}
+
+用户：这个是账单类型是转账，对象是叶宇斌，金额为2元，时间是2026.11.17 18点30分
+输出：{{"action": "record", "amount": 2, "type": "transfer", "category": "", "account": "", "to_account": "叶宇斌", "fee": 0, "date": "2026-11-17 18:30", "note": "转账给叶宇斌", "is_reimbursable": false, "contact_name": "叶宇斌", "identity": "", "phone": "", "wechat": "", "name": "", "invest_name": "", "ticker": "", "shares": 0, "platform": "", "price": 0, "confidence": 92}}
 """
 
 
-VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户会给你一张手机截图，可能是微信/支付宝的支付成功页、账单列表、超市小票、银行短信或聊天转账记录。
+VISION_PROMPT = """你是中文记账助手的「截图识别」模块。用户会给你一张手机截图，可能是微信/支付宝/财付通的支付成功页、账单详情、超市小票、银行短信或聊天转账记录。
 
-【任务】判断这张图是不是一笔可以记账的交易（消费、收入、转账、借贷），是就抽取字段，只输出一个 JSON 对象；不是账单（聊天闲谈、表情包、风景照、无关页面）就输出 {"action": "unknown"}。
+【任务】判断这张图是不是一笔可以记账的交易（消费、收入、转账、借贷），是就抽取字段，只输出一个 JSON 对象；不是账单（聊天闲谈、表情包、风景照、无关页面）就输出 {"action": "unknown", "confidence": 10}。
 
 【输出要求】
 - 不要 Markdown 代码块、不要解释、不要多余文字。
 - 字段键名固定为下面 15 个，不得增删、不得改名；不适用的填空字符串 ""、0 或 false：
   action          字符串，只能是 "record"（记账）、"debt"（借贷）、"unknown"（不是账单/看不清）
   amount          数字，本笔交易金额，必须大于 0，不带货币符号
-  type            只能是 "expense"（支出）、"income"（收入/退款）、"transfer"（账户转账）
-  category        字符串，分类，如 餐饮、交通、购物、居住
+  type            只能是 "expense"（支出）、"income"（收入/退款）、"transfer"（账户转账）；action="debt" 时只能是 "lend"（借出）或 "borrow"（借入），绝不能是 income/expense/transfer
+  category        字符串，标准分类名；action="record" 时**必须非空**，无法归类时必须填 "其他"，绝不能输出空字符串 ""
   account         字符串，付款账户名，截图能看出来才填，否则 ""
-  to_account      字符串，仅转账时填转入账户
+  to_account      字符串，转账时填收款方（人名就填人名）；必须是截图里真实出现的文字，不得编造
   fee             数字，手续费，没有填 0
   date            字符串，交易时间，格式固定 "YYYY-MM-DD HH:MM"；只有日期填 00:00
-  note            字符串，商户/商品名 + 一句话摘要，不超过 30 字
+  note            字符串，商户/商品名 + 一句话摘要，不超过 20 字；不要抄商品编号、单号
   is_reimbursable 布尔值，这张图是帮别人代付/垫付、之后要报销时为 true
-  contact_name    字符串，借贷对象或垫付对象姓名，没有填 ""
+  contact_name    字符串，借贷对象或转账对象姓名，没有填 ""
   identity        字符串，联系人身份，如 同事、同学
   phone           字符串，联系人电话，没有填 ""
   wechat          字符串，联系人微信，没有填 ""
   name            字符串，添加联系人时的姓名，没有填 ""
-  confidence      整数 0-100，你对这张图识别结果的确定程度：金额和分类都清晰可辨时给 90 以上；图糊、金额靠猜、分类靠推断时给低分（低于 80）
+  confidence      整数 0-100，你对这张图识别结果的确定程度：金额/类型/时间/对方姓名全部清晰可辨才给 90 以上；只要有一处靠推断、默认补齐或字段拿不准就给 70-84；图糊、金额靠猜、不是账单、对方名字没抽到就给 60 以下。必须拉开档位，不要一律 90+
 
 【金额识别强约束】
-- 只取「实付/支付/消费/收款/转账」那笔交易金额，例如「-30.00」「实付 ¥30.00」「收款 100.00」。
-- 绝不把余额、优惠券面额、订单号、手机号、时间（12:31）、日期（2026-10-28）里的数字当金额。
-- 图里有多个金额时，取本次实际交易的那一笔；手续费单独放进 fee。
-- 看不清或没有明确金额 → 输出 {"action": "unknown"}，绝不猜。
+- 只取顶部大字「−X.XX」「实付 ¥X.XX」「收款 X.XX」那一笔金额。
+- **绝不把长串数字当金额**：商户单号（XP2026…）、交易单号（4500000…）、转账单号（1000050001…）、条形码下方数字（20261117182834768395）、商品编号、手机号、时间（12:31）、日期（2026-11-15）都不是金额，即使它们中包含看起来像金额的数字片段。
+- 图里有多个金额时，取本次实际交易那一笔；手续费单独放进 fee，不要相加。
+- 看不清或没有明确金额 → 输出 {"action": "unknown", "confidence": 20}，绝不猜。
 
 【类型与分类】
-- 「支付/付款/消费/买了」→ expense；「收款/退款/红包/工资到账」→ income（金额填正数）；「转给/转到」→ transfer。
-- 分类按商户判断：麦当劳/奶茶/咖啡/外卖/餐厅 → 餐饮；滴滴/地铁/公交/加油 → 交通；超市/淘宝/京东/日用品 → 购物；房租/水电/话费 → 居住；判断不了填 "其他"。
-- account：截图里出现的付款方式（零钱、余额、招商银行储蓄卡、花呗）能映射成账户名就填，判断不了填空字符串；用户库里已有具体子账户时（微信零钱、支付宝余额）原样保留，不要合并成「微信」「支付宝」。
+- 截图出现「转账-转给X」「转账给X」「转给X」「转账时间」「转账单号」「转账说明：微信转账」「账单类型是转账」中的任何一个 → type="transfer"，即使金额前带负号、即使状态写「对方已收钱」，也绝不判成 expense。
+- transfer 时 to_account 和 contact_name **必须**从「转给X」逐字提取对方名字（末尾感叹号可去掉），绝不能留空；图上没有明确收款账户名时 to_account 也填对方名字，绝不编造卡号或单号。
+- **人名忠实原图、逐字照抄**：「转账-转给妈呀!」→ "妈呀"（不能是"妈"/"妈妈"）；「转给叶宇彬」→ "叶宇彬"（不能改成同音字"叶宇斌"）。不得改字、不得吞字、不得截成姓或名。
+- 「支付/付款/消费/商户扣款/买了」→ expense；「收款/退款/红包/工资到账」→ income（金额填正数）。
+- **聊天截图判定**：截图主体是对话气泡、内容是「借钱/还钱/欠钱」且能看到金额 → action="debt"，type 只能填 "lend"（借出）或 "borrow"（借入），**绝不能填 income/expense/transfer**；看不出借入还是借出的按 "lend"，对方名字原样填 contact_name。若只是闲聊、没有明确金额 → action="unknown"。
+- 分类映射：拼多多/淘宝/淘宝平台商户/天猫/京东/超市/便利店/全家/屈臣氏/日用品 → 购物；益禾堂/奶茶/咖啡/外卖/餐厅/堂食/餐饮 → 餐饮；滴滴/地铁/公交/加油 → 交通；房租/水电/话费 → 居住；学校/教育 → 其他；**任何 action="record" 的截图 category 都必须非空，判断不了就填 "其他"，绝不留空**。
+- account：付款方式按截图原文完整填写，如「零钱通」「微信零钱」「支付宝余额」「亲属卡(君利洗窗帘～张海军)」「招商银行储蓄卡」，不得向上合并成「微信」「支付宝」或截断后缀。
+- 收款方/商户名填 to_account 时只填名字本身，不要填收单机构（如「财付通支付科技有限公司」不是收款方）。
 
-【时间】
-- 截图里有交易时间就用它；只有日期填 00:00；完全没有时间用当前时间 __NOW__（今天 __TODAY__）。
+【时间格式归一】
+- date 统一输出 "YYYY-MM-DD HH:MM"：「2026年11月17日」「2026.11.17」「11-17」都写成 2026-11-17；「18:30:19」写成 18:30（去秒）。
+- 支付截图取「支付时间」；**转账截图必须取「转账时间」，绝不能取「收款时间」「到账时间」或当前时间**。例：转账时间 11:55:19 + 收款时间 12:19:20 → date="2026-11-13 11:55"。
+- 只有日期填 00:00；完全没有时间用当前时间 __NOW__（今天 __TODAY__）。
 
 【示例】
 截图内容：支付成功 / 麦当劳 / 实付 ¥30.00 / 2026-10-28 12:31
-输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳 午餐", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+输出：{"action": "record", "amount": 30, "type": "expense", "category": "餐饮", "account": "", "to_account": "", "fee": 0, "date": "2026-10-28 12:31", "note": "麦当劳", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+
+截图内容：拼多多 / −11.93 / 支付时间 2026年11月15日 00:49:04 / 商户单号 XP2026111500101405551683001730 / 支付方式 亲属卡(君利洗窗帘～张海军)
+输出：{"action": "record", "amount": 11.93, "type": "expense", "category": "购物", "account": "亲属卡(君利洗窗帘～张海军)", "to_account": "拼多多", "fee": 0, "date": "2026-11-15 00:49", "note": "拼多多", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+
+截图内容：淘宝平台商户 / −7.11 / 支付时间 2026年11月12日 23:08:08 / 交易单号 4500000397202611123711908057 / 商户单号 11230600726111249776230604367
+输出：{"action": "record", "amount": 7.11, "type": "expense", "category": "购物", "account": "", "to_account": "淘宝平台商户", "fee": 0, "date": "2026-11-12 23:08", "note": "淘宝平台商户", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 95}
+
+截图内容：转账-转给妈呀! / −1500.00 / 当前状态 对方已收钱 / 转账说明 微信转账 / 转账时间 2026年11月13日 11:55:19 / 收款时间 2026年11月13日 12:19:20 / 支付方式 零钱通 / 转账单号 1000050001202611130234926904387
+输出：{"action": "record", "amount": 1500, "type": "transfer", "category": "其他", "account": "零钱通", "to_account": "妈呀", "fee": 0, "date": "2026-11-13 11:55", "note": "转账给妈呀", "is_reimbursable": false, "contact_name": "妈呀", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
+
+截图内容：转账 / 转账-转给叶宇彬 / ¥2.00 / 转账时间 2026年11月17日 18:30 / 收款时间 18:46
+输出：{"action": "record", "amount": 2, "type": "transfer", "category": "其他", "account": "", "to_account": "叶宇彬", "fee": 0, "date": "2026-11-17 18:30", "note": "转账给叶宇彬", "is_reimbursable": false, "contact_name": "叶宇彬", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 92}
+
+截图内容：聊天对话 / "上次借你的200记得还我" / 2026-11-15
+输出：{"action": "debt", "amount": 200, "type": "lend", "category": "", "account": "", "to_account": "", "fee": 0, "date": "2026-11-15 00:00", "note": "借出200", "is_reimbursable": false, "contact_name": "", "identity": "", "phone": "", "wechat": "", "name": "", "confidence": 70}
 
 截图内容：一张猫的照片
-输出：{"action": "unknown"}
+输出：{"action": "unknown", "confidence": 10}
 """
 
 
@@ -629,6 +677,45 @@ def _strip_fence(content: str) -> str:
     return cleaned[start : end + 1]
 
 
+def _parse_vision_json(content: str) -> dict[str, Any]:
+    """视觉接口专用 JSON 提取：只取第一个完整平衡对象，容忍尾部多余文字/第二个对象。
+
+    模糊截图时 glm-4v-flash 偶发输出两个 JSON（如先给结果再给「说明」），
+    _strip_fence 的「首个 { 到末个 }」会拼出非法 JSON 导致 502；
+    这里按大括号配平截取第一个对象，保证识别结果本身可用。
+    """
+    cleaned = content.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    start = cleaned.find("{")
+    if start == -1:
+        raise AIServiceError("模型没有返回 JSON：" + cleaned[:120])
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(cleaned)):
+        char = cleaned[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                payload = json.loads(cleaned[start : index + 1])
+                if not isinstance(payload, dict):
+                    raise AIServiceError("视觉模型返回的不是 JSON 对象")
+                return payload
+    raise AIServiceError("视觉模型返回的 JSON 不完整")
+
+
 def _as_amount(value: Any, field: str, minimum: float = 0.0) -> float:
     try:
         number = float(str(value).replace(",", "").replace("¥", "").strip())
@@ -718,10 +805,15 @@ def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
 
     fee = _as_amount(payload.get("fee", 0), "fee")
     to_account = _as_text(payload.get("to_account"))
+    # v0.15 QA 健壮性：转账缺转入账户时不再抛 AIServiceError（那会让接口 502），
+    # 也不整条降级成 unknown 丢掉金额/日期；而是保留为普通支出，让金额、时间等已识别字段不丢，
+    # 并用 degraded_reason 提示用户核对。只动 AI 解析层，不碰写库 / 余额 / 平账逻辑。
+    degraded_reason = ""
     if record_type == "transfer" and not to_account:
-        raise AIServiceError("识别成转账，但没有转入账户")
+        degraded_reason = "识别为转账但缺少转入账户，已暂按支出保留，请核对"
+        record_type = "expense"
 
-    return {
+    result = {
         "amount": amount,
         "type": record_type,
         "category": _normalize_category(payload.get("category")),
@@ -735,6 +827,9 @@ def _normalize_record(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
         "contact_name": _as_text(payload.get("contact_name"))[:50],
         "formula": "",
     }
+    if degraded_reason:
+        result["degraded_reason"] = degraded_reason
+    return result
 
 
 def _normalize_debt(payload: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -992,13 +1087,28 @@ def _normalize_intent(
             "auto_corrected_msg": "",
         }
 
-    result = _normalize_record(payload, now) if action == "record" else None
-    if action == "debt":
-        result = _normalize_debt(payload, now)
-    elif action == "add_contact":
-        result = _normalize_contact(payload)
-    elif action == "invest_buy":
-        result = _normalize_invest(payload, now, accounts, invest_accounts)
+    # v0.15 QA 健壮性兜底：模型字段越界（金额缺失 / 转账无转入账户 / 借贷 type 非法）
+    # 过去会在归一化层抛 AIServiceError，被三条 AI 路由捕获后直接返回 502。
+    # 现在统一降级为 unknown 合法 JSON，并把自评 confidence 压到低分区间——
+    # 保证「永远返回合法 JSON、绝不因模型抽错字段把整条链路打成 502」，
+    # 同时 confidence 落低位可正常触发前端黄牌提醒用户核对。
+    # 注意：这里只动 AI 解析层，不碰任何写库 / 余额 / 平账逻辑。
+    try:
+        result = _normalize_record(payload, now) if action == "record" else None
+        if action == "debt":
+            result = _normalize_debt(payload, now)
+        elif action == "add_contact":
+            result = _normalize_contact(payload)
+        elif action == "invest_buy":
+            result = _normalize_invest(payload, now, accounts, invest_accounts)
+    except AIServiceError as exc:
+        return {
+            "action": "unknown",
+            "confidence": min(confidence, 40),
+            "auto_corrected": [],
+            "auto_corrected_msg": "",
+            "degraded_reason": str(exc),
+        }
 
     corrections = _apply_fuzzy_names(result, action, accounts, contacts)
     result["auto_corrected"] = corrections
@@ -1148,8 +1258,9 @@ def parse_image(
 ) -> dict[str, Any]:
     """识别一张账单截图，返回与 parse_intent 同结构的字段；不是账单返回 {"action": "unknown"}。
 
-    前端已用 Canvas 压缩过图片，这里仍然做一次大小与 Base64 合法性校验，
-    避免把明显超限的图片发给视觉模型导致超时或 413。
+    v0.15 链路：前端直接上传【原图 Base64】，本函数把原图原样送给视觉模型，
+    只在 5MB~20MB 之间记一条告警日志（不拦截）；真正的压缩发生在 app.py
+    识别成功之后的服务端 Pillow 压缩，压缩图才落盘展示。
     """
     raw_base64, detected_mime = _split_data_url(image_base64)
     mime = detected_mime or mime or IMAGE_MIME_FALLBACK
@@ -1162,9 +1273,16 @@ def parse_image(
         raise AIServiceError("图片数据不是合法的 Base64，请重新选择截图")
     if not image_bytes:
         raise AIServiceError("图片内容为空，请重新选择截图")
+    if len(image_bytes) > IMAGE_WARN_BYTES:
+        # 超限只告警不拦截：原图识别优先，避免压缩先损失文字细节。
+        print(
+            "[ai_service] 原图 %.1fMB 超过 %.0fMB 告警线，仍送视觉模型识别；"
+            "识别后的服务端压缩会控制落盘体积"
+            % (len(image_bytes) / 1024.0 / 1024.0, IMAGE_WARN_BYTES / 1024.0 / 1024.0)
+        )
     if len(image_bytes) > IMAGE_MAX_BYTES:
         raise AIServiceError(
-            "图片太大（%.1fMB，上限 %.0fMB），请裁剪或压缩后重试"
+            "图片太大（%.1fMB，硬上限 %.0fMB），请裁剪后重试"
             % (len(image_bytes) / 1024.0 / 1024.0, IMAGE_MAX_BYTES / 1024.0 / 1024.0)
         )
     if not mime.startswith("image/"):
@@ -1197,13 +1315,7 @@ def parse_image(
     if not content:
         raise AIServiceError("视觉模型没有返回内容，请换一张更清晰的截图")
 
-    try:
-        payload = json.loads(_strip_fence(content))
-    except json.JSONDecodeError as error:
-        raise AIServiceError("视觉模型返回的不是合法 JSON：%s" % error)
-
-    if not isinstance(payload, dict):
-        raise AIServiceError("视觉模型返回的不是 JSON 对象")
+    payload = _parse_vision_json(content)
 
     # 复用文本版的归一化：金额校验、日期换算、报销字段、账户模糊匹配都走同一套规则
     return _normalize_intent(payload, moment, accounts, contacts)

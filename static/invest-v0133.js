@@ -695,7 +695,10 @@ function investHoldingRowHtml(holding, plAvailable) {
     investText(holding.id) +
     '" data-platform="' +
     investText(holding.platform_id) +
-    '">' +
+    // 行情同步后这里就是「现价」，CDP 验收直接读 data-price，不靠抓货币符号文案
+    '" data-price="' +
+    investNumber(holding.current_price, 0) +
+    '" tabindex="0" role="button" title="点击查看 K 线">' +
     '<span class="invest-holding-main">' +
     '<span class="invest-holding-name">' +
     name +
@@ -711,6 +714,9 @@ function investHoldingRowHtml(holding, plAvailable) {
     investSharesText(shares) +
     " 份 · 成本 " +
     money(costPrice) +
+    (investNumber(holding.current_price, 0) > 0
+      ? " · 现价 " + money(investNumber(holding.current_price, 0))
+      : "") +
     " · " +
     investAssetLabel(holding.asset_type) +
     "</span>" +
@@ -826,7 +832,7 @@ function investRenderHoldings(board) {
   const total = investTotalMarketValue(board);
   // U2：行内的浮动盈亏要不要显示真实百分比，取决于后端有没有真的接行情；
   // 没接的时候 market_value 是用 cost_price 假算的，盈亏恒为 0.00%（凑出来的）。
-  const plAvailable = Boolean(((board || {}).day_pl || {}).available);
+  const plAvailable = investPlAvailable(board);
   const cost = Number.isFinite(Number(board.total_cost))
     ? cents(board.total_cost)
     : (board.platforms || []).reduce(function (sum, platform) {
@@ -961,6 +967,8 @@ async function renderInvestBoard(accountName) {
     invest.platforms = data.platforms || [];
     investRenderHero(data);
     investRenderHoldings(data);
+    // 看板渲染成功才开自动同步（30 分钟一次，页面隐藏时跳过）
+    investStartQuoteSync();
     // 当前就在流水 Tab 时（比如刷新后仍停在流水）顺手补一次
     if (investActiveTab() === "ledger") {
       await investLoadLedger(true);
@@ -1024,6 +1032,8 @@ function investResetBoard() {
   if (board) {
     board.hidden = true;
   }
+  // 看板收起就停掉自动同步，否则人走了还在后台打东财
+  investStopQuoteSync();
   invest.accountName = "";
   invest.board = null;
   invest.platforms = [];
@@ -1956,13 +1966,16 @@ function investBindBoardEvents() {
     }
     const refreshBtn = event.target.closest("#invest-refresh-btn");
     if (refreshBtn) {
+      event.preventDefault();
       if (investActiveTab() === "ledger") {
         investLoadLedger(true).catch(function () {
           // 忽略
         });
       } else {
-        renderInvestBoard(invest.accountName).catch(function () {
-          // 忽略
+        // v0.15：刷新按钮的语义从「重拉看板」升级成「同步行情价」——
+        // 只改 current_price，份额 / 成本 / 可用资金一律不碰。
+        investSyncQuotes({ manual: true, button: refreshBtn }).catch(function () {
+          // 失败提示已在内部弹 Toast
         });
       }
       return;
@@ -1972,6 +1985,14 @@ function investBindBoardEvents() {
       event.stopPropagation();
       investDeleteHolding(delBtn.getAttribute("data-del-holding"));
       return;
+    }
+    // 点持仓行 → 弹 K 线；行内的删除按钮已经在上面拦掉了
+    const holdingRow = event.target.closest("[data-holding]");
+    if (holdingRow && !event.target.closest("button, a, input, select")) {
+      event.preventDefault();
+      if (investOpenKlineForHolding(holdingRow.getAttribute("data-holding"))) {
+        return;
+      }
     }
     const head = event.target.closest("[data-platform-toggle]");
     if (head) {
@@ -2000,6 +2021,12 @@ function investBindBoardEvents() {
 
   board.addEventListener("keydown", function (event) {
     if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+      return;
+    }
+    const row = event.target.closest("[data-holding]");
+    if (row) {
+      event.preventDefault();
+      investOpenKlineForHolding(row.getAttribute("data-holding"));
       return;
     }
     const head = event.target.closest("[data-platform-toggle]");
@@ -2499,3 +2526,893 @@ function isInvestmentAccount(account) {
 investBindBoardEvents();
 investBindModalEvents();
 investBindGlobalEsc();
+
+/* ==================== K 线弹窗（v0.15） ====================
+ *
+ * 数据源：GET /api/invest/kline（后端 30 分钟服务端缓存 + 东财失败降级模拟曲线）
+ * 图表：本地 static/vendor/echarts.min.js（index.html 已引入，不外网）
+ * 财务色：中国习惯 涨红跌绿
+ */
+
+const INVEST_KLINE_PERIODS = [
+  { id: "day", label: "日K" },
+  { id: "week", label: "周K" },
+  { id: "month", label: "月K" },
+];
+const INVEST_KLINE_LIMITS = { day: 240, week: 180, month: 120 };
+const INVEST_KLINE_STYLE = "/static/invest-kline-v0143.css?v=0.15";
+const INVEST_UP_COLOR = "#e2483d";
+const INVEST_DOWN_COLOR = "#17a06a";
+// 自动同步间隔：30 分钟（测试里可以改 window.INVEST_SYNC_INTERVAL_MS 做短周期验证）
+const INVEST_QUOTE_SYNC_INTERVAL_MS = 30 * 60 * 1000;
+// 手动刷新防抖：1.2 秒内的第二次点击直接吃掉
+const INVEST_QUOTE_DEBOUNCE_MS = 1200;
+
+const investKline = {
+  instance: null,
+  chart: null,
+  code: "",
+  name: "",
+  period: "day",
+  points: [],
+  payload: null,
+  pending: null,
+  seq: 0,
+  visible: false,
+  cache: {},
+};
+
+const investQuoteSync = {
+  timer: null,
+  busy: false,
+  lastAt: 0,
+  lastManualAt: 0,
+  intervalMs: INVEST_QUOTE_SYNC_INTERVAL_MS,
+  visibilityBound: false,
+};
+
+/* ---------- 工具 ---------- */
+
+function investKlineNum(value, fallback) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback || 0;
+}
+
+function investKlinePriceText(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return "—";
+  }
+  return Math.abs(num) >= 100 ? num.toFixed(2) : num.toFixed(3);
+}
+
+function investKlineVolumeText(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) {
+    return "—";
+  }
+  if (num >= 100000000) {
+    return (num / 100000000).toFixed(2) + " 亿";
+  }
+  if (num >= 10000) {
+    return (num / 10000).toFixed(2) + " 万";
+  }
+  return String(Math.round(num));
+}
+
+/** 有没有真实行情：后端接了 day_pl 或者已经有持仓回填了行情价，两者之一即可 */
+function investPlAvailable(board) {
+  if (board && board.day_pl && board.day_pl.available) {
+    return true;
+  }
+  const platforms = (board && board.platforms) || [];
+  for (let i = 0; i < platforms.length; i += 1) {
+    const holdings = platforms[i].holdings || [];
+    for (let j = 0; j < holdings.length; j += 1) {
+      if (holdings[j] && holdings[j].price_source === "market") {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/* ---------- 弹窗骨架 ---------- */
+
+function investKlineEnsureStyle() {
+  if (document.getElementById("invest-kline-style")) {
+    return;
+  }
+  const link = document.createElement("link");
+  link.id = "invest-kline-style";
+  link.rel = "stylesheet";
+  link.href = INVEST_KLINE_STYLE;
+  document.head.appendChild(link);
+}
+
+function investKlineTabsHtml() {
+  return INVEST_KLINE_PERIODS.map(function (item) {
+    const on = item.id === "day";
+    return (
+      '<button type="button" class="ik-period-tab' +
+      (on ? " is-active" : "") +
+      '" role="tab" aria-selected="' +
+      (on ? "true" : "false") +
+      '" data-ik-period="' +
+      item.id +
+      '">' +
+      item.label +
+      "</button>"
+    );
+  }).join("");
+}
+
+function investKlineEnsureModal() {
+  investKlineEnsureStyle();
+  let modal = document.getElementById("invest-kline-modal");
+  if (modal) {
+    return modal;
+  }
+  modal = document.createElement("div");
+  modal.className = "modal fade";
+  modal.id = "invest-kline-modal";
+  modal.tabIndex = -1;
+  modal.setAttribute("aria-hidden", "true");
+  modal.setAttribute("aria-labelledby", "invest-kline-modal-title");
+  modal.innerHTML =
+    '<div class="modal-dialog modal-dialog-centered" role="document">' +
+    '<div class="modal-content">' +
+    '<div class="modal-header">' +
+    '<div class="ik-head-main">' +
+    '<h5 class="ik-title" id="invest-kline-modal-title">' +
+    '<span id="ik-name">K 线</span>' +
+    '<span class="ik-code" id="ik-code"></span>' +
+    "</h5>" +
+    '<div class="ik-price">' +
+    '<span class="ik-price-last" id="ik-last">—</span>' +
+    '<span class="ik-price-change" id="ik-change"></span>' +
+    "</div>" +
+    '<div class="ik-period-tabs" role="tablist" aria-label="K 线周期">' +
+    investKlineTabsHtml() +
+    "</div>" +
+    "</div>" +
+    '<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>' +
+    "</div>" +
+    '<div class="modal-body">' +
+    '<div class="ik-chart-wrap" id="invest-kline-chart-wrap">' +
+    '<div id="invest-kline-chart" role="img" aria-label="K 线图与成交量"></div>' +
+    '<div class="ik-state" id="invest-kline-state"></div>' +
+    "</div>" +
+    '<div class="ik-footnote"><span id="ik-note"></span><span>红涨绿跌 · 可拖动底部缩放条</span></div>' +
+    "</div>" +
+    "</div>" +
+    "</div>";
+  document.body.appendChild(modal);
+
+  modal.addEventListener("click", function (event) {
+    const tab = event.target.closest("[data-ik-period]");
+    if (tab) {
+      event.preventDefault();
+      investLoadKline(tab.getAttribute("data-ik-period"));
+    }
+  });
+  modal.addEventListener("shown.bs.modal", function () {
+    investKline.visible = true;
+    if (investKline.pending) {
+      const payload = investKline.pending;
+      investKline.pending = null;
+      investKlineRender(payload);
+    } else if (investKline.chart) {
+      investKline.chart.resize();
+    }
+  });
+  modal.addEventListener("hidden.bs.modal", function () {
+    investKline.visible = false;
+    if (investKline.chart) {
+      investKline.chart.dispose();
+      investKline.chart = null;
+    }
+  });
+  return modal;
+}
+
+function investKlineModalInstance() {
+  const modal = investKlineEnsureModal();
+  if (!modal || !window.bootstrap) {
+    return null;
+  }
+  if (!investKline.instance) {
+    investKline.instance = window.bootstrap.Modal.getOrCreateInstance(modal);
+  }
+  return investKline.instance;
+}
+
+function investKlineSetActiveTab(period) {
+  const modal = document.getElementById("invest-kline-modal");
+  if (!modal) {
+    return;
+  }
+  modal.querySelectorAll("[data-ik-period]").forEach(function (button) {
+    const on = button.getAttribute("data-ik-period") === period;
+    button.classList.toggle("is-active", on);
+    button.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function investKlineSetHead(code, name, last, percent) {
+  const nameEl = document.getElementById("ik-name");
+  const codeEl = document.getElementById("ik-code");
+  const lastEl = document.getElementById("ik-last");
+  const changeEl = document.getElementById("ik-change");
+  if (nameEl) {
+    nameEl.textContent = name || code || "K 线";
+  }
+  if (codeEl) {
+    codeEl.textContent = code || "";
+  }
+  if (lastEl) {
+    lastEl.textContent =
+      Number.isFinite(Number(last)) && Number(last) > 0 ? investKlinePriceText(last) : "—";
+  }
+  if (changeEl) {
+    if (Number.isFinite(Number(percent))) {
+      const up = Number(percent) > 0;
+      const down = Number(percent) < 0;
+      changeEl.textContent = (up ? "+" : "") + Number(percent).toFixed(2) + "%";
+      changeEl.classList.toggle("is-up", up);
+      changeEl.classList.toggle("is-down", down);
+    } else {
+      changeEl.textContent = "";
+      changeEl.classList.remove("is-up", "is-down");
+    }
+  }
+}
+
+function investKlineShowState(kind, message) {
+  const wrap = document.getElementById("invest-kline-chart-wrap");
+  const stateEl = document.getElementById("invest-kline-state");
+  if (!wrap || !stateEl) {
+    return;
+  }
+  wrap.classList.toggle("is-loading", kind === "loading");
+  wrap.classList.toggle("is-empty", kind === "empty" || kind === "error");
+  if (kind === "loading") {
+    stateEl.innerHTML =
+      '<span class="ik-spinner" aria-hidden="true"></span><span>' +
+      investText(message || "正在加载 K 线…") +
+      "</span>";
+  } else {
+    stateEl.innerHTML =
+      '<div class="ik-state-title">' +
+      investText(kind === "error" ? "K 线加载失败" : "暂无 K 线数据") +
+      "</div><div>" +
+      investText(message || "") +
+      "</div>";
+  }
+}
+
+/* ---------- 图表 ---------- */
+
+function investKlineChartInit() {
+  const el = document.getElementById("invest-kline-chart");
+  if (!el) {
+    return null;
+  }
+  if (!window.echarts) {
+    return null;
+  }
+  let chart = window.echarts.getInstanceByDom(el);
+  if (!chart) {
+    chart = window.echarts.init(el, null, { renderer: "canvas" });
+  }
+  investKline.chart = chart;
+  return chart;
+}
+
+function investKlineOption(points) {
+  const dates = points.map(function (point) {
+    return String(point.date || "");
+  });
+  const candles = points.map(function (point) {
+    return [
+      investKlineNum(point.open),
+      investKlineNum(point.close),
+      investKlineNum(point.low),
+      investKlineNum(point.high),
+    ];
+  });
+  const volumes = points.map(function (point) {
+    const up = investKlineNum(point.close) >= investKlineNum(point.open);
+    return {
+      value: investKlineNum(point.volume),
+      itemStyle: {
+        color: up ? "rgba(226,72,61,0.55)" : "rgba(23,160,106,0.55)",
+      },
+    };
+  });
+  const visibleBars = 90;
+  const start = dates.length > visibleBars ? 100 - (visibleBars / dates.length) * 100 : 0;
+
+  return {
+    animation: false,
+    backgroundColor: "transparent",
+    textStyle: { fontFamily: "inherit" },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "cross", label: { backgroundColor: "#334155" } },
+      backgroundColor: "rgba(255,255,255,0.97)",
+      borderColor: "rgba(15,23,42,0.12)",
+      borderWidth: 1,
+      padding: [8, 10],
+      textStyle: { color: "#0f172a", fontSize: 12 },
+      formatter: function (params) {
+        const list = Array.isArray(params) ? params : [params];
+        let index = -1;
+        for (let i = 0; i < list.length; i += 1) {
+          if (list[i] && list[i].seriesType === "candlestick") {
+            index = list[i].dataIndex;
+            break;
+          }
+        }
+        if (index < 0 || index >= points.length) {
+          return "";
+        }
+        const point = points[index];
+        const prev = index > 0 ? points[index - 1] : null;
+        const prevClose = prev ? investKlineNum(prev.close) : investKlineNum(point.open);
+        const diff = investKlineNum(point.close) - prevClose;
+        const percent = prevClose > 0 ? (diff / prevClose) * 100 : 0;
+        const color = diff >= 0 ? INVEST_UP_COLOR : INVEST_DOWN_COLOR;
+        const rows = [
+          ["日期", String(point.date || "")],
+          ["开盘", investKlinePriceText(point.open)],
+          ["最高", investKlinePriceText(point.high)],
+          ["最低", investKlinePriceText(point.low)],
+          ["收盘", investKlinePriceText(point.close)],
+          [
+            "涨跌幅",
+            '<span style="color:' +
+              color +
+              ';font-weight:600">' +
+              (diff >= 0 ? "+" : "") +
+              percent.toFixed(2) +
+              "%</span>",
+          ],
+          ["成交量", investKlineVolumeText(point.volume)],
+        ];
+        return rows
+          .map(function (row) {
+            return (
+              '<div style="display:flex;justify-content:space-between;gap:16px;line-height:20px">' +
+              '<span style="color:#64748b">' +
+              row[0] +
+              "</span><span>" +
+              row[1] +
+              "</span></div>"
+            );
+          })
+          .join("");
+      },
+    },
+    axisPointer: { link: [{ xAxisIndex: "all" }] },
+    grid: [
+      { left: 62, right: 18, top: 24, height: "56%" },
+      { left: 62, right: 18, bottom: 66, height: 54 },
+    ],
+    xAxis: [
+      {
+        type: "category",
+        data: dates,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: "#cbd5e1" } },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        // 日期刻度完整保留（年-月-日），旋转 + hideOverlap 防重叠
+        axisLabel: { color: "#64748b", fontSize: 10, rotate: 42, hideOverlap: true, margin: 10 },
+      },
+      {
+        type: "category",
+        gridIndex: 1,
+        data: dates,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: "#cbd5e1" } },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: { show: false },
+      },
+    ],
+    yAxis: [
+      {
+        scale: true,
+        splitNumber: 5,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: "rgba(15,23,42,0.08)", type: "dashed" } },
+        axisLabel: { color: "#64748b", fontSize: 11, margin: 10, formatter: investKlinePriceText },
+      },
+      {
+        gridIndex: 1,
+        scale: true,
+        splitNumber: 2,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { show: false },
+        axisLabel: {
+          color: "#94a3b8",
+          fontSize: 10,
+          formatter: function (value) {
+            const num = Number(value);
+            if (num >= 100000000) {
+              return (num / 100000000).toFixed(1) + "亿";
+            }
+            if (num >= 10000) {
+              return (num / 10000).toFixed(0) + "万";
+            }
+            return String(num);
+          },
+        },
+      },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: start, end: 100 },
+      {
+        type: "slider",
+        xAxisIndex: [0, 1],
+        start: start,
+        end: 100,
+        bottom: 14,
+        height: 20,
+        borderColor: "rgba(15,23,42,0.08)",
+        fillerColor: "rgba(67,56,202,0.12)",
+        handleStyle: { color: "#6366f1" },
+        moveHandleSize: 4,
+        textStyle: { color: "#94a3b8", fontSize: 10 },
+      },
+    ],
+    series: [
+      {
+        name: "K线",
+        type: "candlestick",
+        data: candles,
+        itemStyle: {
+          color: INVEST_UP_COLOR,
+          color0: INVEST_DOWN_COLOR,
+          borderColor: INVEST_UP_COLOR,
+          borderColor0: INVEST_DOWN_COLOR,
+        },
+        barMaxWidth: 14,
+      },
+      {
+        name: "成交量",
+        type: "bar",
+        xAxisIndex: 1,
+        yAxisIndex: 1,
+        data: volumes,
+        barMaxWidth: 14,
+      },
+    ],
+  };
+}
+
+function investKlineRender(payload) {
+  const wrap = document.getElementById("invest-kline-chart-wrap");
+  if (!wrap) {
+    return;
+  }
+  const points = (payload && payload.points) || [];
+  investKline.points = points;
+  investKline.payload = payload;
+
+  if (!points.length) {
+    investKlineShowState("empty", "这个标的在所选周期没有历史行情，换个周期试试");
+    return;
+  }
+  const chartEl = document.getElementById("invest-kline-chart");
+  if (!chartEl || !chartEl.clientWidth) {
+    // 弹窗还没展开（宽度 0）时先存着，shown.bs.modal 里再画
+    investKline.pending = payload;
+    return;
+  }
+  const chart = investKlineChartInit();
+  if (!chart) {
+    investKlineShowState("error", "图表库未加载，请刷新页面重试");
+    return;
+  }
+  wrap.classList.remove("is-loading", "is-empty");
+  chart.setOption(investKlineOption(points), true);
+  chart.resize();
+
+  const noteEl = document.getElementById("ik-note");
+  if (noteEl) {
+    const parts = [];
+    parts.push(String(payload && payload.count ? payload.count : points.length) + " 根");
+    if (payload && payload.degraded) {
+      parts.push("数据源降级：本地模拟曲线");
+    } else if (payload && payload.source === "eastmoney-fund") {
+      parts.push("场外基金净值");
+    }
+    noteEl.textContent = parts.join(" · ");
+  }
+}
+
+/* ---------- 加载与交互 ---------- */
+
+async function investLoadKline(period) {
+  const next = INVEST_KLINE_LIMITS[period] ? period : "day";
+  investKline.period = next;
+  investKlineSetActiveTab(next);
+  const code = investKline.code;
+  if (!code) {
+    return;
+  }
+  const limit = INVEST_KLINE_LIMITS[next];
+  const cacheKey = code + "|" + next + "|" + limit;
+  if (investKline.cache[cacheKey]) {
+    investKlineApplyPayload(investKline.cache[cacheKey]);
+    return;
+  }
+
+  investKlineShowState("loading", "正在加载 K 线…");
+  const seq = investKline.seq + 1;
+  investKline.seq = seq;
+  try {
+    const data = await api(
+      "/api/invest/kline?code=" +
+        encodeURIComponent(code) +
+        "&period=" +
+        encodeURIComponent(next) +
+        "&limit=" +
+        limit
+    );
+    if (seq !== investKline.seq || code !== investKline.code) {
+      return;
+    }
+    investKline.cache[cacheKey] = data;
+    investKlineApplyPayload(data);
+  } catch (error) {
+    if (seq !== investKline.seq) {
+      return;
+    }
+    const message = error && error.message ? error.message : "请稍后重试";
+    investKlineShowState("error", message);
+    toast("K 线加载失败：" + message, "error");
+  }
+}
+
+function investKlineApplyPayload(payload) {
+  const points = (payload && payload.points) || [];
+  const last = points.length ? points[points.length - 1] : null;
+  let percent = null;
+  if (points.length >= 2) {
+    const prevClose = investKlineNum(points[points.length - 2].close);
+    if (prevClose > 0) {
+      percent = ((investKlineNum(last.close) - prevClose) / prevClose) * 100;
+    }
+  }
+  investKlineSetHead(
+    investKline.code,
+    (payload && payload.name) || investKline.name,
+    last ? last.close : null,
+    percent
+  );
+  investKlineRender(payload);
+}
+
+function openInvestKline(code, name) {
+  const ticker = String(code || "").trim();
+  if (!ticker) {
+    toast("这个持仓没有标的代码，看不到 K 线", "warn");
+    return false;
+  }
+  const instance = investKlineModalInstance();
+  if (!instance) {
+    toast("K 线弹窗组件未就绪，请刷新页面重试", "error");
+    return false;
+  }
+  investKline.code = ticker;
+  investKline.name = String(name || "").trim();
+  investKline.period = "day";
+  investKline.points = [];
+  investKline.pending = null;
+  investKlineSetActiveTab("day");
+  investKlineSetHead(ticker, investKline.name, null, null);
+  const noteEl = document.getElementById("ik-note");
+  if (noteEl) {
+    noteEl.textContent = "";
+  }
+  instance.show();
+  investLoadKline("day");
+  return true;
+}
+
+function investOpenKlineForHolding(holdingId) {
+  const target = String(holdingId || "");
+  let found = null;
+  (invest.platforms || []).forEach(function (platform) {
+    (platform.holdings || []).forEach(function (holding) {
+      if (String(holding.id) === target) {
+        found = holding;
+      }
+    });
+  });
+  if (!found) {
+    return false;
+  }
+  const ticker = String(found.ticker || "").trim();
+  if (!ticker) {
+    toast("这个持仓没有标的代码，看不到 K 线", "warn");
+    return false;
+  }
+  return openInvestKline(ticker, found.name);
+}
+
+function investKlineRefreshOpen() {
+  if (!investKline.visible || !investKline.code) {
+    return;
+  }
+  Object.keys(investKline.cache).forEach(function (key) {
+    if (key.indexOf(investKline.code + "|") === 0) {
+      delete investKline.cache[key];
+    }
+  });
+  investLoadKline(investKline.period);
+}
+
+/* ---------- 行情同步 ---------- */
+
+function investPatchHoldingRow(pane, holding, plAvailable, hidden) {
+  if (!pane || !holding) {
+    return;
+  }
+  const row = pane.querySelector('.invest-holding[data-holding="' + String(holding.id) + '"]');
+  if (!row) {
+    return;
+  }
+  const price = investNumber(holding.current_price, 0);
+  row.setAttribute("data-price", String(price));
+  const marketValue = investHoldingMarketValue(holding);
+  const costTotal = investNumber(holding.cost_total, 0);
+  const profit = cents(marketValue - costTotal);
+  const profitPercent = costTotal > 0 ? cents((profit / costTotal) * 100) : 0;
+
+  const valueEl = row.querySelector(".invest-holding-value");
+  if (valueEl) {
+    valueEl.textContent = hidden ? "¥••••" : money(marketValue);
+  }
+  const costEl = row.querySelector(".invest-holding-cost");
+  if (costEl) {
+    costEl.className =
+      "invest-holding-cost" +
+      (plAvailable === false ? "" : profit > 0 ? " is-up" : profit < 0 ? " is-down" : "");
+    costEl.textContent =
+      plAvailable === false
+        ? INVEST_UNKNOWN_AMOUNT
+        : (profit >= 0 ? "+" : "-") +
+          money(Math.abs(profit)) +
+          " (" +
+          (profit >= 0 ? "+" : "-") +
+          Math.abs(profitPercent).toFixed(2) +
+          "%)";
+  }
+  const subEl = row.querySelector(".invest-holding-sub");
+  if (subEl && price > 0) {
+    subEl.textContent =
+      investSharesText(investNumber(holding.shares, 0)) +
+      " 份 · 成本 " +
+      money(investNumber(holding.cost_price, 0)) +
+      " · 现价 " +
+      money(price) +
+      " · " +
+      investAssetLabel(holding.asset_type);
+  }
+}
+
+function investPatchSummary(pane, board) {
+  const summary = pane ? pane.querySelector(".invest-summary") : null;
+  if (!summary) {
+    return;
+  }
+  const total = investTotalMarketValue(board);
+  const cost = Number.isFinite(Number(board.total_cost))
+    ? cents(board.total_cost)
+    : (board.platforms || []).reduce(function (sum, platform) {
+        return (
+          sum +
+          (platform.holdings || []).reduce(function (inner, holding) {
+            return inner + investNumber(holding.cost_total, 0);
+          }, 0)
+        );
+      }, 0);
+  const profit = cents(total - cost);
+  const hidden = investState().amountHidden;
+  summary.innerHTML =
+    '<span class="invest-summary-item">总市值 <strong>' +
+    (hidden ? "¥••••" : money(total)) +
+    "</strong></span>" +
+    '<span class="invest-summary-item">投入成本 <strong>' +
+    (hidden ? "¥••••" : money(cost)) +
+    "</strong></span>" +
+    '<span class="invest-summary-item">浮动盈亏 <strong class="' +
+    (profit > 0 ? "is-up" : profit < 0 ? "is-down" : "") +
+    '">' +
+    (hidden ? "¥••••" : (profit >= 0 ? "+" : "-") + money(Math.abs(profit))) +
+    "</strong></span>";
+}
+
+function investPlatformMarketValue(platform) {
+  return (platform.holdings || []).reduce(function (sum, holding) {
+    return sum + investHoldingMarketValue(holding);
+  }, 0);
+}
+
+/**
+ * 用刚拉到的看板数据就地更新价格，不重建整块 DOM。
+ * 只有数字变了，用户正在看的折叠状态 / 滚动位置 / 焦点全都不动。
+ */
+function investApplyBoardQuotes(board) {
+  if (!board) {
+    return;
+  }
+  invest.board = board;
+  invest.platforms = board.platforms || [];
+  investRenderHero(board);
+  const pane = investEl("invest-pane-holdings");
+  if (!pane) {
+    return;
+  }
+  const hidden = investState().amountHidden;
+  const plAvailable = investPlAvailable(board);
+  (invest.platforms || []).forEach(function (platform) {
+    const platformEl = pane.querySelector(
+      '.invest-platform[data-platform="' + String(platform.id) + '"]'
+    );
+    if (platformEl) {
+      const valueEl = platformEl.querySelector(".invest-platform-value");
+      if (valueEl) {
+        const value = investPlatformMarketValue(platform);
+        valueEl.textContent = hidden ? "¥••••" : money(value);
+      }
+    }
+    (platform.holdings || []).forEach(function (holding) {
+      investPatchHoldingRow(pane, holding, plAvailable, hidden);
+    });
+  });
+  investPatchSummary(pane, board);
+}
+
+function investQuoteIntervalMs() {
+  const override = Number(window.INVEST_SYNC_INTERVAL_MS);
+  if (Number.isFinite(override) && override > 0) {
+    return override;
+  }
+  return INVEST_QUOTE_SYNC_INTERVAL_MS;
+}
+
+/**
+ * 同步持仓行情价（只改 current_price）。
+ * @param {object} options { manual, button }
+ */
+async function investSyncQuotes(options) {
+  const opts = options || {};
+  const manual = Boolean(opts.manual);
+  const account = invest.accountName;
+  if (!account) {
+    if (manual) {
+      toast("请先在左侧选一个投资账户", "warn");
+    }
+    return null;
+  }
+  if (investQuoteSync.busy) {
+    return null;
+  }
+  const now = Date.now();
+  if (manual && now - investQuoteSync.lastManualAt < INVEST_QUOTE_DEBOUNCE_MS) {
+    return null; // 防抖：连点第二下直接吃掉
+  }
+  if (manual) {
+    investQuoteSync.lastManualAt = now;
+  }
+  investQuoteSync.busy = true;
+
+  const button = opts.button || investEl("invest-refresh-btn");
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.setAttribute("aria-busy", "true");
+  }
+
+  try {
+    const data = await api("/api/invest/quotes/sync", jsonOptions("POST", { account: account }));
+    investQuoteSync.lastAt = Date.now();
+    let board = null;
+    try {
+      board = await investFetchBoard(account);
+    } catch (error) {
+      board = null;
+    }
+    if (invest.accountName === account) {
+      if (board) {
+        investApplyBoardQuotes(board);
+      }
+      investKlineRefreshOpen();
+    }
+    if (manual) {
+      const updated = Number(data && data.updated ? data.updated : 0);
+      const degraded = Boolean(data && data.degraded);
+      if (updated > 0) {
+        toast(
+          "行情已更新（" + updated + " 个持仓）" + (degraded ? "，数据源降级" : ""),
+          degraded ? "warn" : "success"
+        );
+      } else {
+        toast(
+          (data && data.notice ? String(data.notice) : "行情已更新") +
+            (degraded ? "，数据源降级" : ""),
+          degraded ? "warn" : "success"
+        );
+      }
+    }
+    return data;
+  } catch (error) {
+    if (manual) {
+      toast("行情同步失败：" + (error && error.message ? error.message : "请稍后重试"), "error");
+    }
+    return null;
+  } finally {
+    investQuoteSync.busy = false;
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.removeAttribute("aria-busy");
+    }
+  }
+}
+
+function investStopQuoteSync() {
+  if (investQuoteSync.timer) {
+    window.clearInterval(investQuoteSync.timer);
+    investQuoteSync.timer = null;
+  }
+}
+
+function investOnVisibilityChange() {
+  if (document.hidden || !invest.accountName) {
+    return;
+  }
+  const interval = investQuoteSync.intervalMs || investQuoteIntervalMs();
+  if (Date.now() - investQuoteSync.lastAt >= interval) {
+    investSyncQuotes({ manual: false }).catch(function () {
+      // 静默失败：自动同步不打扰用户
+    });
+  }
+  // 后台标签的 timer 可能被浏览器节流，回到前台重挂一次，保证节奏不漂
+  investStartQuoteSync();
+}
+
+function investStartQuoteSync() {
+  investStopQuoteSync();
+  const interval = investQuoteIntervalMs();
+  investQuoteSync.intervalMs = interval;
+  investQuoteSync.timer = window.setInterval(function () {
+    if (document.hidden || !invest.accountName) {
+      return;
+    }
+    investSyncQuotes({ manual: false }).catch(function () {
+      // 静默失败
+    });
+  }, interval);
+  if (!investQuoteSync.visibilityBound) {
+    investQuoteSync.visibilityBound = true;
+    document.addEventListener("visibilitychange", investOnVisibilityChange);
+    window.addEventListener("pagehide", investStopQuoteSync);
+  }
+}
+
+window.investOpenKlineForHolding = investOpenKlineForHolding;
+window.investOpenKline = openInvestKline;
+window.investSyncQuotes = investSyncQuotes;
+window.investStartQuoteSync = investStartQuoteSync;
+window.investStopQuoteSync = investStopQuoteSync;
+window.investKlineState = investKline;
+window.investQuoteSyncState = investQuoteSync;
+

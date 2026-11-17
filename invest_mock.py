@@ -19,7 +19,11 @@
 混在 `fund` 里会让看板的「类型分布」失真。
 """
 
+import datetime
 import difflib
+import hashlib
+import math
+import random
 
 # 50 条常量：基金 / 股票 / ETF / 债券 / 黄金，代码与名称取真实存在的标的，便于手工测试。
 # price 是**参考价**，不是实时净值；接真实行情后整段替换为接口返回值。
@@ -236,3 +240,123 @@ def get_by_ticker(ticker):
         if item["ticker"].lower() == key:
             return _hit(item)
     return None
+
+def display_name(ticker):
+    """按代码取名称；不在本地字典里返回空串（不编名字）。"""
+    item = get_by_ticker(ticker)
+    return item["name"] if item else ""
+
+
+# ==========================================================================
+# v0.14.4：K 线 / 报价的离线兜底
+#
+# 定位：只在东财不可用（断网 / 超时 / 接口改版）时给界面一个「能看、但明确标注模拟」
+# 的曲线，绝不假装是真实行情。同一 (代码, 周期) 由 sha256 定种子，曲线恒定，
+# 回归测试可以直接断言「两次调用完全相同」。
+# ==========================================================================
+
+_KLINE_POINT_DEFAULTS = {"day": 240, "week": 180, "month": 120}
+
+
+def _series_seed(ticker, period):
+    digest = hashlib.sha256(
+        ("%s|%s" % ((ticker or "").strip().upper(), period)).encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def _period_dates(period, count):
+    """从今天往前推 count 个周期，返回升序的 ISO 日期字符串。
+
+    日线跳过周末（与 A 股交易日历的粗略近似）；周线取每周一；月线取每月 1 日。
+    """
+    today = datetime.date.today()
+    dates = []
+    if period == "month":
+        year, month = today.year, today.month
+        for _ in range(count):
+            dates.append(datetime.date(year, month, 1).isoformat())
+            month -= 1
+            if month == 0:
+                month = 12
+                year -= 1
+    elif period == "week":
+        cursor = today - datetime.timedelta(days=today.weekday())
+        for _ in range(count):
+            dates.append(cursor.isoformat())
+            cursor -= datetime.timedelta(days=7)
+    else:
+        cursor = today
+        while len(dates) < count:
+            if cursor.weekday() < 5:
+                dates.append(cursor.isoformat())
+            cursor -= datetime.timedelta(days=1)
+    dates.reverse()
+    return dates
+
+
+def synthetic_kline(ticker, period="day", points=0):
+    """生成确定性的模拟 K 线 [{date, open, close, low, high, volume}]。
+
+    仅用于东财失败时的降级展示；调用方必须在响应里带 degraded=True 让前端提示。
+    """
+    cycle = (period or "day").strip().lower()
+    if cycle not in _KLINE_POINT_DEFAULTS:
+        cycle = "day"
+    try:
+        count = int(points) if points else _KLINE_POINT_DEFAULTS[cycle]
+    except (TypeError, ValueError):
+        count = _KLINE_POINT_DEFAULTS[cycle]
+    count = max(1, min(count, 500))
+
+    known = get_by_ticker(ticker)
+    base = float(known["price"]) if known and float(known.get("price") or 0) > 0 else 10.0
+    base_volume = 1200000 * {"day": 1, "week": 5, "month": 21}[cycle]
+
+    rng = random.Random(_series_seed(ticker, cycle))
+    dates = _period_dates(cycle, count)
+    # 起点压低，让整条曲线自然「涨到今天这个价」，比纯随机游走更像行情
+    price = base * 0.82
+    result = []
+    for index, date in enumerate(dates):
+        drift = 0.0016 + 0.0012 * math.sin(index / 9.0)
+        close = max(0.01, price * (1 + drift + rng.uniform(-0.018, 0.018)))
+        open_price = max(0.01, price * (1 + rng.uniform(-0.008, 0.008)))
+        high = max(open_price, close) * (1 + abs(rng.gauss(0, 0.006)))
+        low = min(open_price, close) * (1 - abs(rng.gauss(0, 0.006)))
+        result.append(
+            {
+                "date": date,
+                "open": round(open_price, 4),
+                "close": round(close, 4),
+                "low": round(low, 4),
+                "high": round(high, 4),
+                "volume": int(base_volume * rng.uniform(0.55, 1.6)),
+            }
+        )
+        price = close
+    return result
+
+
+def quote_batch(codes):
+    """断网兜底报价：用本地参考价，涨跌幅固定 0（不编造当日波动）。"""
+    result = []
+    for code in codes or []:
+        item = get_by_ticker(code)
+        if not item:
+            continue
+        price = round(float(item.get("price") or 0), 4)
+        if price <= 0:
+            continue
+        result.append(
+            {
+                "code": item["ticker"],
+                "name": item["name"],
+                "price": price,
+                "prev_close": price,
+                "change": 0.0,
+                "change_percent": 0.0,
+                "source": "mock",
+            }
+        )
+    return result
