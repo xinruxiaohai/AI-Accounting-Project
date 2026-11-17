@@ -1,0 +1,50 @@
+/* ============================================================
+   v0.15.2 · 实体图标（账户 / 分类）logo 呈现层  —— Agent F
+   ------------------------------------------------------------
+   加载顺序：style.css → ... → v0151-theme.css → biz-v0151.css → 本文件。
+   职责：本地品牌/logo 走 <img> 时用 contain 完整显示，不再被
+   style.css:9071 的 object-fit:cover 裁掉；账户真 logo 自带品牌色，
+   去掉 is-solid 的品牌色圆底；深色主题把浅色圆底压暗一档。
+   只覆盖 .entity-badge 的视觉，不碰布局 / 定位 / 尺寸变量。
+   ============================================================ */
+
+/* 1. 品牌 logo / 彩色分类图：留白 + contain，杜绝拉伸裁切 */
+.entity-badge.has-logo img {
+  width: 76%;
+  height: 76%;
+  object-fit: contain;
+  display: block;
+}
+
+/* 2. 账户 variant="solid" 且命中本地 logo：logo 自带品牌色，
+      再叠绿底/蓝底只会糊成一团 —— 改纯白底 + 极淡描边。 */
+.entity-badge.is-solid.has-logo {
+  background: #fff !important;
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+/* 3. 22/24/26px 小尺寸：细节会糊，logo 铺满到 84% 提升可读性 */
+.entity-badge.has-logo.is-tiny img {
+  width: 84%;
+  height: 84%;
+}
+
+/* 4. 深色 / 午夜主题：浅色圆底（如 #fff1e6 / #fee2e2）在深色下
+      会形成刺眼亮块，统一压暗降饱和；真 logo（has-logo）保留原色。
+      选择器按 v0151-theme.css 实际钩子：[data-theme=dark] 兼容旧钩子，
+      [data-skin=dark] / [data-skin=midnight] 为 v0151 六主题真实钩子。 */
+[data-theme="dark"] .entity-badge:not(.has-logo),
+[data-skin="dark"] .entity-badge:not(.has-logo),
+[data-skin="midnight"] .entity-badge:not(.has-logo) {
+  filter: brightness(0.92) saturate(0.9);
+}
+
+/* 4b. 深色主题下账户 solid logo 的白底改深底，避免白圆点突兀；
+       logo 本身靠 contain 居中，深底反而更贴合深色 UI。 */
+[data-skin="dark"] .entity-badge.is-solid.has-logo,
+[data-skin="midnight"] .entity-badge.is-solid.has-logo,
+[data-theme="dark"] .entity-badge.is-solid.has-logo {
+  background: #f1f5f9 !important;
+}
+
+/* 5. 兜底内联描边图标（无 logo 时）维持原有 58% 尺寸，不重复声明 */

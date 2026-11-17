@@ -8119,35 +8119,101 @@ const ICON_PATHS = {
   cloud: '<path d="M7 18a4 4 0 0 1-.5-8A5.5 5.5 0 0 1 17 9.5 4 4 0 0 1 17 18H7Z"/>',
 };
 
+/* v0.15.2 · 分类关键词 → key（具体长词在前，避免被短词抢先命中）。
+   iconKeyOf 仍返回字符串 key，categories.icon_key 语义与表结构不变。 */
 const CATEGORY_ICON_RULES = [
-  ["餐饮", "food"], ["早餐", "food"], ["午餐", "food"], ["晚餐", "food"], ["外卖", "food"], ["零食", "food"], ["咖啡", "food"],
-  ["交通", "transport"], ["打车", "transport"], ["地铁", "transport"], ["公交", "transport"], ["加油", "transport"],
-  ["购物", "shopping"], ["日用", "shopping"], ["服饰", "shopping"], ["数码", "shopping"],
-  ["居住", "home"], ["房租", "home"], ["水电", "home"], ["物业", "home"],
-  ["娱乐", "fun"], ["游戏", "fun"], ["电影", "fun"], ["旅游", "fun"],
-  ["医疗", "medical"], ["药品", "medical"], ["健康", "medical"],
-  ["学习", "study"], ["教育", "study"], ["书籍", "study"],
-  ["人情", "gift"], ["礼物", "gift"], ["红包", "gift"],
-  ["工资", "salary"], ["奖金", "salary"], ["报销", "salary"],
-  ["投资", "invest"], ["理财", "invest"], ["利息", "invest"], ["收益", "invest"], ["基金", "invest"],
-  ["退款", "refund"], ["退货", "refund"], ["转账", "transfer"], ["还款", "transfer"],
+  ["早餐", "breakfast"], ["早饭", "breakfast"], ["午餐", "lunch"], ["午饭", "lunch"], ["晚餐", "dinner"], ["晚饭", "dinner"], ["夜宵", "dinner"],
+  ["外卖", "takeout"], ["咖啡", "coffee"], ["星巴克", "coffee"], ["奶茶", "milktea"], ["茶饮", "milktea"],
+  ["零食", "snack"], ["生鲜", "fresh"], ["水果", "fresh"], ["蔬菜", "fresh"], ["超市", "supermarket"], ["便利店", "supermarket"],
+  ["餐饮", "food"], ["美食", "food"], ["餐厅", "food"], ["吃饭", "food"], ["食品", "food"], ["三餐", "food"], ["下馆子", "food"], ["正餐", "food"],
+  ["打车", "taxi"], ["滴滴", "taxi"], ["出租车", "taxi"], ["地铁", "subway"], ["公交", "bus"], ["巴士", "bus"],
+  ["加油", "gas"], ["油费", "gas"], ["停车", "parking"], ["车位", "parking"], ["过路费", "parking"], ["高速费", "parking"],
+  ["交通", "transport"], ["车票", "transport"], ["高铁", "transport"], ["火车", "transport"],
+  ["服饰", "clothing"], ["服装", "clothing"], ["衣服", "clothing"], ["数码", "digital"], ["电器", "digital"], ["电脑", "digital"],
+  ["购物", "shopping"], ["日用", "shopping"], ["网购", "shopping"],
+  ["房租", "rent"], ["租金", "rent"], ["水电", "utilities"], ["水费", "utilities"], ["电费", "utilities"], ["燃气", "gasbill"], ["煤气", "gasbill"], ["物业", "property"],
+  ["居住", "home"], ["住房", "home"], ["房贷", "home"], ["家居", "home"],
+  ["游戏", "game"], ["电影", "movie"], ["影院", "movie"], ["旅游", "travel"], ["旅行", "travel"], ["住宿", "hotel"], ["酒店", "hotel"], ["民宿", "hotel"],
+  ["娱乐", "fun"], ["KTV", "fun"], ["健身", "fitness"], ["运动", "sports"], ["体育", "sports"],
+  ["药品", "medicine"], ["买药", "medicine"], ["药店", "medicine"], ["医疗", "medical"], ["医院", "medical"], ["挂号", "medical"], ["体检", "medical"], ["健康", "medical"],
+  ["书籍", "books"], ["图书", "books"], ["课程", "course"], ["培训", "course"], ["学费", "course"], ["学习", "study"], ["教育", "study"],
+  ["红包", "redpacket"], ["礼物", "gift"], ["送礼", "gift"], ["人情", "social"], ["请客", "social"],
+  ["工资", "salary"], ["薪资", "salary"], ["奖金", "bonus"], ["年终奖", "bonus"], ["报销", "reimburse"],
+  ["手续费", "fee"], ["服务费", "fee"], ["税费", "tax"], ["退款", "refund"], ["退货", "refund"], ["转账", "transfer"], ["还款", "transfer"],
+  ["基金", "fund"], ["投资", "invest"], ["收益", "invest"], ["分红", "invest"], ["保险", "insurance"],
+  ["宠物", "pet"], ["母婴", "baby"], ["奶粉", "baby"], ["美容", "beauty"], ["护肤", "beauty"], ["理发", "beauty"],
+  ["汽车", "car"], ["车险", "car"], ["维修", "repair"], ["装修", "renovation"], ["建材", "renovation"],
+  ["订阅", "subscription"], ["会员", "subscription"], ["话费", "telecom"], ["通讯", "telecom"], ["烟酒", "tobacco"], ["捐赠", "donation"], ["公益", "donation"],
 ];
+/* v0.15.2 · 账户关键词 → key。银行具体行名在前，统称在后；京东无官方矢量归 wallet。 */
 const ACCOUNT_ICON_RULES = [
-  ["微信", "wechat"], ["支付宝", "alipay"], ["余额宝", "coin"], ["零钱通", "coin"], ["理财", "coin"], ["基金", "coin"],
-  ["信用卡", "card"], ["花呗", "card"], ["白条", "card"], ["现金", "cash"], ["云闪付", "cloud"],
-  ["银行", "bank"], ["储蓄", "bank"],
+  ["微信", "wechat"], ["亲属卡", "wechat"], ["支付宝", "alipay"], ["余额宝", "coin"], ["零钱通", "coin"], ["朝朝盈", "coin"], ["蚂蚁财富", "fund"], ["中金财富", "stock"],
+  ["花呗", "creditcard"], ["借呗", "creditcard"], ["白条", "creditcard"], ["信用卡", "creditcard"],
+  ["证券", "stock"], ["股票", "stock"], ["场内", "stock"], ["基金", "fund"],
+  ["公积金", "insurance"], ["医保", "insurance"], ["社保", "insurance"], ["保险", "insurance"],
+  ["招商", "bank"], ["招行", "bank"], ["工商", "bank"], ["建设", "bank"], ["建行", "bank"], ["农业银行", "bank"], ["中国银行", "bank"], ["交通银行", "bank"], ["邮储", "bank"], ["邮政储蓄", "bank"], ["银行", "bank"], ["储蓄", "bank"],
+  ["云闪付", "unionpay"], ["银联", "unionpay"], ["美团", "meituan"], ["饿了么", "meituan"],
+  ["paypal", "paypal"], ["抖音", "tiktok"], ["QQ", "qq"], ["京东", "wallet"],
+  ["现金", "cash"], ["理财", "coin"], ["钱包", "wallet"],
 ];
+/* v0.15.2 · 分类配色：覆盖全部 CATEGORY_ICON_RULES key，杜绝回落灰 tag。 */
 const CATEGORY_TONES = {
-  food: ["#f97316", "#fff1e6"], transport: ["#2563eb", "#e8f0fe"], shopping: ["#ec4899", "#fce7f3"],
-  home: ["#8b5cf6", "#f1ebfe"], fun: ["#a855f7", "#f5ecff"], medical: ["#ef4444", "#fee2e2"],
-  study: ["#0ea5e9", "#e0f2fe"], gift: ["#f43f5e", "#ffe4e6"], salary: ["#16a34a", "#dcfce7"],
-  invest: ["#d97706", "#fef3c7"], refund: ["#0d9488", "#ccfbf1"], transfer: ["#6366f1", "#eef2ff"],
-  tag: ["#64748b", "#f1f5f9"],
+  breakfast: ["#f59e0b", "#fef3c7"], lunch: ["#ea580c", "#ffedd5"], dinner: ["#dc2626", "#fee2e2"],
+  takeout: ["#f97316", "#fff7ed"], coffee: ["#92400e", "#fef3c7"], milktea: ["#d97706", "#fef3c7"],
+  snack: ["#eab308", "#fefce8"], fresh: ["#16a34a", "#dcfce7"], supermarket: ["#dc2626", "#fee2e2"],
+  food: ["#f97316", "#fff1e6"], taxi: ["#eab308", "#fefce8"], subway: ["#7c3aed", "#ede9fe"],
+  bus: ["#0284c7", "#e0f2fe"], gas: ["#ea580c", "#ffedd5"], parking: ["#475569", "#f1f5f9"],
+  transport: ["#2563eb", "#e8f0fe"], clothing: ["#db2777", "#fdf2f8"], digital: ["#8b5cf6", "#f1ebfe"],
+  shopping: ["#ec4899", "#fce7f3"], rent: ["#7c3aed", "#ede9fe"], utilities: ["#0ea5e9", "#e0f2fe"],
+  gasbill: ["#f97316", "#fff7ed"], property: ["#6366f1", "#eef2ff"], home: ["#8b5cf6", "#f1ebfe"],
+  game: ["#7c3aed", "#ede9fe"], movie: ["#e11d48", "#ffe4e6"], travel: ["#0ea5e9", "#e0f2fe"],
+  hotel: ["#0891b2", "#cffafe"], fun: ["#a855f7", "#f5ecff"], fitness: ["#059669", "#d1fae5"],
+  sports: ["#16a34a", "#dcfce7"], medicine: ["#dc2626", "#fecaca"], medical: ["#ef4444", "#fee2e2"],
+  books: ["#2563eb", "#dbeafe"], course: ["#4f46e5", "#e0e7ff"], study: ["#0ea5e9", "#e0f2fe"],
+  redpacket: ["#dc2626", "#fef2f2"], gift: ["#f43f5e", "#ffe4e6"], social: ["#f43f5e", "#ffe4e6"],
+  salary: ["#16a34a", "#dcfce7"], bonus: ["#65a30d", "#ecfccb"], reimburse: ["#0d9488", "#ccfbf1"],
+  fee: ["#64748b", "#f1f5f9"], tax: ["#b45309", "#fef3c7"], refund: ["#0d9488", "#ccfbf1"],
+  transfer: ["#6366f1", "#eef2ff"], fund: ["#ca8a04", "#fef9c3"], invest: ["#d97706", "#fef3c7"],
+  insurance: ["#2563eb", "#dbeafe"], pet: ["#f97316", "#ffedd5"], baby: ["#ec4899", "#fce7f3"],
+  beauty: ["#d946ef", "#fae8ff"], car: ["#475569", "#f1f5f9"], repair: ["#78716c", "#f5f5f4"],
+  renovation: ["#ea580c", "#ffedd5"], subscription: ["#8b5cf6", "#ede9fe"], telecom: ["#0284c7", "#e0f2fe"],
+  tobacco: ["#92400e", "#f5f5f4"], donation: ["#e11d48", "#ffe4e6"], tag: ["#64748b", "#f1f5f9"],
 };
+/* v0.15.2 · 账户品牌色：覆盖全部 ACCOUNT_ICON_RULES key。 */
 const ICON_ACCOUNT_COLORS = {
-  wechat: "#07c160", alipay: "#1677ff", bank: "#2f6bff", cash: "#f59e0b",
-  card: "#e11d48", coin: "#d97706", wallet: "#64748b", cloud: "#0ea5e9",
+  wechat: "#07c160", alipay: "#1677ff", unionpay: "#e60012", meituan: "#ffd100", paypal: "#003087",
+  qq: "#12b7f5", tiktok: "#161823", bank: "#2f6bff", creditcard: "#e11d48", cash: "#f59e0b",
+  wallet: "#64748b", coin: "#d97706", fund: "#ca8a04", stock: "#dc2626", insurance: "#2563eb",
 };
+
+/* v0.15.2 · 本地实体图标文件映射：账户走品牌 logo，分类走 twemoji。
+   文件缺失时 iconSrcOf 返回 null，自动回落到 ICON_PATHS 内联描边图（防白屏）。 */
+const ENTITY_ICON_FILES = {
+  account: {
+    wechat: "wechat", alipay: "alipay", unionpay: "unionpay", creditcard: "creditcard",
+    meituan: "meituan", paypal: "paypal", qq: "qq", tiktok: "tiktok", bank: "bank",
+    cash: "cash", wallet: "wallet", coin: "coin", fund: "fund", stock: "stock", insurance: "insurance",
+  },
+  category: {
+    food: "food", breakfast: "breakfast", lunch: "lunch", dinner: "dinner", takeout: "takeout",
+    coffee: "coffee", milktea: "milktea", snack: "snack", fresh: "fresh", supermarket: "supermarket",
+    transport: "transport", taxi: "taxi", subway: "subway", bus: "bus", gas: "gas", parking: "parking",
+    shopping: "shopping", clothing: "clothing", digital: "digital", home: "home", rent: "rent",
+    utilities: "utilities", gasbill: "gasbill", property: "property", fun: "fun", game: "game",
+    movie: "movie", travel: "travel", hotel: "hotel", medical: "medical", medicine: "medicine",
+    fitness: "fitness", sports: "sports", study: "study", books: "books", course: "course",
+    social: "social", gift: "gift", redpacket: "redpacket", salary: "salary", bonus: "bonus",
+    reimburse: "reimburse", invest: "invest", fund: "fund", refund: "refund", transfer: "transfer",
+    fee: "fee", tax: "tax", insurance: "insurance", pet: "pet", baby: "baby", beauty: "beauty",
+    car: "car", repair: "repair", renovation: "renovation", subscription: "subscription",
+    telecom: "telecom", tobacco: "tobacco", donation: "donation", tag: "tag",
+  },
+};
+function iconSrcOf(kind, key) {
+  const map = ENTITY_ICON_FILES[kind];
+  const file = map && map[key];
+  return file ? "/static/icons/entity/" + kind + "/" + file + ".svg" : null;
+}
 
 function iconKeyOf(kind, name) {
   const text = String(name || "");
@@ -8180,21 +8246,27 @@ function iconVectorSvg(key) {
  */
 function entityIconHtml(kind, name, size, variant) {
   const px = Math.max(18, Number(size) || 38);
-  const icon = iconFor(kind, name);
+  const icon = iconFor(kind, name);          // 用户上传图（最高优先级，保持不变）
   const key = iconKeyOf(kind, name);
   const tone = iconToneOf(kind, key);
   const solid = variant === "solid";
   const hasImage = !!(icon && icon.path);
+  const localSrc = hasImage ? null : iconSrcOf(kind, key); // 本地 SVG 文件（次优先）
+  const hasLogo = !!localSrc;
+  const tiny = px <= 24;
   const bg = hasImage ? "#f8fafc" : solid ? tone.solid : tone.bg;
   const fg = hasImage ? "#334155" : solid ? "#ffffff" : tone.fg;
   const inner = hasImage
     ? '<img src="' + escapeHtml(icon.path) + '" alt="" loading="lazy">'
-    : iconVectorSvg(key);
-  return '<span class="entity-badge' + (solid ? " is-solid" : "") + (hasImage ? " has-image" : "") +
+    : hasLogo
+      ? '<img src="' + escapeHtml(localSrc) + '" alt="" loading="lazy">'
+      : iconVectorSvg(key);                 // 文件缺失时内联兜底，防白屏
+  return '<span class="entity-badge' + (solid ? " is-solid" : "") +
+    (hasImage ? " has-image" : "") + (hasLogo ? " has-logo" : "") + (hasLogo && tiny ? " is-tiny" : "") +
     '" style="--badge-size:' + px + "px;background:" + bg + ";color:" + fg + '">' + inner + "</span>";
 }
 
-// 兼容旧调用点：返回裸图标（不带圆形底）。
+// 兼容旧调用点：返回裸图标（不带圆形底）。优先级同 entityIconHtml。
 function iconImgHtml(kind, name, size) {
   const px = Math.max(14, Number(size) || 18);
   const icon = iconFor(kind, name);
@@ -8202,9 +8274,15 @@ function iconImgHtml(kind, name, size) {
     return '<img class="entity-icon" src="' + escapeHtml(icon.path) + '" alt="" style="width:' + px +
       "px;height:" + px + 'px">';
   }
+  const key = iconKeyOf(kind, name);
+  const localSrc = iconSrcOf(kind, key);
+  if (localSrc) {
+    return '<img class="entity-icon" src="' + escapeHtml(localSrc) + '" alt="" style="width:' + px +
+      "px;height:" + px + 'px;object-fit:contain">';
+  }
   return '<svg class="entity-icon" viewBox="0 0 24 24" width="' + px + '" height="' + px +
     '" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    (ICON_PATHS[iconKeyOf(kind, name)] || ICON_PATHS.tag) + "</svg>";
+    (ICON_PATHS[key] || ICON_PATHS.tag) + "</svg>";
 }
 
 async function loadIconLibrary() {
