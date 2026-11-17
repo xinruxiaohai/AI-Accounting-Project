@@ -631,3 +631,13 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **踩坑**：多 agent 并行改同一文件（`ai_service.py`/`app.py`）被覆盖两次——收尾必须 grep 自身标记 + 对方标记双向确认；app.py 图片区与 K 线区共存时，任一 agent 不得整段覆盖对方区块。
 - **版本 / 缓存**：`APP_VERSION_FALLBACK` = v0.15，SW `ai-accounting-v0.15`，模板与 manifest 27 处 `?v=0.15`，旧标记 0；commit `47b50ec` 推 main，云端已部署并核验 `{"version":"v0.15"}`。
 - **依赖**：requirements 新增 `Pillow>=10.0`（不装则压缩降级原图落盘）。
+
+## v0.15.2（多智能体并行三轮收尾：移动端二级页 / 文本召回 / 图像去重 / 图标体系 / 资产页布局）
+
+- **移动端二级页（Agent A，`587e65e`）**：账户详情不再"在下方堆叠出流水"，改为点账户给 `#page-assets` 加 `.is-account-open`，CSS 把**已有的** `.assets-right` 变 `position:fixed;inset:0;z-index:1052`（复用同一份 DOM，不复制详情页）；`.assets-left` 用 `visibility:hidden` 保高度。返回栈统一收敛到 `history.back()` 单一入口 + `popstate` 判定，连点两次只入栈一层；行内三按钮收敛进 `⋯` 菜单；`.main` 与 `#page-assets` 双滚动容器都记录/恢复。P1 让 `#record-detail-modal`/`#stat-detail-modal` 在 ≤768px 全屏化。32/32 断言。
+- **AI 文本识别（Agent B，`7c5e4f5`）**：账户/联系人召回 83.3%→**100%**（包含关系兜底 + 支付宝余额/屈臣氏 few-shot）；unknown 示例 confidence 95→20；无金额改 `need_confirm` 不 502；多轮补改加 `is_revision` 让 `amount=0` 交后端继承，不猜数。
+- **AI 图像识别 + 去重（Agent D，`48a0e5e`+`12467c0`）**：31 张真实截图 字段级 94.5%→**97.3%**、类型 100%、500/502=0；分类改「闭集白名单（取自 `/api/categories`）+ `_clamp_vision_category()` 确定性收敛」，空 0 / 闭集外 0；`trade_no` 入 VISION 输出并落库（28 位漏位仍 72.2%，读错回落三元组不影响正确性）；去重三层落地：`sha256` exact / 三元组 possible / 单号优先，**实测同一笔截图 dHash=4、不同账单 dHash=0，证明整图相似度不可用作判据**；真浏览器 `DOM.setFileInputFiles` 连传两次 6/6。
+- **图标体系（Agent F，`2d34144`）**：`static/icons/entity/{account,category}/*.svg` 15+60 个本地矢量，微信 `#07c160` 双气泡、支付宝 `#1677ff` 方块为官方 logo；`ENTITY_ICON_FILES` + `iconSrcOf()` + `has-logo/is-tiny`，优先级「用户上传图 > 本地 SVG > 旧 `ICON_PATHS` 兜底（21 key 保留）」；静态断言 11/11、CDP 59/59、entity 图标零 404。
+- **资产页布局修复（Agent G 二轮，`1184858`）**：`#biz-v0151-root` 固定 880px 把 `.assets-split` 挤成 0，1440×900 下「我的账户」整块不可见。修法：≥1024px 时 `#page-assets.active{overflow-y:auto}` + `.assets-split{flex:0 0 auto;height:calc(100vh - var(--topbar-h) - 48px)}`，业务面板顺排到下方由整页滚动揭示；顺带修移动端 `.account-row-sub` 被 `white-space:normal` 拆成「储蓄账/户」。
+- **踩坑**：① `.is-entering` 动画的 `transform` 会让 `#page-assets` 成为 `fixed` 包含块，开二级页前必须移除；② `#global-marquee` `z-index:7000` 贴顶 24px，fixed 层需 `--zhz-stack-top-extra` 单独补；③ 手动 patch 模板丢一个 `-->` 会吞掉整段 section；④ `import app` 未设 `ZHZ_SQLITE_PATH` 会重写主库（G/F 各踩一次，均用 `records.db.bak-*` 逐字恢复）；⑤ 多 agent 并行提交导致 `main` 与并行分支分叉，收口必须 ff 对齐后再 bump。
+- **版本 / 缓存**：`APP_VERSION_FALLBACK` = v0.15.2，SW `ai-accounting-v0.15.2` / `ASSET_VERSION=0.15.2`，模板与 manifest 共 33 处 `?v=0.15.2`，旧串残留 0。
