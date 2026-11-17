@@ -1,0 +1,145 @@
+/* ============================================================================
+   v0.15.3 · 设置弹窗定尺 + 侧边栏图标统一
+   ----------------------------------------------------------------------------
+   只放「本轮新增」的覆盖规则，加载顺序在 style.css / v0142.css / v0151-theme.css
+   之后，同权重靠后覆盖，全部不写 !important 压别人。
+   ============================================================================ */
+
+/* ---------- 一、≥1024px：设置弹窗 920×680 固定尺寸 ----------
+   痛点：四个 tab 内容长度差很多，弹窗高度跟着跳（「帮助与反馈」明显更高）。
+   做法：外框固定、内容区独立滚动，tab 条与底部按钮不随内容移动。
+
+   两颗坑：
+   1) Bootstrap 的 .modal-dialog-centered 带 min-height: calc(100% - var(--bs-modal-margin)*2)，
+      只写 height 压不住它，必须把 min-height 一起打平，否则 .modal-content 的 100% 会
+      撑成整屏高而不是 680。
+   2) .modal-dialog-centered 是 display:flex 居中的，flex 子项的 height:100% 在内容较高时
+      会按内容算，所以这里改回 display:block 自己做垂直居中，尺寸才可预测。 */
+@media (min-width: 1024px) {
+  #settings-modal .modal-dialog {
+    display: block;
+    width: 920px;
+    max-width: 920px;
+    height: 680px;
+    min-height: 680px;
+    max-height: 680px;
+    /* 垂直居中 = (视口高 - 680) / 2，视口不够高时至少留 8px */
+    margin: max(8px, calc((100vh - 680px) / 2)) auto;
+  }
+
+  #settings-modal .modal-content {
+    height: 100%;
+    max-height: 100%;
+  }
+
+  /* 内容区：tab 固定、pane 滚动 */
+  #settings-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #settings-modal .settings-tabs {
+    flex: 0 0 auto;
+  }
+
+  #settings-modal .settings-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* 右侧留一点空给滚动条，避免卡片贴住滚动条 */
+    padding-right: 6px;
+    scrollbar-width: thin;
+  }
+
+  #settings-modal .modal-footer {
+    flex: 0 0 auto;
+    /* 「帮助与反馈」页两个按钮都被藏起来，footer 会塌成一条 25px 的空条，
+       底部栏高度一跳，整页的视觉重量也跟着变。钉死最小高度，四个 tab 底部一模一样。 */
+    min-height: 72px;
+    align-items: center;
+  }
+}
+
+/* 视口太矮时的兜底：退化为「限高 + 整体滚动」，绝不让 680 把弹窗顶出屏幕 */
+@media (min-width: 1024px) and (max-height: 760px) {
+  #settings-modal .modal-dialog {
+    height: auto;
+    min-height: 0;
+    max-height: calc(100vh - 32px);
+    margin: 16px auto;
+  }
+}
+
+/* ---------- 二、≤768px：设置弹窗全屏（与 v0.15.2 的账单详情弹窗同一套写法） ---------- */
+@media (max-width: 768px) {
+  #settings-modal .modal-dialog {
+    display: block;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+  }
+
+  #settings-modal .modal-content {
+    height: 100%;
+    /* .modal-dialog-scrollable 会按 --bs-modal-margin 给 .modal-content 算 max-height，
+       实测把 844 的视口压成 812（少 32px），手机上一眼能看出底下露白。这里直接放开。 */
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  #settings-modal .modal-header {
+    padding-top: calc(12px + env(safe-area-inset-top));
+  }
+
+  #settings-modal .modal-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #settings-modal .settings-tabs {
+    flex: 0 0 auto;
+  }
+
+  #settings-modal .settings-pane {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  #settings-modal .modal-footer {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  #settings-modal .modal-footer .btn {
+    flex: 1 1 40%;
+    min-height: 44px;
+  }
+}
+
+/* ---------- 三、侧边栏导航图标：18 → 20px ----------
+   5 个图标要在一眼之内区分「房子 / 钱包 / 清单 / 折线 / 人像」，
+   18px 下线宽 1.8 只剩 1.3px，糊成一团就是用户说的「像占位」。
+   viewBox 仍是 24×24、stroke-width 统一 1.8，只放大渲染尺寸，不改图形坐标系。 */
+.sidebar-nav .nav-icon {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+}
+
+/* 折叠态（侧边栏只有 76px）留一点呼吸位，避免 20px 图标顶到圆角 */
+.app.is-collapsed .sidebar-nav .nav-item {
+  padding-left: 9px;
+  padding-right: 9px;
+}

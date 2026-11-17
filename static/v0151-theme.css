@@ -340,3 +340,307 @@
     max-width: 100%;
   }
 }
+
+/* ============================================================================
+   v0.15.3 · 主题二维模型：主题色(data-skin) × 模式(data-mode)
+   ----------------------------------------------------------------------------
+   背景：v0.15.1 只有 5 套「自带固定深浅」的配色（amber/mint/violet 只有浅色、
+   midnight 只有深色），选了琥珀就没有亮暗可选。本轮拆成两个正交维度：
+     data-skin: classic | amber | mint | violet | midnight
+     data-mode: light   | dark
+   classic 走 style.css 的原有 light/dark 基础盘（data-theme 同步），
+   其余四色在此补齐缺失的那一半。
+
+   写法约定：
+   - 双属性选择器 [data-skin="x"][data-mode="y"] 特异性 (0,2,0)，
+     永远压过 [data-theme="dark"] 与上面单属性的 [data-skin="x"] (0,1,0)，
+     所以不需要 !important，也不会打乱既有覆盖顺序。
+   - 深色档必须把「底色 / 文字 / 线 / 语义色 / 侧栏 / 阴影 / 主视觉」整套给全，
+     否则会与 [data-theme="dark"] 的基础盘混色，出现深底浅卡或黑字黑底。
+   ============================================================================ */
+
+/* ---------- classic × dark：沿用原 [data-skin="dark"] 的品牌底压深一档 ---------- */
+[data-skin="classic"][data-mode="dark"] {
+  --brand-blue: #2563eb;
+  --brand-blue-ink: #93c5fd;
+  --brand-soft: rgba(37, 99, 235, 0.18);
+  --text-on-brand: #ffffff;
+}
+
+/* ---------- 琥珀暖阳 × 深色 ---------- */
+[data-skin="amber"][data-mode="dark"] {
+  color-scheme: dark;
+
+  --brand-blue: #f59e0b;
+  --brand-blue-ink: #fbbf24;
+  --brand-soft: rgba(245, 158, 11, 0.18);
+  --text-on-brand: #1a1206;
+
+  --page-bg: #17120d;
+  --surface: #201a13;
+  --surface-2: #272017;
+  --surface-3: #33281d;
+  --text-main: #f2e7d7;
+  --text-strong: #fbf3e6;
+  --text-muted: #c4ae93;
+  --text-dim: #ac9679;
+  --line: #3a2e21;
+  --line-strong: #4b3b2a;
+
+  --color-expense: #fca5a5;
+  --color-expense-soft: rgba(252, 165, 165, 0.14);
+  --color-expense-strong: #fecaca;
+  --color-income: #6ee7b7;
+  --color-income-soft: rgba(110, 231, 183, 0.14);
+  --color-income-strong: #a7f3d0;
+  --color-transfer: #d6d3d1;
+  --color-transfer-soft: rgba(214, 211, 209, 0.16);
+  --color-transfer-strong: #e7e5e4;
+  --warn: #fcd34d;
+  --surface-soft: rgba(255, 255, 255, 0.08);
+
+  --warm-accent: #fbbf24;
+  --warm-accent-ink: #fcd34d;
+  --warm-accent-soft: rgba(251, 191, 36, 0.16);
+
+  --sidebar-bg: #1a130c;
+  --sidebar-bg-2: #120d07;
+  --sidebar-text: #f4e6d5;
+  --sidebar-text-dim: #b9a082;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.65);
+
+  --hero-bg: linear-gradient(135deg, #7c2d12 0%, #b45309 52%, #f59e0b 100%);
+  --hero-ink: #fff7ed;
+  --hero-ink-dim: rgba(255, 247, 237, 0.84);
+  --focus-ring: #fbbf24;
+}
+
+/* ---------- 薄荷青竹 × 深色 ---------- */
+[data-skin="mint"][data-mode="dark"] {
+  color-scheme: dark;
+
+  --brand-blue: #34d399;
+  --brand-blue-ink: #6ee7b7;
+  --brand-soft: rgba(52, 211, 153, 0.16);
+  --text-on-brand: #04211a;
+
+  --page-bg: #061412;
+  --surface: #0c1f1c;
+  --surface-2: #112724;
+  --surface-3: #173430;
+  --text-main: #d7f0e8;
+  --text-strong: #ecfaf5;
+  --text-muted: #96bcb0;
+  --text-dim: #7fa89b;
+  --line: #1d3a34;
+  --line-strong: #275049;
+
+  --color-expense: #fca5a5;
+  --color-expense-soft: rgba(252, 165, 165, 0.14);
+  --color-expense-strong: #fecaca;
+  --color-income: #6ee7b7;
+  --color-income-soft: rgba(110, 231, 183, 0.14);
+  --color-income-strong: #a7f3d0;
+  --color-transfer: #cbd5e1;
+  --color-transfer-soft: rgba(203, 213, 225, 0.16);
+  --color-transfer-strong: #e2e8f0;
+  --warn: #fcd34d;
+  --surface-soft: rgba(255, 255, 255, 0.08);
+
+  --warm-accent: #2dd4bf;
+  --warm-accent-ink: #5eead4;
+  --warm-accent-soft: rgba(45, 212, 191, 0.14);
+
+  --sidebar-bg: #04100e;
+  --sidebar-bg-2: #030b0a;
+  --sidebar-text: #d7f0e8;
+  --sidebar-text-dim: #8fb3a7;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.65);
+
+  --hero-bg: linear-gradient(135deg, #065f46 0%, #0f766e 52%, #22d3ee 100%);
+  --hero-ink: #ecfeff;
+  --hero-ink-dim: rgba(236, 254, 255, 0.84);
+  --focus-ring: #34d399;
+}
+
+/* ---------- 紫藤雅致 × 深色 ---------- */
+[data-skin="violet"][data-mode="dark"] {
+  color-scheme: dark;
+
+  --brand-blue: #a78bfa;
+  --brand-blue-ink: #c4b5fd;
+  --brand-soft: rgba(167, 139, 250, 0.18);
+  --text-on-brand: #150f26;
+
+  --page-bg: #0e0a1a;
+  --surface: #150f26;
+  --surface-2: #1b1430;
+  --surface-3: #241b3d;
+  --text-main: #e6e0f7;
+  --text-strong: #f4f0ff;
+  --text-muted: #b2a6cf;
+  --text-dim: #9c8fbc;
+  --line: #2b2245;
+  --line-strong: #3a2e5c;
+
+  --color-expense: #fca5a5;
+  --color-expense-soft: rgba(252, 165, 165, 0.14);
+  --color-expense-strong: #fecaca;
+  --color-income: #6ee7b7;
+  --color-income-soft: rgba(110, 231, 183, 0.14);
+  --color-income-strong: #a7f3d0;
+  --color-transfer: #cbd5e1;
+  --color-transfer-soft: rgba(203, 213, 225, 0.16);
+  --color-transfer-strong: #e2e8f0;
+  --warn: #fcd34d;
+  --surface-soft: rgba(255, 255, 255, 0.08);
+
+  --warm-accent: #c4b5fd;
+  --warm-accent-ink: #ddd6fe;
+  --warm-accent-soft: rgba(196, 181, 253, 0.16);
+
+  --sidebar-bg: #100b1f;
+  --sidebar-bg-2: #0a0716;
+  --sidebar-text: #e6e0f7;
+  --sidebar-text-dim: #a99cc8;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.65);
+
+  --hero-bg: linear-gradient(135deg, #4c1d95 0%, #6d28d9 52%, #a78bfa 100%);
+  --hero-ink: #f5f3ff;
+  --hero-ink-dim: rgba(245, 243, 255, 0.84);
+  --focus-ring: #c4b5fd;
+}
+
+/* ---------- 午夜星河 × 浅色（默认深色，但亮色也必须有可用配色） ---------- */
+[data-skin="midnight"][data-mode="light"] {
+  color-scheme: light;
+
+  --brand-blue: #4338ca;
+  --brand-blue-ink: #3730a3;
+  --brand-soft: rgba(67, 56, 202, 0.12);
+  --text-on-brand: #ffffff;
+
+  --page-bg: #f2f5fb;
+  --surface: #ffffff;
+  --surface-2: #f4f7fd;
+  --surface-3: #e7edf9;
+  --text-main: #26314b;
+  --text-strong: #17203a;
+  --text-muted: #5b6a86;
+  --text-dim: #6f7d97;
+  --line: #dbe3f1;
+  --line-strong: #c5d0e6;
+
+  --color-expense: #b91c1c;
+  --color-expense-soft: #fee2e2;
+  --color-expense-strong: #991b1b;
+  --color-income: #047857;
+  --color-income-soft: #d1fae5;
+  --color-income-strong: #065f46;
+  --color-transfer: #475569;
+  --color-transfer-soft: #eef1f7;
+  --color-transfer-strong: #334155;
+  --warn: #b45309;
+  --surface-soft: rgba(15, 23, 42, 0.06);
+
+  --warm-accent: #4f46e5;
+  --warm-accent-ink: #4338ca;
+  --warm-accent-soft: rgba(79, 70, 229, 0.12);
+
+  --sidebar-bg: #1b2440;
+  --sidebar-bg-2: #141b31;
+  --sidebar-text: #dfe6f7;
+  --sidebar-text-dim: #b3bfd8;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(23, 32, 58, 0.08);
+  --shadow-md: 0 6px 20px rgba(23, 32, 58, 0.1);
+  --shadow-lg: 0 18px 44px rgba(23, 32, 58, 0.16);
+
+  --hero-bg: linear-gradient(135deg, #312e81 0%, #4338ca 52%, #6366f1 100%);
+  --hero-ink: #ffffff;
+  --hero-ink-dim: rgba(255, 255, 255, 0.86);
+  --focus-ring: #4f46e5;
+}
+
+/* ============================================================================
+   主题控件：上「外观模式」胶囊 + 下「主题色」五卡
+   ============================================================================ */
+
+.theme-mode {
+  display: inline-flex;
+  /* 不让它被父级 flex 拉满整行：分段控件贴左更自然 */
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.theme-mode-pill {
+  min-width: 92px;
+  min-height: 36px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.theme-mode-pill:hover {
+  color: var(--text-main);
+}
+
+.theme-mode-pill.is-active {
+  background: var(--brand-blue);
+  color: var(--text-on-brand);
+  box-shadow: var(--shadow-sm);
+}
+
+.theme-swatch-note {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+/* 五张主题色卡：自适应列宽，窄屏自动折行，不再写死 3 列 */
+.theme-choice {
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+}
+
+/* 卡片内小预览：浅底 → 主题色 → 深底 三段斜切，
+   一眼看出「同一套主题色既有浅档也有深档」，五张卡也彼此可区分 */
+.theme-swatch-preview {
+  background: linear-gradient(
+    100deg,
+    var(--swatch-a) 0 32%,
+    var(--swatch-b) 32% 64%,
+    var(--swatch-c) 64% 100%
+  );
+}
+
+.theme-swatch[data-theme-choice="classic"] { --swatch-a: #ffffff; --swatch-b: #2563eb; --swatch-c: #131c2b; }
+.theme-swatch[data-theme-choice="amber"] { --swatch-a: #fffdf8; --swatch-b: #c2410c; --swatch-c: #2a1b10; }
+.theme-swatch[data-theme-choice="mint"] { --swatch-a: #ffffff; --swatch-b: #0f766e; --swatch-c: #0c1f1c; }
+.theme-swatch[data-theme-choice="violet"] { --swatch-a: #ffffff; --swatch-b: #7c3aed; --swatch-c: #150f26; }
+.theme-swatch[data-theme-choice="midnight"] { --swatch-a: #f2f5fb; --swatch-b: #4338ca; --swatch-c: #0e1628; }
+

@@ -27,6 +27,8 @@
   <link rel="stylesheet" href="/static/v01435.css?v=0.15.2">
   <!-- v0.15.1：六套主题配色令牌 + 可访问性覆盖层（不 bump 版本串） -->
   <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15.2">
+  <!-- v0.15.3 · Agent A：设置弹窗定尺（920×680）+ 侧边栏图标尺寸，只覆盖不重写 -->
+  <link rel="stylesheet" href="/static/settings-v0152.css?v=0.15.2">
   <!-- BIZ-V0151 业务专项覆盖层（月度结账 / 周期模板 / 报销进阶） -->
   <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15.2">
   <!-- v0.15.2：账户与分类实体图标 logo 呈现层（放在最后覆盖 object-fit） -->
@@ -88,32 +90,34 @@
     <nav class="sidebar-nav">
       <!-- data-page 对应下面 page-xxx 的 id，点一下切换显示。日历已并入首页右栏，不再单列 -->
       <a class="nav-item active" href="#" data-page="home" data-bs-toggle="tooltip" data-bs-placement="right" title="首页看板">
+        <!-- v0.15.3：5 个导航图标改为语义可区分的一组（房子 / 钱包 / 清单 / 折线 / 人像），
+             viewBox 24×24、stroke-width 统一 1.8，纯内联 SVG 不新增图片文件 -->
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path><path d="M9.5 21v-6h5v6"></path>
+          <path d="M3.2 10.8 12 3.6l8.8 7.2"></path><path d="M5.6 9.4V20.4h12.8V9.4"></path><path d="M9.8 20.4v-5.4h4.4v5.4"></path>
         </svg>
         <span>首页</span>
       </a>
       <a class="nav-item" href="#" data-page="assets" data-bs-toggle="tooltip" data-bs-placement="right" title="账户与资产">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="3" y="6.5" width="18" height="12" rx="2.5"></rect><path d="M3 10.5h18"></path><circle cx="16.5" cy="14.5" r="1.2"></circle>
+          <rect x="3.4" y="7.4" width="17.2" height="12.2" rx="2.8"></rect><path d="M6.4 7.4V6.2a2.2 2.2 0 0 1 2.2-2.2h8.1"></path><path d="M14.9 11.6h5.7v3.8h-5.7a1.9 1.9 0 0 1 0-3.8z"></path>
         </svg>
         <span>资产</span>
       </a>
       <a class="nav-item" href="#" data-page="bills" data-bs-toggle="tooltip" data-bs-placement="right" title="账单：年月树 + 高级筛选">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="4" y="3.5" width="16" height="17" rx="2.4"></rect><path d="M8 8h8M8 12h8M8 16h5"></path>
+          <path d="M9 7.4h9.6M9 12h9.6M9 16.6h9.6"></path><circle cx="5.4" cy="7.4" r="1.2"></circle><circle cx="5.4" cy="12" r="1.2"></circle><circle cx="5.4" cy="16.6" r="1.2"></circle>
         </svg>
         <span>账单</span>
       </a>
       <a class="nav-item" href="#" data-page="charts" data-bs-toggle="tooltip" data-bs-placement="right" title="图表看板">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 20V4"></path><path d="M4 20h16"></path><path d="M8 16v-5"></path><path d="M13 16V7"></path><path d="M18 16v-8"></path>
+          <path d="M4.2 3.8v16.4h16"></path><path d="M7.2 15.6 10.9 11l3.1 2.4 5.4-6.2"></path><circle cx="20.4" cy="7.2" r="1.1"></circle>
         </svg>
         <span>图表</span>
       </a>
       <a class="nav-item" href="#" data-page="profile" data-bs-toggle="tooltip" data-bs-placement="right" title="我的">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="8.5" r="3.8"></circle><path d="M4.5 20.5c1.6-3.4 4.3-5 7.5-5s5.9 1.6 7.5 5"></path>
+          <circle cx="12" cy="8.6" r="3.9"></circle><path d="M4.6 20.6c1.5-3.5 4.2-5.2 7.4-5.2s5.9 1.7 7.4 5.2"></path>
         </svg>
         <span>我的</span>
       </a>
@@ -1530,139 +1534,203 @@
           <button type="button" class="settings-tab" data-settings-tab="account"
                   role="tab" aria-selected="false">账户与密码</button>
           <button type="button" class="settings-tab" data-settings-tab="help" role="tab" aria-selected="false">帮助与反馈</button>
-          <!-- v0.14.2：权限管理仅管理员可见，由 user-feedback-v0142.js 校验身份后解除 hidden -->
-          <button type="button" class="settings-tab" data-settings-tab="permissions" role="tab"
-                  aria-selected="false" hidden>权限管理</button>
         </div>
 
         <section id="settings-pane-personal" class="settings-pane">
           <div class="settings-group">
-            <span class="settings-label">主题</span>
-            <!-- v0.15.1：六套主题色卡，全中文标签；键盘 Tab / 方向键可达 -->
-            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题，共六套">
-              <button type="button" class="theme-swatch" data-theme-choice="light" role="radio" aria-checked="false" aria-label="浅色主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>浅色</span></button>
-              <button type="button" class="theme-swatch" data-theme-choice="dark" role="radio" aria-checked="false" aria-label="深色主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>深色</span></button>
+            <span class="settings-label">外观模式</span>
+            <!-- v0.15.3：模式（亮/暗）与主题色（5 套）是两个正交维度，切其一不动其二 -->
+            <div class="theme-mode" id="theme-mode" role="radiogroup" aria-label="外观模式">
+              <button type="button" class="theme-mode-pill" data-mode-choice="light" role="radio" aria-checked="true">☀ 亮色</button>
+              <button type="button" class="theme-mode-pill" data-mode-choice="dark" role="radio" aria-checked="false">☾ 暗色</button>
+            </div>
+            <p class="settings-hint">亮色 / 暗色只改明暗，不会改掉下面选的主题色。</p>
+          </div>
+          <div class="settings-group">
+            <span class="settings-label">主题色</span>
+            <!-- v0.15.3：五套主题色，每套都有亮/暗两档；键盘 Tab / 方向键可达 -->
+            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题色，共五套">
+              <button type="button" class="theme-swatch" data-theme-choice="classic" role="radio" aria-checked="false" aria-label="经典主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>经典</span></button>
               <button type="button" class="theme-swatch" data-theme-choice="amber" role="radio" aria-checked="false" aria-label="琥珀暖阳主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>琥珀</span></button>
               <button type="button" class="theme-swatch" data-theme-choice="mint" role="radio" aria-checked="false" aria-label="薄荷青竹主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>薄荷</span></button>
               <button type="button" class="theme-swatch" data-theme-choice="violet" role="radio" aria-checked="false" aria-label="紫藤雅致主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>紫藤</span></button>
               <button type="button" class="theme-swatch" data-theme-choice="midnight" role="radio" aria-checked="false" aria-label="午夜星河主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>午夜</span></button>
             </div>
-            <p class="settings-hint">点击即生效并记住选择，刷新后保持；首次访问跟随系统深浅。图表颜色同步更新，无需刷新。</p>
+            <p class="settings-hint">点击即生效并记住选择，刷新后保持；五套主题色都支持亮 / 暗两档，图表颜色同步更新无需刷新。</p>
           </div>
           <script>
-          /* v0.15.1 主题控件控制器：只服务本控件，不改 script.js。
-             颜色真源是 v0151-theme.css 的 CSS 变量；window.__chartColors()
-             仍是全站唯一取色出口，这里只把中性色改为实时读 CSS 变量。 */
+          /* v0.15.3 主题控制器：二维模型（主题色 × 亮暗）。
+             颜色真源仍是 v0151-theme.css 的 CSS 变量，window.__chartColors() 仍是全站唯一取色出口。
+             存储两把键：style 沿用 ai-accounting-v0151-theme（旧值 light/dark/amber/... 自动映射），
+             mode 用新键 ai-accounting-v0151-mode —— 切模式不动主题色，切主题色不动模式。 */
           (function () {
             "use strict";
-            var KEY = "ai-accounting-v0151-theme";
-            var THEMES = {
-              light: { mode: "light", label: "浅色" },
-              dark: { mode: "dark", label: "深色" },
-              amber: { mode: "light", label: "琥珀" },
-              mint: { mode: "light", label: "薄荷" },
-              violet: { mode: "light", label: "紫藤" },
-              midnight: { mode: "dark", label: "午夜" }
+            var KEY_SKIN = "ai-accounting-v0151-theme";
+            var KEY_MODE = "ai-accounting-v0151-mode";
+            var SKINS = { classic: "经典", amber: "琥珀", mint: "薄荷", violet: "紫藤", midnight: "午夜" };
+            var SKIN_ORDER = ["classic", "amber", "mint", "violet", "midnight"];
+            var MODE_ORDER = ["light", "dark"];
+            /* v0.15.2 及更早只有一把键，值里混着「主题」与「深浅」两种语义，读到时做一次映射：
+               读不出来（或非法值）就回落 classic + 当前实际模式。 */
+            var LEGACY = {
+              light: ["classic", "light"],
+              dark: ["classic", "dark"],
+              amber: ["amber", "light"],
+              mint: ["mint", "light"],
+              violet: ["violet", "light"],
+              midnight: ["midnight", "dark"]
             };
-            var ORDER = ["light", "dark", "amber", "mint", "violet", "midnight"];
             var root = document.documentElement;
+            var state = { skin: "classic", mode: "light", ready: false, applying: false };
 
-            function stored() {
-              try {
-                var value = localStorage.getItem(KEY);
-                return THEMES[value] ? value : "";
-              } catch (error) { return ""; }
+            function has(map, key) {
+              return !!key && Object.prototype.hasOwnProperty.call(map, key);
             }
+
+            function readStored() {
+              var skin = "";
+              var mode = "";
+              try {
+                var raw = localStorage.getItem(KEY_SKIN);
+                if (has(LEGACY, raw)) { skin = LEGACY[raw][0]; mode = LEGACY[raw][1]; }
+                else if (has(SKINS, raw)) { skin = raw; }
+                var savedMode = localStorage.getItem(KEY_MODE);
+                if (savedMode === "light" || savedMode === "dark") { mode = savedMode; }
+              } catch (error) { /* 隐私模式读不到就全靠回落 */ }
+              if (!skin) { skin = "classic"; }
+              if (!mode) { mode = root.getAttribute("data-mode") === "dark" ? "dark" : "light"; }
+              return { skin: skin, mode: mode };
+            }
+
             function cssVar(name, fallback) {
               try {
                 return getComputedStyle(root).getPropertyValue(name).trim() || fallback;
               } catch (error) { return fallback; }
             }
-            function syncUi(skin, mode) {
+
+            function syncUi() {
               Array.prototype.forEach.call(document.querySelectorAll("[data-theme-choice]"), function (button) {
-                var active = button.getAttribute("data-theme-choice") === skin;
+                var active = button.getAttribute("data-theme-choice") === state.skin;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-checked", active ? "true" : "false");
+                button.tabIndex = active ? 0 : -1;
+              });
+              Array.prototype.forEach.call(document.querySelectorAll("[data-mode-choice]"), function (button) {
+                var active = button.getAttribute("data-mode-choice") === state.mode;
                 button.classList.toggle("is-active", active);
                 button.setAttribute("aria-checked", active ? "true" : "false");
                 button.tabIndex = active ? 0 : -1;
               });
               var moon = document.querySelector(".icon-moon");
               var sun = document.querySelector(".icon-sun");
-              if (moon) moon.classList.toggle("d-none", mode === "dark");
-              if (sun) sun.classList.toggle("d-none", mode !== "dark");
+              if (moon) { moon.classList.toggle("d-none", state.mode === "dark"); }
+              if (sun) { sun.classList.toggle("d-none", state.mode !== "dark"); }
               var meta = document.querySelector('meta[name="theme-color"]');
-              if (meta) meta.setAttribute("content", cssVar("--brand-blue", "#2563eb"));
+              if (meta) { meta.setAttribute("content", cssVar("--brand-blue", "#2563eb")); }
             }
-            function apply(skin, persist) {
-              if (!THEMES[skin]) return;
-              var mode = THEMES[skin].mode;
+
+            /** 唯一写入口：同时落 data-skin / data-mode / data-theme 三个属性 */
+            function apply(skin, mode, persist) {
+              if (!has(SKINS, skin)) { skin = "classic"; }
+              mode = mode === "dark" ? "dark" : "light";
+              state.skin = skin;
+              state.mode = mode;
+              state.applying = true;
+              root.setAttribute("data-skin", skin);
+              root.setAttribute("data-mode", mode);
+              /* data-theme 是既有组件的深浅钩子（style.css 的基础盘 + charts-v013 的观察器），必须同步 */
+              root.setAttribute("data-theme", mode);
               if (persist) {
-                try { localStorage.setItem(KEY, skin); } catch (error) { /* 隐私模式忽略 */ }
+                try {
+                  localStorage.setItem(KEY_SKIN, skin);
+                  localStorage.setItem(KEY_MODE, mode);
+                } catch (error) { /* 隐私模式忽略 */ }
+                /* script.js 的顶栏日月图标与「我的」页三态单选读的是另一把键，顺带写一次保持一致。
+                   这里直接 setItem、不调 applyTheme()：否则它会按 system 再算一遍深浅，把刚选的模式抢走。 */
+                try { localStorage.setItem("ai-accounting-theme", mode); } catch (error) { /* ignore */ }
               }
-              if (root.getAttribute("data-skin") !== skin) root.setAttribute("data-skin", skin);
-              if (root.getAttribute("data-mode") !== mode) root.setAttribute("data-mode", mode);
-              /* 既有组件钩子只认 light/dark；午夜/琥珀等靠 data-skin 覆盖变量 */
-              if (root.getAttribute("data-theme") !== mode) root.setAttribute("data-theme", mode);
-              syncUi(skin, mode);
-              try { if (typeof renderCharts === "function") renderCharts(); } catch (error) { /* 首屏未就绪 */ }
+              syncUi();
+              if (typeof renderCharts === "function") {
+                try { renderCharts(); } catch (error) { /* 首屏图表未就绪 */ }
+              }
+              state.applying = false;
             }
-            function cycle() {
-              var current = root.getAttribute("data-skin") || "light";
-              var next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
-              apply(next, true);
+
+            function toggleMode() {
+              var next = state.mode === "dark" ? "light" : "dark";
+              apply(state.skin, next, true);
               if (typeof toast === "function") {
-                toast("已切换主题：" + THEMES[next].label, "success", { exclusive: true });
+                toast("已切换到" + (next === "dark" ? "暗色" : "亮色") + "模式", "success", { exclusive: true });
               }
             }
+
+            /** 两组控件共用的方向键逻辑：只在组内移动，不跨组 */
+            function bindGroup(id, attr, order, pick) {
+              var group = document.getElementById(id);
+              if (!group) { return; }
+              group.addEventListener("click", function (event) {
+                var button = event.target.closest("[" + attr + "]");
+                if (button) { pick(button.getAttribute(attr)); }
+              });
+              group.addEventListener("keydown", function (event) {
+                var button = event.target.closest("[" + attr + "]");
+                if (!button) { return; }
+                var index = order.indexOf(button.getAttribute(attr));
+                var next = -1;
+                if (event.key === "ArrowRight" || event.key === "ArrowDown") { next = (index + 1) % order.length; }
+                if (event.key === "ArrowLeft" || event.key === "ArrowUp") { next = (index + order.length - 1) % order.length; }
+                if (event.key === "Home") { next = 0; }
+                if (event.key === "End") { next = order.length - 1; }
+                if (next < 0) { return; }
+                event.preventDefault();
+                var target = group.querySelector("[" + attr + '="' + order[next] + '"]');
+                if (target) {
+                  target.focus();
+                  pick(order[next]);
+                }
+              });
+            }
+
             function bind() {
-              var group = document.getElementById("theme-choice");
-              if (group) {
-                group.addEventListener("click", function (event) {
-                  var button = event.target.closest("[data-theme-choice]");
-                  if (button) apply(button.getAttribute("data-theme-choice"), true);
-                });
-                group.addEventListener("keydown", function (event) {
-                  var button = event.target.closest("[data-theme-choice]");
-                  if (!button) return;
-                  var index = ORDER.indexOf(button.getAttribute("data-theme-choice"));
-                  var next = -1;
-                  if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % ORDER.length;
-                  if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index + ORDER.length - 1) % ORDER.length;
-                  if (event.key === "Home") next = 0;
-                  if (event.key === "End") next = ORDER.length - 1;
-                  if (next < 0) return;
-                  event.preventDefault();
-                  var target = group.querySelector('[data-theme-choice="' + ORDER[next] + '"]');
-                  if (target) { target.focus(); apply(ORDER[next], true); }
-                });
-              }
-              /* 顶栏主题按钮与 Shift+D 也走六主题循环，避免旧逻辑把配色打回两档 */
+              bindGroup("theme-mode", "data-mode-choice", MODE_ORDER, function (mode) {
+                apply(state.skin, mode, true);
+              });
+              bindGroup("theme-choice", "data-theme-choice", SKIN_ORDER, function (skin) {
+                apply(skin, state.mode, true);
+              });
+
+              /* 顶栏日月按钮：改成单纯切亮暗，不再做「六主题循环」 */
               document.addEventListener("click", function (event) {
                 if (event.target.closest("#theme-toggle")) {
                   event.preventDefault();
                   event.stopImmediatePropagation();
-                  cycle();
+                  toggleMode();
                 }
               }, true);
+              /* Shift + D 同语义（设置弹窗里也生效） */
               document.addEventListener("keydown", function (event) {
-                if (!event.shiftKey || String(event.key).toLowerCase() !== "d") return;
+                if (!event.shiftKey || String(event.key).toLowerCase() !== "d") { return; }
                 var target = event.target;
-                if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
+                if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) { return; }
                 event.preventDefault();
                 event.stopImmediatePropagation();
-                cycle();
+                toggleMode();
               }, true);
-              /* script.js 的 applyTheme 会把 data-theme 写成 light/dark；按当前 skin 纠偏 */
+
+              /* 外部入口（「我的」页三态单选 / 跟随系统变化）会直接改 data-theme：
+                 这里不再强行纠偏，而是把它当作一次模式切换接住，主题色保持不变。 */
               if (window.MutationObserver) {
                 new MutationObserver(function () {
-                  var skin = root.getAttribute("data-skin");
-                  if (!skin || !THEMES[skin]) return;
-                  var expected = THEMES[skin].mode;
-                  if (root.getAttribute("data-theme") !== expected) root.setAttribute("data-theme", expected);
+                  if (state.applying || !state.ready) { return; }
+                  var mode = root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+                  if (mode === state.mode) { return; }
+                  apply(state.skin, mode, true);
                 }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
               }
             }
+
             function wrapChartColors() {
-              if (window.__zhzChartColorsWrapped || typeof window.__chartColors !== "function") return;
+              if (window.__zhzChartColorsWrapped || typeof window.__chartColors !== "function") { return; }
               var origin = window.__chartColors;
               window.__chartColors = function () {
                 var palette = origin() || {};
@@ -1675,13 +1743,31 @@
               };
               window.__zhzChartColorsWrapped = true;
             }
+
             function init() {
-              var saved = stored();
-              if (!saved) saved = root.getAttribute("data-theme") === "dark" ? "dark" : "light";
-              apply(saved, false);
+              var stored = readStored();
+              apply(stored.skin, stored.mode, false);
               bind();
               wrapChartColors();
+              /* script.js 的 boot 在 DOMContentLoaded 冒泡阶段跑，会按它自己的键再写一次 data-theme。
+                 等 load 之后把用户真正选定的状态压回去，之后才允许观察器接管外部切换。 */
+              var lock = function () {
+                apply(state.skin, state.mode, false);
+                state.ready = true;
+              };
+              if (document.readyState === "complete") {
+                window.setTimeout(lock, 0);
+              } else {
+                window.addEventListener("load", lock);
+              }
             }
+
+            /* 供验收脚本读取当前状态（只读，不对外暴露写入口） */
+            window.__zhzTheme = {
+              state: function () { return { skin: state.skin, mode: state.mode }; },
+              apply: function (skin, mode) { apply(skin, mode, true); }
+            };
+
             if (document.readyState === "loading") {
               document.addEventListener("DOMContentLoaded", init, true);
             } else {
@@ -1692,7 +1778,7 @@
           <div class="settings-group">
             <span class="settings-label">品牌图标主题</span>
             <div class="brand-logo-grid" id="brand-logo-grid" role="radiogroup" aria-label="品牌图标主题"></div>
-            <p class="settings-hint">共 55 款，只影响本机侧边栏与登录页的品牌图标；浏览器标签页和 PWA 桌面图标固定使用默认 Logo。</p>
+            <p class="settings-hint">共 8 款，只影响本机侧边栏与登录页的品牌图标；浏览器标签页和 PWA 桌面图标固定使用默认 Logo。</p>
           </div>
           <div class="settings-group">
             <span class="settings-label">首页卡片显示</span>
@@ -1851,23 +1937,8 @@
           </div>
         </div>
 
-        <!-- v0.14.2 模块二：权限管理（仅管理员可见；uid=1 永远不可移除） -->
-        <div id="settings-pane-permissions" class="settings-pane" role="tabpanel" hidden>
-          <div class="v142-perm-head">
-            <h4 style="margin:0;font-size:14px;font-weight:700;">权限管理
-              <span class="badge text-bg-secondary" id="v142-admin-total">0</span>
-            </h4>
-            <button class="v142-btn is-primary" type="button" id="v142-admin-add">添加管理员</button>
-          </div>
-          <p class="v142-perm-note">添加或移除都需要验证你本人的登录密码；内置超级管理员 UID #1 不可移除，按钮置灰。</p>
-          <div class="v142-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-                 stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
-            <input type="search" id="v142-admin-search" aria-label="搜索管理员 UID / 邮箱"
-                   placeholder="搜索 UID / 邮箱">
-          </div>
-          <div class="v142-perm-list" id="v142-admin-list" role="list" aria-live="polite"></div>
-        </div>
+        <!-- v0.15.3：用户端「权限管理」整块移除 —— 管理员增删只在 /admin 后台，
+             普通用户与管理员看到的设置页完全一致（不再按身份解锁隐藏 tab）。 -->
       </div>
       <div class="modal-footer">
         <div id="settings-footer-personal" class="d-flex gap-2 ms-auto">
@@ -2709,31 +2780,31 @@
 <nav class="mobile-tabbar" id="mobile-tabbar" aria-label="移动端主导航">
   <button class="mtab-item active" type="button" data-page="home" aria-label="首页">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M3 10.5 12 3l9 7.5"></path><path d="M5.5 9.5V21h13V9.5"></path><path d="M9.5 21v-6h5v6"></path>
+      <path d="M3.2 10.8 12 3.6l8.8 7.2"></path><path d="M5.6 9.4V20.4h12.8V9.4"></path><path d="M9.8 20.4v-5.4h4.4v5.4"></path>
     </svg>
     <span>首页</span>
   </button>
   <button class="mtab-item" type="button" data-page="assets" aria-label="资产">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <rect x="3" y="6.5" width="18" height="12" rx="2.5"></rect><path d="M3 10.5h18"></path><circle cx="16.5" cy="14.5" r="1.2"></circle>
+      <rect x="3.4" y="7.4" width="17.2" height="12.2" rx="2.8"></rect><path d="M6.4 7.4V6.2a2.2 2.2 0 0 1 2.2-2.2h8.1"></path><path d="M14.9 11.6h5.7v3.8h-5.7a1.9 1.9 0 0 1 0-3.8z"></path>
     </svg>
     <span>资产</span>
   </button>
   <button class="mtab-item" type="button" data-page="bills" aria-label="账单">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <rect x="4" y="3.5" width="16" height="17" rx="2.4"></rect><path d="M8 8h8M8 12h8M8 16h5"></path>
+      <path d="M9 7.4h9.6M9 12h9.6M9 16.6h9.6"></path><circle cx="5.4" cy="7.4" r="1.2"></circle><circle cx="5.4" cy="12" r="1.2"></circle><circle cx="5.4" cy="16.6" r="1.2"></circle>
     </svg>
     <span>账单</span>
   </button>
   <button class="mtab-item" type="button" data-page="charts" aria-label="图表">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M4 20V4"></path><path d="M4 20h16"></path><path d="M8 16v-5"></path><path d="M13 16V7"></path><path d="M18 16v-8"></path>
+      <path d="M4.2 3.8v16.4h16"></path><path d="M7.2 15.6 10.9 11l3.1 2.4 5.4-6.2"></path><circle cx="20.4" cy="7.2" r="1.1"></circle>
     </svg>
     <span>图表</span>
   </button>
   <button class="mtab-item" type="button" data-page="profile" aria-label="我的">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="12" cy="8.5" r="3.8"></circle><path d="M4.5 20.5c1.6-3.4 4.3-5 7.5-5s5.9 1.6 7.5 5"></path>
+      <circle cx="12" cy="8.6" r="3.9"></circle><path d="M4.6 20.6c1.5-3.5 4.2-5.2 7.4-5.2s5.9 1.7 7.4 5.2"></path>
     </svg>
     <span>我的</span>
   </button>
@@ -2759,7 +2830,7 @@
 <script src="/static/charts-v013.js?v=0.15.2"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
 <script src="/static/invest-v0133.js?v=0.15.2"></script>
-<!-- v0.14.2：权限管理 / 我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后） -->
+<!-- v0.14.2：我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后）；v0.15.3 起权限管理面板已从用户端移除 -->
 <script src="/static/user-feedback-v0142.js?v=0.15.2"></script>
 
 </body>

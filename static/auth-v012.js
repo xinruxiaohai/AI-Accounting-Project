@@ -1233,20 +1233,10 @@
     "主题 7"
   ];
 
-  /* v0.15.1：品牌图标库 8 → 55（8 枚原 PNG + 47 枚 SVG）。
-     SVG 放在 static/icons/，沿用同一套选中态与实时预览，不另造 Lightbox。 */
-  var BRAND_SVG_ITEMS =
-    "food:餐饮,transport:交通,shopping:购物,home:居家,fun:娱乐,medical:医疗,study:学习," +
-    "gift:礼物,salary:工资,invest:投资,refund:退款,tag:标签,transfer:转账,chat:沟通,bank:银行," +
-    "cash:现金,card:银行卡,coin:硬币,wallet:钱包,cloud:云端,coffee:咖啡,book:书本,pet:宠物," +
-    "plane:旅行,fitness:健身,music:音乐,camera:摄影,bulb:灵感,key:钥匙,ticket:票务,calendar:日历," +
-    "clock:时间,planet:星球,leaf:植被,drop:水滴,bolt:闪电,heart:爱心,trophy:奖杯,tools:工具," +
-    "laptop:电脑,phone:手机,umbrella:雨伞,glasses:眼镜,rocket:火箭,sprout:成长,shield:安全,compass:指南针";
-  BRAND_SVG_ITEMS.split(",").forEach(function (item) {
-    var pair = item.split(":");
-    BRAND_LOGO_FILES.push("brand-" + pair[0] + ".svg");
-    BRAND_LOGO_LABELS.push(pair[1]);
-  });
+  /* v0.15.3：品牌图标主题收敛为「原有 8 款经典 logo」。
+     v0.15.1 曾扩到 55 款（8 枚 PNG + 47 枚 brand-*.svg），用户要求只保留第一行前 8 个，
+     47 个 svg 文件与本地的 BRAND_SVG_ITEMS 清单一并删除；旧用户若存的是 brand-xxx.svg，
+     brandLogoFile() 会回落 BRAND_LOGO_FILES[0]，不报错、不白屏。 */
 
   function brandLogoFile(file) {
     return BRAND_LOGO_FILES.indexOf(file) >= 0 ? file : BRAND_LOGO_FILES[0];
@@ -1303,7 +1293,7 @@
     applyBrandLogo();
   }
 
-  /** 自适应网格（55 款）；只在第一次打开设置时渲染，之后只切选中态 */
+  /** 自适应网格（8 款）；只在第一次打开设置时渲染，之后只切选中态 */
   function buildBrandLogoGrid() {
     var grid = document.getElementById("brand-logo-grid");
     if (!grid || grid.getAttribute("data-ready") === "1") {
