@@ -1456,12 +1456,27 @@ function openCategoryFlyout(topId, itemElement) {
         '" data-cat-child="' +
         child.id +
         '">' +
+        // v0.15.3：二级项左侧 22px 图标，与一级网格同一套 entity 图标（用户自定义图优先）
+        '<span class="cat-flyout-icon">' +
+        entityIconHtml("category", child.name, 22) +
+        "</span>" +
+        '<span class="cat-flyout-name">' +
         escapeHtml(child.name) +
+        "</span>" +
         (disabled ? '<span class="cat-item-disabled">已停用</span>' : "") +
         "</button>"
       );
     })
     .join("");
+  // 「不细分」是控制项不是分类，但为视觉整齐也补一个图标（只补一次，避免重复插入）
+  const skipButton = $("category-flyout-skip");
+  if (skipButton && skipButton.dataset.iconized !== "1") {
+    skipButton.insertAdjacentHTML(
+      "afterbegin",
+      '<span class="cat-flyout-icon">' + entityIconHtml("category", "不细分", 22) + "</span>"
+    );
+    skipButton.dataset.iconized = "1";
+  }
   flyout.dataset.parentId = String(topId);
   flyout.classList.remove("d-none");
   positionCategoryFlyout(itemElement);
@@ -8129,12 +8144,18 @@ const CATEGORY_ICON_RULES = [
   ["打车", "taxi"], ["滴滴", "taxi"], ["出租车", "taxi"], ["地铁", "subway"], ["公交", "bus"], ["巴士", "bus"],
   ["加油", "gas"], ["油费", "gas"], ["停车", "parking"], ["车位", "parking"], ["过路费", "parking"], ["高速费", "parking"],
   ["交通", "transport"], ["车票", "transport"], ["高铁", "transport"], ["火车", "transport"],
-  ["服饰", "clothing"], ["服装", "clothing"], ["衣服", "clothing"], ["数码", "digital"], ["电器", "digital"], ["电脑", "digital"],
+  ["服饰", "clothing"], ["服装", "clothing"], ["衣服", "clothing"], ["数码", "digital"], ["电器", "digital"], ["电脑", "digital"], ["手机", "digital"], ["影音", "digital"],
   ["购物", "shopping"], ["日用", "shopping"], ["网购", "shopping"],
   ["房租", "rent"], ["租金", "rent"], ["水电", "utilities"], ["水费", "utilities"], ["电费", "utilities"], ["燃气", "gasbill"], ["煤气", "gasbill"], ["物业", "property"],
   ["居住", "home"], ["住房", "home"], ["房贷", "home"], ["家居", "home"],
   ["游戏", "game"], ["电影", "movie"], ["影院", "movie"], ["旅游", "travel"], ["旅行", "travel"], ["住宿", "hotel"], ["酒店", "hotel"], ["民宿", "hotel"],
   ["娱乐", "fun"], ["KTV", "fun"], ["健身", "fitness"], ["运动", "sports"], ["体育", "sports"],
+  /* v0.15.3：二级子分类关键词——必须排在「医疗/美容/酒店」等泛词之前，否则会被抢先命中。
+     例：「宠物医疗」要落 pet（不是 medical）、「洗车美容」要落 car（不是 beauty）。 */
+  ["宠物", "pet"], ["演出", "show"], ["展览", "show"], ["场馆", "sports"], ["医美", "beauty"],
+  ["洗车", "car"], ["改装", "car"], ["年检", "car"], ["宽带", "telecom"], ["流量", "telecom"],
+  ["软件", "subscription"], ["云存储", "cloud"], ["机票", "travel"], ["景点", "travel"], ["门票", "travel"],
+  ["纸尿裤", "baby"], ["玩具", "baby"], ["所得税", "tax"], ["印花税", "tax"],
   ["药品", "medicine"], ["买药", "medicine"], ["药店", "medicine"], ["医疗", "medical"], ["医院", "medical"], ["挂号", "medical"], ["体检", "medical"], ["健康", "medical"],
   ["书籍", "books"], ["图书", "books"], ["课程", "course"], ["培训", "course"], ["学费", "course"], ["学习", "study"], ["教育", "study"],
   ["红包", "redpacket"], ["礼物", "gift"], ["送礼", "gift"], ["人情", "social"], ["请客", "social"],
@@ -8178,6 +8199,7 @@ const CATEGORY_TONES = {
   beauty: ["#d946ef", "#fae8ff"], car: ["#475569", "#f1f5f9"], repair: ["#78716c", "#f5f5f4"],
   renovation: ["#ea580c", "#ffedd5"], subscription: ["#8b5cf6", "#ede9fe"], telecom: ["#0284c7", "#e0f2fe"],
   tobacco: ["#92400e", "#f5f5f4"], donation: ["#e11d48", "#ffe4e6"], tag: ["#64748b", "#f1f5f9"],
+  show: ["#c026d3", "#fae8ff"], cloud: ["#0284c7", "#e0f2fe"],
 };
 /* v0.15.2 · 账户品牌色：覆盖全部 ACCOUNT_ICON_RULES key。 */
 const ICON_ACCOUNT_COLORS = {
@@ -8207,6 +8229,7 @@ const ENTITY_ICON_FILES = {
     fee: "fee", tax: "tax", insurance: "insurance", pet: "pet", baby: "baby", beauty: "beauty",
     car: "car", repair: "repair", renovation: "renovation", subscription: "subscription",
     telecom: "telecom", tobacco: "tobacco", donation: "donation", tag: "tag",
+    show: "show", cloud: "cloud",
   },
 };
 function iconSrcOf(kind, key) {

@@ -88,6 +88,14 @@
 - 京东 / 抖音 / 各银行行标无官方可用矢量，按规格用同色系通用图标 + 品牌主色近似，未硬造 logo。
 - 分类图标与账户图标不同源属预期：分类内部统一 Twemoji，账户内部以品牌真 logo 优先。
 
+## v0.15.3 新增（分类图标 2 个，Twemoji · CC BY 4.0）
+
+- `show.svg` ← `twemoji/performing-arts` ← Iconify（1477 B）——「娱乐 > 演出展览」用。
+- `cloud.svg` ← `twemoji/cloud` ← Iconify（623 B）——「订阅 > 云存储」用。
+- 归一化同上一轮：去 width/height、viewBox 统一 `0 0 24 24`、带 xmlns、单文件 <8KB。
+
+> 注：本文档上方「账户/分类」清单为 v0.15.2 另一版产物，与实际落盘文件名（`food` / `sports` / `books` / `home` / `fun` / `gas` / `telecom` / `donation` / `tag` 等）不一致，实际以 `static/icons/entity/**` 与 `script.js` 的 `ENTITY_ICON_FILES` 为准；已在交付说明中标注，待协调方统一校正。
+
 ## 命名例外（v0.15.2）
 
 - `acc-fund.svg` ← `mdi/chart-line` ← MIT（账户「基金」专用；与分类 `fund.svg`（Twemoji）key 重名，故加 `acc-` 前缀避免覆盖）。
