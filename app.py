@@ -1216,6 +1216,39 @@ def _duplicate_candidate(parsed, account="", note="", exclude_id=None):
     )
 
 
+def _duplicate_payload(record, kind, matched_by):
+    """构造上传入口的重复确认卡数据（v0.15.2 截图去重）。
+
+    前端 fillDuplicateCompare 直接吃这些字段（amount / merchant / category / account /
+    date），并把 summary 贴到弹窗标题上；kind 决定文案与按钮（exact 不给「仍然记账」）。
+    """
+    amount = record.get("amount")
+    try:
+        amount_text = "%.2f" % abs(float(amount))
+    except (TypeError, ValueError):
+        amount_text = "—"
+    merchant = (record.get("note") or "").strip() or (record.get("to_account") or "").strip()
+    date_text = str(record.get("date") or "")
+    month_day = date_text[5:10] if len(date_text) >= 10 else date_text
+    who = (" %s" % merchant) if merchant else ""
+    if kind == database.DUP_KIND_EXACT:
+        summary = "这份截图你 %s 已记过 ¥%s%s（同一个文件）" % (month_day, amount_text, who)
+    else:
+        summary = "这张你 %s 已记过 ¥%s%s，仍要新建吗？" % (month_day, amount_text, who)
+    return {
+        "kind": kind,
+        "matched_by": matched_by,
+        "record_id": record.get("id"),
+        "summary": summary,
+        "amount": amount,
+        "merchant": merchant,
+        "note": record.get("note") or "",
+        "category": record.get("category") or "",
+        "account": record.get("account") or "",
+        "date": date_text,
+    }
+
+
 def _apply_ai_correction(previous_record, parsed, text, source="ai"):
     """AI 补充修改原账单（v0.11.5 全量覆盖）：按 AI 返回的完整 JSON 覆盖更新，并回滚/重算余额。
 
@@ -1894,6 +1927,22 @@ def create_record_by_ai_image():
     if error_message is not None:
         return jsonify(error=error_message), 400
 
+    # v0.15.2 去重 L1：原图字节 sha256 命中同 uid 已记过的账目 → 不落盘、不调模型、不建记录。
+    # 放在识别之前是刻意的：同一个文件再传一次，没必要再花一次模型调用。
+    image_hash = database.image_fingerprint(raw)
+    if not data.get("force"):
+        hit = database.find_duplicate_record(image_hash=image_hash)
+        if hit is not None:
+            record, kind, matched_by = hit
+            return (
+                jsonify(
+                    duplicate=_duplicate_payload(record, kind, matched_by),
+                    created=False,
+                    message="这份截图之前已经记过账了",
+                ),
+                200,
+            )
+
     try:
         parsed = ai_service.parse_image(
             image,
@@ -1916,6 +1965,29 @@ def create_record_by_ai_image():
 
     # 防重复：跟一句话记账同一套判断，前端确认后带 force=true 重发
     if not data.get("force"):
+        # v0.15.2 去重 L2：无单号时用 (金额两位小数, 支付时间到分钟, 商户/对方归一化) 三元组。
+        # 命中只报 possible、**默认不写入**，交前端确认后再带 force 重发；绝不静默丢数据。
+        hit = database.find_duplicate_record(
+            amount=parsed.get("amount"),
+            date_text=parsed.get("date") or "",
+            counterparty=[
+                parsed.get("note"),
+                parsed.get("to_account"),
+                parsed.get("contact_name"),
+            ],
+            trade_no=parsed.get("trade_no") or "",
+        )
+        if hit is not None:
+            record, kind, matched_by = hit
+            return (
+                jsonify(
+                    duplicate=_duplicate_payload(record, kind, matched_by),
+                    parsed=parsed,
+                    created=False,
+                    message="这张截图可能已经记过账了，请先确认",
+                ),
+                200,
+            )
         duplicate = _duplicate_candidate(parsed)
         if duplicate is not None:
             return (
@@ -1955,6 +2027,12 @@ def create_record_by_ai_image():
     # 相册/详情直接拿这个地址渲染 <img>，前端省一次拼接
     body["record"]["image_url"] = image_path
     body["confidence"] = parsed.get("confidence")
+    # v0.15.2 去重指纹：原图 sha256（L1）与交易单号（L2，第二段接入 VISION 后才有值）。
+    # 写失败不影响账目（指纹只是加速去重），故只告警。
+    if not database.set_record_fingerprint(
+        body["id"], image_hash=image_hash, trade_no=str(parsed.get("trade_no") or "")
+    ):
+        print("[ai_image] 账目 %s 的去重指纹写入未命中，已跳过" % body["id"])
     return jsonify(body), status
 
 

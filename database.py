@@ -1,6 +1,7 @@
 import contextvars
 import datetime
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -1760,6 +1761,33 @@ ISSUE_LOG_STATUSES = (0, 1)              # 0 未解决 / 1 已解决
 FEEDBACK_SENDER_TYPES = ("user", "admin")
 
 
+def _ensure_record_fingerprint_schema(conn):
+    """v0.15.2 截图去重：给 records 幂等补 `image_hash` / `trade_no` 两列。
+
+    红线约束（HANDOFF「并行协作」+ 用户指令）：
+      * 只允许幂等 ADD COLUMN，禁止 create_all / 外键 / 索引，不动任何既有列；
+      * 旧记录留空串，**不做启动时全盘回填**（历史图没算过 sha256，回填就得读全盘文件）。
+
+    MySQL 8.0 的 TEXT 不接受字面量默认值，所以线上分支退化成可空 TEXT + 显式回填 ''，
+    读侧一律 COALESCE(col,'')，语义与 SQLite 的 NOT NULL DEFAULT '' 等价。
+    """
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(records)")]
+    mysql = sqlalchemy_db.is_mysql_runtime()
+    for column_name in ("image_hash", "trade_no"):
+        if column_name in columns:
+            continue
+        if mysql:
+            conn.execute("ALTER TABLE records ADD COLUMN %s TEXT" % column_name)
+            conn.execute(
+                "UPDATE records SET %s = '' WHERE %s IS NULL" % (column_name, column_name)
+            )
+        else:
+            conn.execute(
+                "ALTER TABLE records ADD COLUMN %s TEXT NOT NULL DEFAULT ''" % column_name
+            )
+        print("[v0.15.2] records 已补列 %s" % column_name, flush=True)
+
+
 def _ensure_v0142_schema(conn):
     """v0.14.2 幂等扩容：只 ADD COLUMN + CREATE 全新表，绝不改任何既有表结构。
 
@@ -1929,6 +1957,8 @@ def _init_db_mysql_schema_guard():
             _ensure_v0142_schema(conn)
             # v0.15：临时滚动通知也是全新独立表，同样只用 CREATE IF NOT EXISTS
             _ensure_temp_notice_schema(conn)
+            # v0.15.2：截图去重指纹两列（同样只做幂等 ADD COLUMN）
+            _ensure_record_fingerprint_schema(conn)
             _boot_temp_notices(conn)
     finally:
         conn.close()
@@ -2027,6 +2057,8 @@ def init_db():
                 conn.execute(
                     "ALTER TABLE records ADD COLUMN created_at TEXT NOT NULL DEFAULT ''"
                 )
+            # v0.15.2 新增：截图去重指纹（L1 原图 sha256 / L2 交易单号），旧记录留空
+            _ensure_record_fingerprint_schema(conn)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_records_created ON records (created_at)"
             )
@@ -7923,5 +7955,194 @@ def apply_holding_quotes(account_name, price_map, user_id=None):
                 )
                 updated += 1
             return updated, skipped, None
+    finally:
+        conn.close()
+# ==================== v0.15.2 截图去重（D）：L1 字节级 + L2 交易指纹 ====================
+# 判据来源：docs/prompts/50-v0152-vision-accuracy.md 第十节 + temp/ai-qa-v0152-vision/FINDINGS-dedup.md
+# 实测铁证：整图感知哈希在本场景不可用（同一笔 dHash=4，不同笔 dHash=0），故**绝不用图片相似度**。
+# 指纹一律带 user_id：跨用户绝不比对；命中也不静默丢数据（possible 交前端确认，默认不写）。
+
+DUP_KIND_EXACT = "exact"
+DUP_KIND_POSSIBLE = "possible"
+
+# 只查去重要用的列：不复用 _RECORD_SELECT，避免把新列顺带塞进所有账单响应，
+# 影响前端与既有用例的字段断言。
+_DUP_SELECT = (
+    "SELECT r.id, r.user_id, r.amount, r.date, r.note, r.category, r.account, "
+    "       r.to_account, r.type, r.image_path, "
+    "       COALESCE(r.image_hash, '') AS image_hash, "
+    "       COALESCE(r.trade_no, '') AS trade_no "
+    "  FROM records r "
+)
+
+# 归一化要剔除的标点（含中英文与全角符号）：商户名在不同渠道的写法差异全出在这儿
+_DUP_PUNCTUATION = " \t\r\n-—_·•,，.。:：;；()（）[]【】<>《》\"'“”‘’/\\|+&*~!！?？、"
+
+
+def image_fingerprint(raw):
+    """L1 指纹：原图字节的 sha256（十六进制）。同一份文件必然同值，零误判。"""
+    if not raw:
+        return ""
+    return hashlib.sha256(raw).hexdigest()
+
+
+def normalize_counterparty(value):
+    """商户/对方名归一化：全角转半角 → 去空白与标点 → 小写。
+
+    只对齐「同一商户的不同书写」（`拼多多` / `拼 多 多` / `拼多多！`），
+    绝不引入模糊相似度：模糊匹配会把「淘宝」和「淘宝买菜」并成一笔。
+    """
+    text = str(value or "")
+    if not text:
+        return ""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if 0xFF01 <= code <= 0xFF5E:  # 全角 ASCII → 半角
+            ch = chr(code - 0xFEE0)
+        if ch in _DUP_PUNCTUATION or ch.isspace():
+            continue
+        out.append(ch.lower())
+    return "".join(out)
+
+
+def _counterparty_tokens(value):
+    """把 str / list 统一成归一化后的非空 token 列表（note、to_account、contact_name 都算）。"""
+    items = value if isinstance(value, (list, tuple, set)) else [value]
+    tokens = []
+    for item in items:
+        normalized = normalize_counterparty(item)
+        if normalized:
+            tokens.append(normalized)
+    return tokens
+
+
+def find_record_by_image_hash(image_hash, user_id=None):
+    """L1：同 uid 下按原图 sha256 找未删除账目；命中即刻可判 exact。"""
+    digest = str(image_hash or "").strip()
+    if len(digest) < 32:
+        return None
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            _DUP_SELECT
+            + " WHERE r.deleted_at IS NULL AND r.user_id = ?"
+            + "   AND COALESCE(r.image_hash, '') = ?"
+            + " ORDER BY r.id DESC LIMIT 1",
+            (uid, digest),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def find_record_by_trade_no(trade_no, user_id=None):
+    """L2 单号优先：同 uid 下交易单号相同 = 同一笔（第二段接入 VISION 单号后自动生效）。
+
+    单号可能被 OCR 出空格/换行，先剔空白再比；长度 < 8 一律不认，避免把偶然数字当单号。
+    """
+    digits = re.sub(r"\s+", "", str(trade_no or ""))
+    if len(digits) < 8:
+        return None
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        row = conn.execute(
+            _DUP_SELECT
+            + " WHERE r.deleted_at IS NULL AND r.user_id = ?"
+            + "   AND COALESCE(r.trade_no, '') = ?"
+            + " ORDER BY r.id DESC LIMIT 1",
+            (uid, digits),
+        ).fetchone()
+        return dict(row) if row is not None else None
+    finally:
+        conn.close()
+
+
+def find_possible_duplicate(amount, date_text, counterparty, user_id=None, exclude_id=None):
+    """L2 无单号版：三元组 `(金额两位小数, 支付时间到分钟, 商户/对方归一化)` 全等才算。
+
+    三项缺任意一项直接返回 None——宁可漏判也不误判，这是「不静默丢数据」的前提。
+    """
+    try:
+        amount_value = round(float(amount), 2)
+    except (TypeError, ValueError):
+        return None
+    date_min = normalize_date(date_text)
+    if len(date_min) < 16:
+        return None
+    date_min = date_min[:16]
+
+    wanted = set(_counterparty_tokens(counterparty))
+    if not wanted:
+        return None
+
+    uid = _resolve_user_id(user_id)
+    sql = (
+        _DUP_SELECT
+        + " WHERE r.deleted_at IS NULL"
+        + "   AND r.user_id = ?"
+        + "   AND ABS(r.amount - ?) < 0.005"
+        + "   AND substr(r.date, 1, 16) = ?"
+    )
+    params = [uid, amount_value, date_min]
+    if exclude_id:
+        sql += " AND r.id <> ?"
+        params.append(exclude_id)
+    sql += " ORDER BY r.id DESC LIMIT 20"
+
+    conn = get_conn()
+    try:
+        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+    finally:
+        conn.close()
+
+    for record in rows:
+        existing = set(_counterparty_tokens([record.get("note"), record.get("to_account")]))
+        if existing & wanted:
+            return record
+    return None
+
+
+def find_duplicate_record(
+    image_hash="",
+    amount=None,
+    date_text="",
+    counterparty=None,
+    trade_no="",
+    user_id=None,
+):
+    """去重总入口：先 L1（字节级），再 L2（单号 → 三元组）。
+
+    返回 `(record, kind, matched_by)`；未命中返回 None。
+    kind ∈ {exact, possible}，matched_by ∈ {image_hash, trade_no, triple}。
+    """
+    record = find_record_by_image_hash(image_hash, user_id=user_id)
+    if record is not None:
+        return record, DUP_KIND_EXACT, "image_hash"
+    record = find_record_by_trade_no(trade_no, user_id=user_id)
+    if record is not None:
+        return record, DUP_KIND_POSSIBLE, "trade_no"
+    record = find_possible_duplicate(
+        amount, date_text, counterparty, user_id=user_id, exclude_id=None
+    )
+    if record is not None:
+        return record, DUP_KIND_POSSIBLE, "triple"
+    return None
+
+
+def set_record_fingerprint(record_id, image_hash="", trade_no="", user_id=None):
+    """给账目补写去重指纹（只改这两列，不动余额、不碰其它字段）。返回是否命中。"""
+    uid = _resolve_user_id(user_id)
+    conn = get_conn()
+    try:
+        with conn:
+            cur = conn.execute(
+                "UPDATE records SET image_hash = ?, trade_no = ? "
+                " WHERE id = ? AND user_id = ?",
+                (str(image_hash or ""), str(trade_no or ""), record_id, uid),
+            )
+            return cur.rowcount > 0
     finally:
         conn.close()

@@ -12431,6 +12431,40 @@ function duplicateRowHtml(label, valueHtml) {
 function fillDuplicateCompare(duplicate, parsed) {
   const current = parsed && typeof parsed === "object" ? parsed : {};
   const old = duplicate && typeof duplicate === "object" ? duplicate : {};
+  // v0.15.2 截图去重：后端会带 kind（exact / possible）与一句人话 summary。
+  // 这两个分支只改弹窗文案与按钮，比对表本身照旧渲染。
+  const kind = typeof old.kind === "string" ? old.kind : "";
+  const titleElement = $("duplicate-modal-title");
+  const hintElement = document.querySelector("#duplicate-modal .duplicate-hint");
+  const forceButton = $("duplicate-force-btn");
+  if (kind === "exact" || kind === "possible") {
+    if (titleElement) {
+      titleElement.textContent = kind === "exact" ? "这份截图已经记过账" : "这张截图可能已经记过";
+    }
+    if (hintElement) {
+      // summary 由后端拼好（金额/日期/商户都在里面），前端只补「默认不新建」这句判据
+      hintElement.textContent =
+        (old.summary || "这张截图之前已经记过账") +
+        " " +
+        (kind === "exact"
+          ? "不用再记一次，关掉即可。"
+          : "默认不新建；确认是另一笔再点「仍然记账」。");
+    }
+    if (forceButton) {
+      // exact = 字节完全一致，绝不给「仍然记账」，避免一键造出重复账
+      forceButton.style.display = kind === "exact" ? "none" : "";
+    }
+  } else {
+    if (titleElement) {
+      titleElement.textContent = "10 分钟内有一笔相似账目";
+    }
+    if (hintElement) {
+      hintElement.textContent = "这笔账还没有保存，先对比一下再决定：确实是另一笔就点「仍然记账」。";
+    }
+    if (forceButton) {
+      forceButton.style.display = "";
+    }
+  }
   const newList = $("duplicate-new-list");
   const oldList = $("duplicate-old-list");
   function amountText(row) {
