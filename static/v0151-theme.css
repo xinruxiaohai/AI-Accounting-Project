@@ -1,0 +1,342 @@
+/* ============================================================
+   v0.15.1 · 前端视觉专项覆盖层（六套主题 / 可访问性）
+   ------------------------------------------------------------
+   加载顺序：style.css → v0142/v0143/v01432/v01435 → 本文件。
+   纪律：
+   1. 主题色值全部走 CSS 变量；data-theme 只保留 light/dark 供
+      既有组件钩子识别，新增 data-skin 区分六套配色、data-mode
+      区分深浅，切主题免刷新。
+   2. 支出红 / 收入绿 / 转账灰的语义色口径不变，仅按深浅档调亮度。
+   3. 不碰 .fab 定位、16px 防缩放、真机安全区与任何账务逻辑。
+   4. 同权重靠文件末尾覆盖，禁止用 !important 覆盖布局定位。
+   ============================================================ */
+
+:root {
+  --focus-ring: #2563eb;
+}
+
+[data-theme="dark"] {
+  --focus-ring: #93c5fd;
+}
+
+/* 原深色档 --brand-blue=#3b82f6 配白字只有 3.68:1；
+   只在深色档把品牌底压深一档，保证「文字压品牌色」达 4.5:1。 */
+[data-skin="dark"] {
+  --brand-blue: #2563eb;
+  --brand-blue-ink: #93c5fd;
+  --brand-soft: rgba(37, 99, 235, 0.18);
+  --text-on-brand: #ffffff;
+}
+
+/* ---------- 主题 3：琥珀暖阳（浅色） ---------- */
+[data-skin="amber"] {
+  color-scheme: light;
+
+  --brand-blue: #9a3412;
+  --brand-blue-ink: #7c2d12;
+  --brand-soft: rgba(154, 52, 18, 0.12);
+  --text-on-brand: #ffffff;
+
+  --page-bg: #fdf8ef;
+  --surface: #fffdf8;
+  --surface-2: #fbf3e5;
+  --surface-3: #f5e9d5;
+  --text-main: #3b2f1f;
+  --text-strong: #2b2116;
+  --text-muted: #6b5b45;
+  --text-dim: #776650;
+  --line: #e3d5bf;
+  --line-strong: #cdbb9e;
+
+  --color-expense: #b91c1c;
+  --color-expense-soft: #fee2e2;
+  --color-expense-strong: #991b1b;
+  --color-income: #047857;
+  --color-income-soft: #d1fae5;
+  --color-income-strong: #065f46;
+  --color-transfer: #57534e;
+  --color-transfer-soft: #efeae2;
+  --color-transfer-strong: #44403c;
+  --warm-accent: #b45309;
+  --warm-accent-ink: #92400e;
+  --warm-accent-soft: rgba(180, 83, 9, 0.14);
+
+  --sidebar-bg: #33241a;
+  --sidebar-bg-2: #261a12;
+  --sidebar-text: #f4e6d5;
+  --sidebar-text-dim: #c9b49b;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(69, 39, 16, 0.08);
+  --shadow-md: 0 6px 20px rgba(69, 39, 16, 0.1);
+  --shadow-lg: 0 18px 44px rgba(69, 39, 16, 0.18);
+
+  --hero-bg: linear-gradient(135deg, #7c2d12 0%, #c2410c 48%, #b45309 100%);
+  --hero-ink: #ffffff;
+  --hero-ink-dim: rgba(255, 255, 255, 0.86);
+  --focus-ring: #c2410c;
+}
+
+/* ---------- 主题 4：薄荷青竹（浅色） ---------- */
+[data-skin="mint"] {
+  color-scheme: light;
+
+  --brand-blue: #047857;
+  --brand-blue-ink: #065f46;
+  --brand-soft: rgba(4, 120, 87, 0.12);
+  --text-on-brand: #ffffff;
+
+  --page-bg: #f2faf7;
+  --surface: #ffffff;
+  --surface-2: #f0f9f5;
+  --surface-3: #e2f1ea;
+  --text-main: #18352c;
+  --text-strong: #123027;
+  --text-muted: #4c6b5e;
+  --text-dim: #5f7e70;
+  --line: #cfe4d9;
+  --line-strong: #b6d5c5;
+
+  --color-expense: #b91c1c;
+  --color-expense-soft: #fee2e2;
+  --color-expense-strong: #991b1b;
+  --color-income: #047857;
+  --color-income-soft: #d1fae5;
+  --color-income-strong: #065f46;
+  --color-transfer: #475569;
+  --color-transfer-soft: #e8f0f2;
+  --color-transfer-strong: #334155;
+  --warm-accent: #0f766e;
+  --warm-accent-ink: #115e59;
+  --warm-accent-soft: rgba(15, 118, 110, 0.12);
+
+  --sidebar-bg: #14352c;
+  --sidebar-bg-2: #0e2a23;
+  --sidebar-text: #e3f4ed;
+  --sidebar-text-dim: #b6d5c5;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(8, 70, 52, 0.08);
+  --shadow-md: 0 6px 20px rgba(8, 70, 52, 0.1);
+  --shadow-lg: 0 18px 44px rgba(8, 70, 52, 0.16);
+
+  --hero-bg: linear-gradient(135deg, #065f46 0%, #0f766e 48%, #0891b2 100%);
+  --hero-ink: #ffffff;
+  --hero-ink-dim: rgba(255, 255, 255, 0.86);
+  --focus-ring: #0f766e;
+}
+
+/* ---------- 主题 5：紫藤雅致（浅色） ---------- */
+[data-skin="violet"] {
+  color-scheme: light;
+
+  --brand-blue: #6d28d9;
+  --brand-blue-ink: #5b21b6;
+  --brand-soft: rgba(109, 40, 217, 0.12);
+  --text-on-brand: #ffffff;
+
+  --page-bg: #f7f5fd;
+  --surface: #ffffff;
+  --surface-2: #f5f2fc;
+  --surface-3: #ebe5f8;
+  --text-main: #2e2742;
+  --text-strong: #211b33;
+  --text-muted: #635a7b;
+  --text-dim: #736a8c;
+  --line: #ded7f0;
+  --line-strong: #c9bee5;
+
+  --color-expense: #b91c1c;
+  --color-expense-soft: #fee2e2;
+  --color-expense-strong: #991b1b;
+  --color-income: #047857;
+  --color-income-soft: #d1fae5;
+  --color-income-strong: #065f46;
+  --color-transfer: #475569;
+  --color-transfer-soft: #edeaf4;
+  --color-transfer-strong: #334155;
+  --warm-accent: #7c3aed;
+  --warm-accent-ink: #6d28d9;
+  --warm-accent-soft: rgba(124, 58, 237, 0.12);
+
+  --sidebar-bg: #2a2342;
+  --sidebar-bg-2: #211b33;
+  --sidebar-text: #eee9fb;
+  --sidebar-text-dim: #c9bee5;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(46, 31, 86, 0.08);
+  --shadow-md: 0 6px 20px rgba(46, 31, 86, 0.1);
+  --shadow-lg: 0 18px 44px rgba(46, 31, 86, 0.18);
+
+  --hero-bg: linear-gradient(135deg, #4c1d95 0%, #6d28d9 48%, #7c3aed 100%);
+  --hero-ink: #ffffff;
+  --hero-ink-dim: rgba(255, 255, 255, 0.86);
+  --focus-ring: #7c3aed;
+}
+
+/* ---------- 主题 6：午夜星河（深色，沿用 dark 组件钩子） ---------- */
+[data-skin="midnight"] {
+  color-scheme: dark;
+
+  --brand-blue: #818cf8;
+  --brand-blue-ink: #a5b4fc;
+  --brand-soft: rgba(129, 140, 248, 0.18);
+  --text-on-brand: #0b1020;
+
+  --page-bg: #070b18;
+  --surface: #0e1628;
+  --surface-2: #141e34;
+  --surface-3: #1b2742;
+  --text-main: #dbe6f7;
+  --text-strong: #f1f5ff;
+  --text-muted: #9fb0cc;
+  --text-dim: #8496b4;
+  --line: #22304b;
+  --line-strong: #2e3f60;
+
+  --color-expense: #fca5a5;
+  --color-expense-soft: rgba(252, 165, 165, 0.14);
+  --color-expense-strong: #fecaca;
+  --color-income: #6ee7b7;
+  --color-income-soft: rgba(110, 231, 183, 0.14);
+  --color-income-strong: #a7f3d0;
+  --color-transfer: #cbd5e1;
+  --color-transfer-soft: rgba(203, 213, 225, 0.16);
+  --color-transfer-strong: #e2e8f0;
+  --warn: #fcd34d;
+  --surface-soft: rgba(255, 255, 255, 0.08);
+
+  --sidebar-bg: #060a14;
+  --sidebar-bg-2: #040711;
+  --sidebar-text: #cbd7ee;
+  --sidebar-text-dim: #8295b6;
+  --sidebar-bg-hover: rgba(255, 255, 255, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 18px 44px rgba(0, 0, 0, 0.65);
+
+  --hero-bg: linear-gradient(135deg, #312e81 0%, #4338ca 48%, #6d28d9 100%);
+  --hero-ink: #ffffff;
+  --hero-ink-dim: rgba(255, 255, 255, 0.82);
+  --warm-accent: #fbbf24;
+  --warm-accent-ink: #fcd34d;
+  --warm-accent-soft: rgba(251, 191, 36, 0.16);
+  --focus-ring: #a5b4fc;
+}
+
+/* ============================================================
+   主题切换控件：六色卡 + 中文标签 + 键盘可达 + 选中绿框
+   ============================================================ */
+.theme-choice {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  max-width: 100%;
+}
+
+.theme-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 68px;
+  padding: 8px 4px;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.theme-swatch:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.theme-swatch.is-active {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+}
+
+.theme-swatch-preview {
+  display: block;
+  width: 38px;
+  height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: linear-gradient(135deg, var(--swatch-a) 0 46%, var(--swatch-b) 46% 100%);
+}
+
+.theme-swatch[data-theme-choice="light"] { --swatch-a: #ffffff; --swatch-b: #2563eb; }
+.theme-swatch[data-theme-choice="dark"] { --swatch-a: #131c2b; --swatch-b: #3b82f6; }
+.theme-swatch[data-theme-choice="amber"] { --swatch-a: #fffdf8; --swatch-b: #c2410c; }
+.theme-swatch[data-theme-choice="mint"] { --swatch-a: #ffffff; --swatch-b: #0f766e; }
+.theme-swatch[data-theme-choice="violet"] { --swatch-a: #ffffff; --swatch-b: #7c3aed; }
+.theme-swatch[data-theme-choice="midnight"] { --swatch-a: #0e1628; --swatch-b: #818cf8; }
+
+@media (max-width: 575.98px) {
+  .theme-choice {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ============================================================
+   品牌图标网格：40+ 项自适应，复用既有「选中绿框」样式
+   ============================================================ */
+.brand-logo-grid {
+  grid-template-columns: repeat(auto-fill, 48px);
+  max-width: 100%;
+}
+
+.brand-logo-option img {
+  background: var(--surface-2);
+}
+
+@media (max-width: 575.98px) {
+  .brand-logo-grid {
+    grid-template-columns: repeat(auto-fill, 44px);
+    gap: 8px;
+  }
+  .brand-logo-option {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* ============================================================
+   可访问性：可见焦点、对比度与移动端不溢出
+   ============================================================ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* 焦点在深色卡片上时保留外圈对比，避免被卡片底色吞掉 */
+[data-mode="dark"] :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline-color: var(--focus-ring, #a5b4fc);
+}
+
+.mobile-settings-hint {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 575.98px) {
+  .settings-modal .modal-dialog,
+  #settings-modal .modal-dialog {
+    max-width: calc(100vw - 16px);
+    margin: 8px auto;
+  }
+  .settings-pane,
+  .settings-group,
+  .icon-picker-body {
+    max-width: 100%;
+  }
+}

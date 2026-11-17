@@ -1233,12 +1233,30 @@
     "主题 7"
   ];
 
+  /* v0.15.1：品牌图标库 8 → 55（8 枚原 PNG + 47 枚 SVG）。
+     SVG 放在 static/icons/，沿用同一套选中态与实时预览，不另造 Lightbox。 */
+  var BRAND_SVG_ITEMS =
+    "food:餐饮,transport:交通,shopping:购物,home:居家,fun:娱乐,medical:医疗,study:学习," +
+    "gift:礼物,salary:工资,invest:投资,refund:退款,tag:标签,transfer:转账,chat:沟通,bank:银行," +
+    "cash:现金,card:银行卡,coin:硬币,wallet:钱包,cloud:云端,coffee:咖啡,book:书本,pet:宠物," +
+    "plane:旅行,fitness:健身,music:音乐,camera:摄影,bulb:灵感,key:钥匙,ticket:票务,calendar:日历," +
+    "clock:时间,planet:星球,leaf:植被,drop:水滴,bolt:闪电,heart:爱心,trophy:奖杯,tools:工具," +
+    "laptop:电脑,phone:手机,umbrella:雨伞,glasses:眼镜,rocket:火箭,sprout:成长,shield:安全,compass:指南针";
+  BRAND_SVG_ITEMS.split(",").forEach(function (item) {
+    var pair = item.split(":");
+    BRAND_LOGO_FILES.push("brand-" + pair[0] + ".svg");
+    BRAND_LOGO_LABELS.push(pair[1]);
+  });
+
   function brandLogoFile(file) {
     return BRAND_LOGO_FILES.indexOf(file) >= 0 ? file : BRAND_LOGO_FILES[0];
   }
 
   function brandLogoSrc(file) {
-    return "/static/images/" + brandLogoFile(file);
+    var resolved = brandLogoFile(file);
+    return /\.svg$/.test(resolved)
+      ? "/static/icons/" + resolved
+      : "/static/images/" + resolved;
   }
 
   function readBrandLogo() {
@@ -1259,6 +1277,8 @@
       var active = option.getAttribute("data-brand-logo") === current;
       option.classList.toggle("is-active", active);
       option.setAttribute("aria-checked", active ? "true" : "false");
+      /* radio 组只留当前项在 Tab 序列，方向键在 buildGrid 里切换 */
+      option.tabIndex = active ? 0 : -1;
     });
   }
 
@@ -1283,7 +1303,7 @@
     applyBrandLogo();
   }
 
-  /** 4 列 × 2 行网格；只在第一次打开设置时渲染，之后只切选中态 */
+  /** 自适应网格（55 款）；只在第一次打开设置时渲染，之后只切选中态 */
   function buildBrandLogoGrid() {
     var grid = document.getElementById("brand-logo-grid");
     if (!grid || grid.getAttribute("data-ready") === "1") {
@@ -1308,6 +1328,31 @@
       if (typeof toast === "function") {
         toast("品牌图标已切换，侧边栏与登录页立即生效", "success");
       }
+    });
+    /* v0.15.1：方向键移动焦点并按 radio 组语义选中，Tab 序列只留当前项 */
+    grid.addEventListener("keydown", function (event) {
+      var option = event.target.closest("[data-brand-logo]");
+      if (!option) {
+        return;
+      }
+      var options = Array.prototype.slice.call(grid.querySelectorAll("[data-brand-logo]"));
+      var index = options.indexOf(option);
+      var columns = 1;
+      var template = window.getComputedStyle(grid).gridTemplateColumns;
+      if (template && template !== "none") columns = template.split(" ").length || 1;
+      var next = -1;
+      if (event.key === "ArrowRight") next = index + 1;
+      if (event.key === "ArrowLeft") next = index - 1;
+      if (event.key === "ArrowDown") next = index + columns;
+      if (event.key === "ArrowUp") next = index - columns;
+      if (event.key === "Home") next = 0;
+      if (event.key === "End") next = options.length - 1;
+      if (next < 0 || next >= options.length) {
+        return;
+      }
+      event.preventDefault();
+      options[next].focus();
+      setBrandLogo(options[next].getAttribute("data-brand-logo"));
     });
     syncBrandLogoSelection();
   }

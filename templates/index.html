@@ -25,6 +25,10 @@
   <link rel="stylesheet" href="/static/v01432.css?v=0.15">
   <!-- v0.15：移动端 UI 优化末尾覆盖层（暖色强调 / 头像入口 / 筛选折叠） -->
   <link rel="stylesheet" href="/static/v01435.css?v=0.15">
+  <!-- v0.15.1：六套主题配色令牌 + 可访问性覆盖层（不 bump 版本串） -->
+  <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15">
+  <!-- BIZ-V0151 业务专项覆盖层（月度结账 / 周期模板 / 报销进阶） -->
+  <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15">
   <!-- v0.15.2：账户与分类实体图标 logo 呈现层（放在最后覆盖 object-fit） -->
   <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15">
   <!-- v0.15.2 · Agent A：移动端页面栈（账户 → 全屏二级页），桌面端一条规则都不生效 -->
@@ -526,6 +530,83 @@
                  普通账户时整块 hidden，与上面的 balance-card / account-records 互斥显隐 -->
             <div class="invest-board" id="invest-board" hidden></div>
           </div>
+
+        </div>
+
+        <!-- ============ BIZ-V0151 业务专项：月度结账 / 周期模板 / 报销进阶 ============ -->
+        <div class="biz-v0151" id="biz-v0151-root">
+
+          <!-- ① 月度结账单卡 -->
+          <section class="panel biz-panel" id="biz-monthly-panel" aria-labelledby="biz-monthly-title">
+            <div class="panel-head">
+              <span class="panel-title" id="biz-monthly-title">月度结账单</span>
+              <div class="panel-tools biz-month-nav">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="biz-month-prev"
+                        aria-label="上个月" title="上个月">‹</button>
+                <input type="month" class="form-control form-control-sm biz-month-input"
+                       id="biz-month-input" aria-label="选择月份">
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="biz-month-next"
+                        aria-label="下个月" title="下个月">›</button>
+              </div>
+            </div>
+            <div class="biz-month-body" id="biz-month-body" aria-live="polite">
+              <p class="feed-empty">正在加载月度账目…</p>
+            </div>
+          </section>
+
+          <!-- ② 周期账单模板（只提醒 + 手动生成，绝不自动扣款） -->
+          <section class="panel biz-panel" id="biz-recurring-panel" aria-labelledby="biz-recurring-title">
+            <div class="panel-head">
+              <span class="panel-title" id="biz-recurring-title">周期账单模板</span>
+              <div class="panel-tools">
+                <span class="panel-sub">只提醒 · 手动生成，不会自动扣款</span>
+                <button class="btn btn-sm btn-primary" type="button" id="biz-tpl-new">+ 新建模板</button>
+              </div>
+            </div>
+            <!-- 新建 / 编辑表单（默认收起） -->
+            <form class="biz-tpl-form" id="biz-tpl-form" hidden>
+              <input type="hidden" id="biz-tpl-id" value="">
+              <div class="biz-form-grid">
+                <label>名称<input class="form-control form-control-sm" id="biz-tpl-name" required maxlength="40"></label>
+                <label>类型<select class="form-select form-select-sm" id="biz-tpl-type">
+                  <option value="expense">支出</option><option value="income">收入</option></select></label>
+                <label>金额<input class="form-control form-control-sm" id="biz-tpl-amount" type="number" step="0.01" min="0.01" required></label>
+                <label>每月几号<select class="form-select form-select-sm" id="biz-tpl-day"></select></label>
+                <label>账户<select class="form-select form-select-sm" id="biz-tpl-account"></select></label>
+                <label>分类<select class="form-select form-select-sm" id="biz-tpl-category"></select></label>
+                <label class="biz-form-wide">备注<input class="form-control form-control-sm" id="biz-tpl-note" maxlength="120"></label>
+              </div>
+              <div class="biz-form-actions">
+                <button class="btn btn-sm btn-primary" type="submit">保存模板</button>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="biz-tpl-cancel">取消</button>
+              </div>
+            </form>
+            <div class="biz-tpl-list" id="biz-tpl-list" aria-live="polite">
+              <p class="feed-empty">正在加载模板…</p>
+            </div>
+          </section>
+
+          <!-- ③ 报销进阶：部分报销进度 / 按报销人筛选 / 导出 CSV -->
+          <section class="panel biz-panel" id="biz-reimb-panel" aria-labelledby="biz-reimb-title">
+            <div class="panel-head">
+              <span class="panel-title" id="biz-reimb-title">报销进度</span>
+              <div class="panel-tools">
+                <select class="form-select form-select-sm biz-reimb-filter" id="biz-reimb-contact"
+                        aria-label="按报销人筛选"><option value="">全部报销人</option></select>
+                <select class="form-select form-select-sm biz-reimb-filter" id="biz-reimb-state"
+                        aria-label="按状态筛选">
+                  <option value="all">全部状态</option>
+                  <option value="pending">待报销</option>
+                  <option value="partial">部分报销</option>
+                  <option value="done">已报销完</option>
+                </select>
+                <button class="btn btn-sm btn-outline-primary" type="button" id="biz-reimb-export">导出 CSV</button>
+              </div>
+            </div>
+            <div class="biz-reimb-list" id="biz-reimb-list" aria-live="polite">
+              <p class="feed-empty">正在加载报销记录…</p>
+            </div>
+          </section>
 
         </div>
 
@@ -1457,16 +1538,161 @@
         <section id="settings-pane-personal" class="settings-pane">
           <div class="settings-group">
             <span class="settings-label">主题</span>
-            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题">
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="light"><span>浅色</span></label>
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="dark"><span>深色</span></label>
-              <label class="theme-option"><input type="radio" name="dsh-theme" value="system"><span>跟随系统</span></label>
+            <!-- v0.15.1：六套主题色卡，全中文标签；键盘 Tab / 方向键可达 -->
+            <div class="theme-choice" id="theme-choice" role="radiogroup" aria-label="主题，共六套">
+              <button type="button" class="theme-swatch" data-theme-choice="light" role="radio" aria-checked="false" aria-label="浅色主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>浅色</span></button>
+              <button type="button" class="theme-swatch" data-theme-choice="dark" role="radio" aria-checked="false" aria-label="深色主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>深色</span></button>
+              <button type="button" class="theme-swatch" data-theme-choice="amber" role="radio" aria-checked="false" aria-label="琥珀暖阳主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>琥珀</span></button>
+              <button type="button" class="theme-swatch" data-theme-choice="mint" role="radio" aria-checked="false" aria-label="薄荷青竹主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>薄荷</span></button>
+              <button type="button" class="theme-swatch" data-theme-choice="violet" role="radio" aria-checked="false" aria-label="紫藤雅致主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>紫藤</span></button>
+              <button type="button" class="theme-swatch" data-theme-choice="midnight" role="radio" aria-checked="false" aria-label="午夜星河主题"><span class="theme-swatch-preview" aria-hidden="true"></span><span>午夜</span></button>
             </div>
+            <p class="settings-hint">点击即生效并记住选择，刷新后保持；首次访问跟随系统深浅。图表颜色同步更新，无需刷新。</p>
           </div>
+          <script>
+          /* v0.15.1 主题控件控制器：只服务本控件，不改 script.js。
+             颜色真源是 v0151-theme.css 的 CSS 变量；window.__chartColors()
+             仍是全站唯一取色出口，这里只把中性色改为实时读 CSS 变量。 */
+          (function () {
+            "use strict";
+            var KEY = "ai-accounting-v0151-theme";
+            var THEMES = {
+              light: { mode: "light", label: "浅色" },
+              dark: { mode: "dark", label: "深色" },
+              amber: { mode: "light", label: "琥珀" },
+              mint: { mode: "light", label: "薄荷" },
+              violet: { mode: "light", label: "紫藤" },
+              midnight: { mode: "dark", label: "午夜" }
+            };
+            var ORDER = ["light", "dark", "amber", "mint", "violet", "midnight"];
+            var root = document.documentElement;
+
+            function stored() {
+              try {
+                var value = localStorage.getItem(KEY);
+                return THEMES[value] ? value : "";
+              } catch (error) { return ""; }
+            }
+            function cssVar(name, fallback) {
+              try {
+                return getComputedStyle(root).getPropertyValue(name).trim() || fallback;
+              } catch (error) { return fallback; }
+            }
+            function syncUi(skin, mode) {
+              Array.prototype.forEach.call(document.querySelectorAll("[data-theme-choice]"), function (button) {
+                var active = button.getAttribute("data-theme-choice") === skin;
+                button.classList.toggle("is-active", active);
+                button.setAttribute("aria-checked", active ? "true" : "false");
+                button.tabIndex = active ? 0 : -1;
+              });
+              var moon = document.querySelector(".icon-moon");
+              var sun = document.querySelector(".icon-sun");
+              if (moon) moon.classList.toggle("d-none", mode === "dark");
+              if (sun) sun.classList.toggle("d-none", mode !== "dark");
+              var meta = document.querySelector('meta[name="theme-color"]');
+              if (meta) meta.setAttribute("content", cssVar("--brand-blue", "#2563eb"));
+            }
+            function apply(skin, persist) {
+              if (!THEMES[skin]) return;
+              var mode = THEMES[skin].mode;
+              if (persist) {
+                try { localStorage.setItem(KEY, skin); } catch (error) { /* 隐私模式忽略 */ }
+              }
+              if (root.getAttribute("data-skin") !== skin) root.setAttribute("data-skin", skin);
+              if (root.getAttribute("data-mode") !== mode) root.setAttribute("data-mode", mode);
+              /* 既有组件钩子只认 light/dark；午夜/琥珀等靠 data-skin 覆盖变量 */
+              if (root.getAttribute("data-theme") !== mode) root.setAttribute("data-theme", mode);
+              syncUi(skin, mode);
+              try { if (typeof renderCharts === "function") renderCharts(); } catch (error) { /* 首屏未就绪 */ }
+            }
+            function cycle() {
+              var current = root.getAttribute("data-skin") || "light";
+              var next = ORDER[(ORDER.indexOf(current) + 1) % ORDER.length];
+              apply(next, true);
+              if (typeof toast === "function") {
+                toast("已切换主题：" + THEMES[next].label, "success", { exclusive: true });
+              }
+            }
+            function bind() {
+              var group = document.getElementById("theme-choice");
+              if (group) {
+                group.addEventListener("click", function (event) {
+                  var button = event.target.closest("[data-theme-choice]");
+                  if (button) apply(button.getAttribute("data-theme-choice"), true);
+                });
+                group.addEventListener("keydown", function (event) {
+                  var button = event.target.closest("[data-theme-choice]");
+                  if (!button) return;
+                  var index = ORDER.indexOf(button.getAttribute("data-theme-choice"));
+                  var next = -1;
+                  if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (index + 1) % ORDER.length;
+                  if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (index + ORDER.length - 1) % ORDER.length;
+                  if (event.key === "Home") next = 0;
+                  if (event.key === "End") next = ORDER.length - 1;
+                  if (next < 0) return;
+                  event.preventDefault();
+                  var target = group.querySelector('[data-theme-choice="' + ORDER[next] + '"]');
+                  if (target) { target.focus(); apply(ORDER[next], true); }
+                });
+              }
+              /* 顶栏主题按钮与 Shift+D 也走六主题循环，避免旧逻辑把配色打回两档 */
+              document.addEventListener("click", function (event) {
+                if (event.target.closest("#theme-toggle")) {
+                  event.preventDefault();
+                  event.stopImmediatePropagation();
+                  cycle();
+                }
+              }, true);
+              document.addEventListener("keydown", function (event) {
+                if (!event.shiftKey || String(event.key).toLowerCase() !== "d") return;
+                var target = event.target;
+                if (target && (/^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || target.isContentEditable)) return;
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                cycle();
+              }, true);
+              /* script.js 的 applyTheme 会把 data-theme 写成 light/dark；按当前 skin 纠偏 */
+              if (window.MutationObserver) {
+                new MutationObserver(function () {
+                  var skin = root.getAttribute("data-skin");
+                  if (!skin || !THEMES[skin]) return;
+                  var expected = THEMES[skin].mode;
+                  if (root.getAttribute("data-theme") !== expected) root.setAttribute("data-theme", expected);
+                }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+              }
+            }
+            function wrapChartColors() {
+              if (window.__zhzChartColorsWrapped || typeof window.__chartColors !== "function") return;
+              var origin = window.__chartColors;
+              window.__chartColors = function () {
+                var palette = origin() || {};
+                palette.brand = cssVar("--brand-blue", palette.brand);
+                palette.line = cssVar("--line", palette.line);
+                palette.surface = cssVar("--surface", palette.surface);
+                palette.text = cssVar("--text-muted", palette.text);
+                palette.strong = cssVar("--text-strong", palette.strong);
+                return palette;
+              };
+              window.__zhzChartColorsWrapped = true;
+            }
+            function init() {
+              var saved = stored();
+              if (!saved) saved = root.getAttribute("data-theme") === "dark" ? "dark" : "light";
+              apply(saved, false);
+              bind();
+              wrapChartColors();
+            }
+            if (document.readyState === "loading") {
+              document.addEventListener("DOMContentLoaded", init, true);
+            } else {
+              init();
+            }
+          })();
+          </script>
           <div class="settings-group">
             <span class="settings-label">品牌图标主题</span>
             <div class="brand-logo-grid" id="brand-logo-grid" role="radiogroup" aria-label="品牌图标主题"></div>
-            <p class="settings-hint">只影响本机侧边栏与登录页的品牌图标；浏览器标签页和 PWA 桌面图标固定使用默认 Logo。</p>
+            <p class="settings-hint">共 55 款，只影响本机侧边栏与登录页的品牌图标；浏览器标签页和 PWA 桌面图标固定使用默认 Logo。</p>
           </div>
           <div class="settings-group">
             <span class="settings-label">首页卡片显示</span>
@@ -2526,6 +2752,8 @@
 <script src="/static/script.js?v=0.15"></script>
 <!-- v0.15.2 · Agent A：包装 script.js 的 selectAccount，实现移动端页面栈（不改 script.js 本体） -->
 <script src="/static/mobile-stack-v0152.js?v=0.15" defer></script>
+  <!-- BIZ-V0151 业务专项：独立 JS，避免与 F 并行期的 script.js 冲突 -->
+  <script src="/static/biz-v0151.js?v=0.15"></script>
 <!-- v0.15：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
 <script src="/static/marquee-v0143.js?v=0.15" defer></script>
 <script src="/static/charts-v013.js?v=0.15"></script>

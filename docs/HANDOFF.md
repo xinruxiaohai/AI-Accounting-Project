@@ -23,18 +23,20 @@
 
 | Agent | 职责 | 允许改的文件（白名单） | 状态 |
 |---|---|---|---|
-| A | 移动端 UI（头像靠左、筛选折叠、暖色） | templates/index.html、static/v01435.css、static/script.js | 已完成 |
-| B | AI 文本识别准确率 | ai_service.py 的 SYSTEM_PROMPT + 文本归一化区 | 进行中 |
+| A | 移动端交互重构（账户 → 全屏二级页、移动端导航栈、二级页全屏化） | templates/index.html（仅加 link/script）、新增 static/mobile-stack-v0152.css、新增 static/mobile-stack-v0152.js；**不可碰 static/style.css（G 二轮占用）与 script.js 图标区 8191-8285** | 已完成（commit `587e65e`，3 文件 +1033 行；32/32 断言：`.assets-right` 全屏 `z-index:1052`、`elementFromPoint` 不穿透 tabbar、`history` 连点只 +1、`/api/records` 只发 1 次、桌面 731px 右栏零回归、md5 不变） |
+| B | AI 文本识别准确率 | ai_service.py 的 SYSTEM_PROMPT + 文本归一化区 | 已完成（commit `7c5e4f5`；账户/联系人 83.3%→**100%**、文本 502=0、多轮加 `is_revision` 不猜数；confidence 90-100 占比 82.8% 未达 ≤60%，判为指标口径问题挂起） |
 | C | 原生弹窗审计 | 只读（0 命中，无改动） | 已完成 |
-| D | AI 图像识别准确率 + 图片先识别后压缩 | ai_service.py 的 VISION_PROMPT/parse_image、app.py 图片路由(约1752-1875)、static/script.js 上传入口 | 进行中 |
-| E | 投资 K 线（日/周/月 + 30min 同步） | app.py 投资路由区(约3138+)、static/invest-v0133.js、templates/index.html 的 K 线 Modal、新增 K 线样式 | 待开始 |
+| D | AI 图像识别准确率 + 图片先识别后压缩 + **重复截图去重** | ai_service.py 的 VISION_PROMPT/parse_image、app.py 图片路由(约1752-1933)、static/script.js 上传入口、database.py 的 records 补列与查重区 | 一段已完成（commit `48a0e5e`：31 张真实样本 字段级 94.5% / 类型 100% / 502=0；去重 9/9 断言，含 `¥11.93 vs ¥23.10 dHash=0 不判重` 反证；`records.image_hash`+`trade_no` 幂等补列）；二段（分类闭集 + trade_no + 真浏览器重复上传）进行中 |
+| E | 投资 K 线（日/周/月 + 30min 同步） | app.py 投资路由区(约3138+)、static/invest-v0133.js、templates/index.html 的 K 线 Modal、新增 K 线样式 | 已完成（v0.15） |
+| F | 账户与分类图标体系（真品牌 logo + 60 分类图标）；五十五款**应用图标不动**，六主题/可访问性顺带微调 | static/script.js **仅图标区(约8090-8287)**、新增 static/icons/entity/**、新增 static/entity-icons-v0152.css、static/v0151-theme.css、templates/index.html（仅加一行 link） | 已完成（commit `2d34144`，79 文件；账户 15 key / 分类 60 key；遗留：`entity/account/unionpay.svg` 非等比缩放变形、资产页账户行缺视觉截图） |
+| G | 业务增强（月度结账单卡 / 周期账单模板 / 报销进阶）+ **二轮：资产页布局修复** | static/biz-v0151.js、static/biz-v0151.css、app.py `/api/biz/*`、templates/index.html 的 `#biz-v0151-root`、static/style.css **仅末尾追加** | 初版完成（v0.15 补修 HTML 注释失闭 / teardown 二次入账，接口 30/30、CDP 25/25）；**二轮进行中**：修复 `#biz-v0151-root` 固定 880px 把 `.assets-split` 挤成 0（1440×900 下「我的账户」整块不可见），详见 docs/prompts 与 48/50 号补充 |
 
 协作铁律（违反即停）：
 1. 只改自己白名单内的文件，绝不格式化/重排整个文件，只动必要的行；跨白名单的需求先告诉用户协调。
-2. 共用文件串行改：`ai_service.py` 由 B、D 共用——B 改完提交后 D 再动；`app.py` 由 D、E 共用——D 完成再 E 动；`static/script.js` 由 A、D 共用，后动者先确认前者已收尾。
-3. 谁都不许自行改版本号（APP_VERSION_FALLBACK / ?v= / CACHE_NAME / manifest），统一由用户最后 bump 发版；上一轮 A bump 的 0.14.3.5 已回退到基线 v0.14.3.4。
+2. 共用文件串行改：`ai_service.py` 由 B、D 共用——B 改完 D 再动；`app.py` 由 D、E 共用；`static/script.js` 由 A、D、F 共用——**F 只许改图标区（约 8090-8240 行），A 原则上不碰 script.js（用新增 mobile-stack-v0152.js wrap 既有全局函数）**；任何人对共用文件只许定点 Edit，禁止整文件写回，改前记 `git diff --stat`，改后 grep 双向确认（自己的新符号在、别人的标志串如 `_compress_ai_image` / `entityIconHtml` 也在）。
+3. 谁都不许自行改版本号（APP_VERSION_FALLBACK / ?v= / CACHE_NAME / manifest），统一由用户最后 bump 发版；当前基线 **v0.15**。
 4. 测试一律用 D:\Project\temp 下各自独立子目录，隔离库 + teardown + 主库 records.db 零污染（md5/mtime 前后对比）；禁 /register，只用 test@test.com(本地uid93) 与 temp_cdp_v0140@example.com(uid90)，JWT sub 字符串。
-5. git 提交只 `git add` 自己改的文件，绝不 `git add -A`，绝不碰 docs/HANDOFF.md 及其他 agent 的产物；版本串按当前基线 v0.14.3.4 为准。
+5. git 提交只 `git add` 自己改的文件，绝不 `git add -A`，绝不碰 docs/HANDOFF.md 及其他 agent 的产物。
 
 三、当前环境 / 技术栈
 
@@ -43,7 +45,7 @@
 - 前端：templates/index.html、static/script.js（主逻辑）、static/charts-v013.js（图表看板）、static/auth-v012.js（JWT fetch 封装 + 登录遮罩 + 品牌图标主题 + 头像 Lightbox）、static/style.css；后台 /admin 由 static/access-guard.js 保护。
 - 当前版本：v0.15（四模块并行收尾版：SW `ai-accounting-v0.15`、全站 27 处 `?v=0.15`、`APP_VERSION_FALLBACK=v0.15`；含 ① 移动端头像入口 + 筛选折叠 + 暖色 UI ② AI 文本识别中文金额/兜底与置信度 ③ AI 图片识别「原图识别→识别后服务端压缩落盘」+ 20MB 硬上限 ④ 投资 K 线日/周/月 + 30 分钟行情同步；commit `47b50ec`，云端 8.134.12.135 已部署核验 `{"version":"v0.15"}`；接口 38/38、文本 66 case、图像 4/10→10/10、压缩链路 15/15、移动端 CDP 15/15；新增依赖 Pillow>=10.0）。
 - 历史标签：v0.11.4-DEV ~ v0.11.8-DEV、v0.12-DEV、v0.12.1 ~ v0.12.5-DEV、v0.13.1 ~ v0.13.9-DEV、v0.14.0-TST、v0.14.1 ~ v0.14.3.4、v0.15。
-- 已知坑：**Flask 用 `--no-reload` 启动时 Jinja 模板会被缓存，改完 templates/*.html 必须重启进程**（否则 CDP 测试拿到旧 DOM）；东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；SW 静态资源是 stale-while-revalidate，发版后第一次刷新必然先命中旧缓存——必须同步 bump 模板 `?v=` 与 `CACHE_NAME` 才能一次刷新生效；headless Chrome 默认视口 800×600，侧边栏在该宽度会折叠隐藏昵称，浏览器验收前必须 `Emulation.setDeviceMetricsOverride` 到桌面宽度；后台 `/api/admin/users` 是双层鉴权（`_access_guard` 要访问密码、`_identity_guard` 要 JWT），单测必须同时带 Bearer；移动端覆盖 FAB 位置必须写 `.fab, .fab.fab-menu`（基础样式与 ≤575.98px 断点都是两段类名、还有一条 `bottom:18px`，单写 `.fab` 特异性不足实测不生效）；headless Chrome 的 `Emulation.setEmulatedMedia` 模拟 `display-mode` 不生效（`matchMedia` 恒 false），standalone 相关规则只能断言下发的 CSS 文本、真机行为需用户安装后验证；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层；`data-*` 取出的 id 是字符串而接口 id 是数字，`findRecordById` 必须 `String()` 比对否则明细卡片按钮静默失效；移动端 16px 防缩放必须带 `!important`，否则被 `.form-control` 的 14px 盖掉；**仓库里有两份 SW / manifest（根目录 + static），v0.14.0 已把 `/service-worker.js` 与 `/manifest.json` 路由统一指向 `static/`，根目录副本不再对外服务——改根目录那份等于没改，发版仍要两份同步以防误改**；Bootstrap Tooltip 初始化会把 `title` 搬进 `data-bs-original-title` 并缓存进 `_config.title`，之后改 `title` 属性浮层不会更新，必须三处同步且绝不 `dispose()` 重建；`hidden` 属性永远打不过 `display:flex !important`，折叠类需求一律补 `[hidden]{display:none!important}` 并断言计算样式而不只断言属性；手动记账已与 AI 气泡解绑（`showRecordSuccessBubble` 保留但只给 AI 用），任何手动入口都不要再接它；`.panel + .panel{margin-top:16px}` 是跨页面布局地雷，新页面用 `gap` 不要再依赖它。
+- 已知坑：**Flask 用 `--no-reload` 启动时 Jinja 模板会被缓存，改完 templates/*.html 必须重启进程**（否则 CDP 测试拿到旧 DOM）；东财 search-api 必须保持 ≥1 秒请求间隔（进程级锁），否则 IP 会被封；邮箱验证码只存哈希、明文仅存于发信瞬间，排障时不要指望从库里捞码；.env 换 Key 必须彻底结束旧 Flask 进程再启动；UI 重构后必须同步改旧测试断言；CSS 同权重靠文件末尾覆盖；图标格子不要塞进父级 flex 行，否则被压缩变形；SW 静态资源是 stale-while-revalidate，发版后第一次刷新必然先命中旧缓存——必须同步 bump 模板 `?v=` 与 `CACHE_NAME` 才能一次刷新生效；headless Chrome 默认视口 800×600，侧边栏在该宽度会折叠隐藏昵称，浏览器验收前必须 `Emulation.setDeviceMetricsOverride` 到桌面宽度；后台 `/api/admin/users` 是双层鉴权（`_access_guard` 要访问密码、`_identity_guard` 要 JWT），单测必须同时带 Bearer；移动端覆盖 FAB 位置必须写 `.fab, .fab.fab-menu`（基础样式与 ≤575.98px 断点都是两段类名、还有一条 `bottom:18px`，单写 `.fab` 特异性不足实测不生效）；headless Chrome 的 `Emulation.setEmulatedMedia` 模拟 `display-mode` 不生效（`matchMedia` 恒 false），standalone 相关规则只能断言下发的 CSS 文本、真机行为需用户安装后验证；分类网格点击后不可重建 DOM（只改 .is-active），否则 event.target 被摘出文档，外部点击监听会误收浮层；`data-*` 取出的 id 是字符串而接口 id 是数字，`findRecordById` 必须 `String()` 比对否则明细卡片按钮静默失效；移动端 16px 防缩放必须带 `!important`，否则被 `.form-control` 的 14px 盖掉；**仓库里有两份 SW / manifest（根目录 + static），v0.14.0 已把 `/service-worker.js` 与 `/manifest.json` 路由统一指向 `static/`，根目录副本不再对外服务——改根目录那份等于没改，发版仍要两份同步以防误改**；Bootstrap Tooltip 初始化会把 `title` 搬进 `data-bs-original-title` 并缓存进 `_config.title`，之后改 `title` 属性浮层不会更新，必须三处同步且绝不 `dispose()` 重建；`hidden` 属性永远打不过 `display:flex !important`，折叠类需求一律补 `[hidden]{display:none!important}` 并断言计算样式而不只断言属性；手动记账已与 AI 气泡解绑（`showRecordSuccessBubble` 保留但只给 AI 用），任何手动入口都不要再接它；`.panel + .panel{margin-top:16px}` 是跨页面布局地雷，新页面用 `gap` 不要再依赖它；**任何 Python 脚本 import `app` / `database` 之前必须先设 `ZHZ_SQLITE_PATH`**——`init_db()` 在 import 期执行，不设变量会直接重写主库 `records.db`（2026-11-17 发生过一次：校验 token 时直接 `import app`，主库被幂等迁移重写，靠 `records.db.bak-*` 逐字恢复 + 还原 mtime 才回到 `211d49e67eaf25c9383b2d6d116e18a7`）；**`DELETE /api/records/<id>` 走 `soft_delete_record` 已经回滚余额，测试 teardown 再调 `adjust_balance` 会二次入账**（隔离库曾多出 111.0，2026-11-17 已修 teardown）；手动 patch `templates/index.html` 时锚点里带 `-->` 的注释块，替换串必须同样带回来，丢一个 `-->` 会把后面整段 section 吞进注释（biz-v0151 首轮「移动端面板不可见」的真因，断言 `<!--` 与 `-->` 计数相等可秒查）；**移动端做 fixed 全屏层有三个必踩坑**：① `#page-assets` 的 `.is-entering` 入场动画带 `transform`/`will-change`，会让它成为 `position:fixed` 的包含块，打开二级页前必须先移除，否则切页 300ms 内点账户全屏层直接错位；② 全局跑马灯 `#global-marquee` 的 `z-index:7000` 贴顶 24px，正文靠 `.app{padding-top}` 让位，但 fixed 层吃不到这个 padding，得用 `:root --zhz-stack-top-extra` 单独补（写在页节点上弹窗继承不到）；③ `.main`(`overflow:hidden`) 与 `#page-assets`(`overflow-y:auto`) 是双滚动容器，实测真正在滚的是 `.main`，返回时必须**两个都记录并恢复**。
 
 三、核心数据模型
 
@@ -68,6 +70,14 @@
 
 - **v0.14.0-TST 已完成并封版（代码冻结）**：系统已具备商业级质感与严密的财务逻辑——资产口径把投资持仓市值算进总资产、账户余额可在三处入口一键改平并留痕、手动记账与 AI 对话完全解耦、近 7 天账单实时刷新且可折叠、全套 UI（磨砂、骨架屏、粒子登录页、侧栏极简、双栏独立滚动、卡片贴底）达到可对外演示的水准；演示数据（`test@test.com / [演示口令已脱敏]`，未删除账单 330 条 = 326 条基线 + 4 条验收期平账/转账流水，3 个持仓 + 2 个投资账户）已就绪，可直接用于比赛演示。
 - **v0.15 已封版上线（2026-11-17）**：四模块并行收尾——移动端 UI（头像入口/筛选折叠/暖色，CDP 15/15）、AI 文本识别（中文金额/502 兜底，66 case）、AI 图片识别（原图识别后压缩，4/10→10/10、链路 15/15）、投资 K 线（日/周/月 + 30min 同步，接口 38/38）；commit `47b50ec`，云端已部署核验 v0.15。复盘见 `docs/prompts/46-v015-multiagent-parallel.md` 与 dev-log。
+- **v0.15.2 进行中（2026-11-17 夜）**：三条线并行，全部禁止自行 bump 版本，由协调方收口。
+  - ✅ B 文本识别：commit `7c5e4f5`（账户/联系人 100%、502=0）。
+  - ✅ F 图标体系：commit `2d34144`（账户 15 key + 分类 60 key，真品牌 logo）。
+  - ✅ D 图像+去重（一段）：commit `48a0e5e`（31 张真实样本 94.5% / 类型 100% / 502=0；去重 9/9，反证「不能用图片相似度」）。
+  - ⏳ D 二段：分类闭集 + `trade_no` 透传 + 真浏览器重复上传（`DOM.setFileInputFiles` 连选两次）。
+  - ⏳ G 二轮：修复 `#biz-v0151-root` 固定 880px 导致 `.assets-split` 被挤成 0（1440×900 账户列表不可见）+ 移动端账户行断行 + 分类占比条配色。
+  - ✅ A 移动端二级页：commit `587e65e`（`.assets-right` 全屏复用、`history.back()` 单一返回入口、桌面右栏零回归，32/32 断言）。
+  - 收口动作（协调方）：统一 checkpoint（补 `biz-v0151.*` / `v0151-theme.css` / `static/icons/brand-*.svg` / `auth-v012.js` 存量 +49 行，GitHub 当前落后云端）→ bump **v0.15.2**（72 处版本串）→ 上云 → `curl /api/version` 核验 → 补 dev-log 与本文件「当前版本」。
 - **下一步：续轮优化（已分派 A/B/F/G）**：B 修文本识别账户/联系人召回（33%）与 confidence 校准；E 补 K 线真机 CDP 截图；F 做六套主题 + 图标库 40+ + 可访问性；G 做月度结账单卡 + 周期账单模板 + 报销进阶。均由协调方统一发版，Agent 禁止自行 bump。
 - （历史）**代码冻结转入演示录制**：除阻断级 Bug 外不再改动功能——此条为 v0.14.0-TST 时期的旧计划，v0.15 起已解除冻结。
 - 交付材料清单：演示视频（按 `docs/video-script.md` 分镜）、技术报告（`docs/tech-report.md`）、项目说明与架构图（`docs/tech-report.md` 第 1 章 + `docs/archive/design-v0133.md` 与归档目录内三张 mermaid）、开发日志与踩坑集（`docs/dev-log.md`、`docs/bugs-and-solutions/`）、Prompt 复盘（`docs/prompts/README.md`）、可运行包与演示账号说明。
