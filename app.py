@@ -5303,11 +5303,11 @@ def feedback_messages_post_alias(feedback_id):
 
 # ---------------- 版本号：优先环境变量，其次 Git Tag ----------------
 
-APP_VERSION_FALLBACK = "v0.15.3"
+APP_VERSION_FALLBACK = "v0.15.4"
 
 
 def detect_version():
-    """返回当前统一版本号 v0.15.3。
+    """返回当前统一版本号 v0.15.4。
 
     v0.14.0-TST 修复：原实现优先读本地 Git Tag，但仓库最新 tag 还停在
     v0.13.9-DEV，导致 /api/version 把侧边栏、「我的」页卡片、后台公告草稿
