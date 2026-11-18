@@ -10229,14 +10229,17 @@ body.auth-locked {
   color: var(--text-dim);
 }
 
+/* 投资盈亏配色：按中国股市习惯「赚红亏绿」。
+   注意与记账收支相反——收入绿、支出红是记账语义，
+   但持仓浮动盈亏/当日盈亏沿用「涨红跌绿」，不能让亏损显示成红色。 */
 .invest-hero-pl.is-up .invest-pl-amount,
 .invest-hero-pl.is-up .invest-pl-percent {
-  color: var(--color-income);
+  color: var(--color-expense);
 }
 
 .invest-hero-pl.is-down .invest-pl-amount,
 .invest-hero-pl.is-down .invest-pl-percent {
-  color: var(--color-expense);
+  color: var(--color-income);
 }
 
 /* 持仓行右侧的当日盈亏占位：金额与百分比各自独立节点，将来只改 textContent */
@@ -10357,12 +10360,13 @@ body.auth-locked {
   font-variant-numeric: tabular-nums;
 }
 
+/* 投资汇总项同样「赚红亏绿」，与持仓行保持一致 */
 .invest-summary-item strong.is-up {
-  color: var(--color-income);
+  color: var(--color-expense);
 }
 
 .invest-summary-item strong.is-down {
-  color: var(--color-expense);
+  color: var(--color-income);
 }
 
 /* ---------- 平台折叠面板 ---------- */
@@ -10529,12 +10533,13 @@ body.auth-locked {
   font-variant-numeric: tabular-nums;
 }
 
+/* 持仓行浮动盈亏：赚红亏绿（中国习惯），与 K 线的 ik-price-change 一致 */
 .invest-holding-cost.is-up {
-  color: var(--color-income);
+  color: var(--color-expense);
 }
 
 .invest-holding-cost.is-down {
-  color: var(--color-expense);
+  color: var(--color-income);
 }
 
 .invest-holding-ops {
