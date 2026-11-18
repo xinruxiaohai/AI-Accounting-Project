@@ -641,3 +641,12 @@ v0.12-DEV 2026-10-30 多用户账号系统、JWT 鉴权与账单导入
 - **资产页布局修复（Agent G 二轮，`1184858`）**：`#biz-v0151-root` 固定 880px 把 `.assets-split` 挤成 0，1440×900 下「我的账户」整块不可见。修法：≥1024px 时 `#page-assets.active{overflow-y:auto}` + `.assets-split{flex:0 0 auto;height:calc(100vh - var(--topbar-h) - 48px)}`，业务面板顺排到下方由整页滚动揭示；顺带修移动端 `.account-row-sub` 被 `white-space:normal` 拆成「储蓄账/户」。
 - **踩坑**：① `.is-entering` 动画的 `transform` 会让 `#page-assets` 成为 `fixed` 包含块，开二级页前必须移除；② `#global-marquee` `z-index:7000` 贴顶 24px，fixed 层需 `--zhz-stack-top-extra` 单独补；③ 手动 patch 模板丢一个 `-->` 会吞掉整段 section；④ `import app` 未设 `ZHZ_SQLITE_PATH` 会重写主库（G/F 各踩一次，均用 `records.db.bak-*` 逐字恢复）；⑤ 多 agent 并行提交导致 `main` 与并行分支分叉，收口必须 ff 对齐后再 bump。
 - **版本 / 缓存**：`APP_VERSION_FALLBACK` = v0.15.2，SW `ai-accounting-v0.15.2` / `ASSET_VERSION=0.15.2`，模板与 manifest 共 33 处 `?v=0.15.2`，旧串残留 0。
+
+## v0.15.3（2026-11-18）
+
+- **默认分类扩充（Agent F，`2b13304`）**：`CATEGORY_SEEDS` 8→20 个一级、二级 57 个，`其他` 保持 0 子项兜底；二级子分类在记账浮层加 22px 图标（复用 `entityIconHtml("category", name, 22)`），新增 `show`/`cloud` 两个 twemoji 图标；`CATEGORY_ICON_RULES` 补齐「宠物/演出/洗车/宽带/机票/纸尿裤」等优先规则。收入侧维持 6 条不变（「转账」是 `TRANSFER_CATEGORY` 常量，不是收入分类，刻意不加）。
+- **设置页与主题（Agent A，`fb9b10c`）**：主题从一维 `data-skin` 升级为二维 `data-skin × data-mode`，5 主题 × 2 模式共 10 套令牌（补齐 `midnight+light`、`classic/amber/mint/violet + dark`），正文对比度 12.8–14.7:1；品牌图标由 55 款收敛为 8 款（`logo-main.png` + `logo-theme-1..7.png`），47 个 `brand-*.svg` 删除并加 `brandLogoFile()` 回落；用户端整块移除「权限管理」面板与 `bootPermissions()` 调用（不再请求 `/api/admin/admins`）；设置弹窗 ≥1024 固定 920×680、≤768 全屏（必须同时打平 `.modal-dialog-centered` 的 `min-height`）；侧边栏 5 个导航图标换成可区分的线性图标。
+- **K 线副图修复（Agent E，`8dab683`）**：定位到「偶尔异常」的真因——场外基金走净值聚合，`_aggregate_fund_nav` 里 `volume` 恒为 0，全 0 数据配 `yAxis.scale:true` 被 ECharts 算成 0~1，于是底部出现 `0/0.5/1` 刻度。修法：无成交量时整块不生成副图（grid/xAxis/yAxis/bar 均不落地，dataZoom 只挂主轴），有成交量时副图 `axisLabel.show:false` + `min:0`，grid 按画布实测高度分配，dataZoom 固定底部。基金 41/41 断言、ETF 双图正常。
+- **存量用户分类补种（协调方）**：v0.14.0 的补种标记已用过一次，20 组新分类对存量用户不可见（终审阻断项 B-2）。新增 `_migrate_v0153_new_categories()` + `schema_migrations.taxonomy_v0153` 标记，**只补 `V0153_NEW_DEFAULT_CATEGORIES` 里的名字**，不重跑全量补种（否则用户删掉的旧分类会复活）；新行 `sort_order` 按 id 回填。隔离库实测：uid1/90/93 一级 9→21、uid76 8→20，二次运行 0 条（幂等），主库 md5 不变。
+- **迁移备份目录平台化（协调方）**：`MIGRATION_BACKUP_DIR` 原写死 `D:/Project/temp/db-backup`，Linux 云端建出字面量目录且备份从不落地。改为 `ZHZ_MIGRATION_BACKUP_DIR` 可覆盖、POSIX 默认 `/opt/backups/db`、Windows 维持原路径。
+- **版本 / 缓存**：`APP_VERSION_FALLBACK=v0.15.3`、SW `ai-accounting-v0.15.3`、`ASSET_VERSION=0.15.3`、49 处 `?v=0.15.3`、`docker-compose` 镜像标签同步，旧 `?v=0.15.2` 残留 0。
