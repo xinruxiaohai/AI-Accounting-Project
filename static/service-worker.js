@@ -13,7 +13,7 @@
  */
 const CACHE_NAME = "ai-accounting-v0.15.4";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.15.4.4";
+const ASSET_VERSION = "0.15.4.5";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",

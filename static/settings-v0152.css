@@ -222,6 +222,68 @@
   color: var(--text-muted, #6b7280);
 }
 
+/* 退出设备按钮：视觉 24px 圆形、透明底、hover 浅红，不是大红按钮。
+   移动端热区 ≥32px —— 用透明 padding 撑，视觉仍是 24px。 */
+.login-device-revoke {
+  flex: 0 0 auto;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim, #9ca3af);
+  cursor: pointer;
+  transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+
+.login-device-revoke svg {
+  width: 14px;
+  height: 14px;
+  pointer-events: none;
+}
+
+.login-device-revoke:hover,
+.login-device-revoke:focus-visible {
+  color: var(--color-expense, #dc2626);
+  background: var(--color-expense-soft, rgba(220, 38, 38, .08));
+  border-color: var(--color-expense-soft, rgba(220, 38, 38, .16));
+}
+
+.login-device-revoke:focus-visible {
+  outline: 2px solid var(--focus-ring, #2563eb);
+  outline-offset: 1px;
+}
+
+.login-device-revoke:disabled {
+  opacity: .45;
+  cursor: default;
+}
+
+/* 淡出：删除成功后加 .is-revoking，220ms 后由 JS 移除该行 */
+.login-device-item {
+  transition: opacity .2s ease;
+}
+
+.login-device-item.is-revoking {
+  opacity: 0;
+}
+
+@media (max-width: 768px) {
+  /* 视觉仍是 24px；透明伪元素向外扩 4px，把可点热区撑到 32px */
+  .login-device-revoke::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+  }
+}
+
 /* 加载中 / 失败 / 空列表共用一行，高度与一条设备接近，避免弹窗内容跳动 */
 .login-device-state {
   padding: 14px 12px;

@@ -795,8 +795,19 @@
     });
     list.sort(function (a, b) { return b.value - a.value; });
     if (list.length > 8) {
+      var head = list.slice(0, 7);
       var rest = list.slice(7).reduce(function (sum, item) { return sum + item.value; }, 0);
-      list = list.slice(0, 7).concat([{ name: "其他", value: Number(rest.toFixed(2)) }]);
+      // 前 7 名里可能本来就有一个真实分类叫「其他」，必须并进去，避免图例出现两个「其他」
+      var existing = -1;
+      for (var i = 0; i < head.length; i += 1) {
+        if (head[i].name === "其他") { existing = i; break; }
+      }
+      if (existing >= 0) {
+        head[existing] = { name: "其他", value: Number((head[existing].value + rest).toFixed(2)) };
+        list = head;
+      } else {
+        list = head.concat([{ name: "其他", value: Number(rest.toFixed(2)) }]);
+      }
     }
     return { list: list, total: Number(total.toFixed(2)) };
   }
@@ -854,11 +865,11 @@
       graphic: hasData
         ? [
             {
-              type: "text", left: "center", top: "42%",
+              type: "text", left: "42%", top: "42%",
               style: { text: "本期支出合计", fill: textColor, fontSize: 11, textAlign: "center" },
             },
             {
-              type: "text", left: "center", top: "51%",
+              type: "text", left: "42%", top: "51%",
               style: { text: moneySafe(result.total), fill: strongColor, fontSize: 16, fontWeight: 700, textAlign: "center" },
             },
           ]
