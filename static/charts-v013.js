@@ -849,15 +849,16 @@
           return params.name + " · " + moneySafe(params.value) + " · " + pct + "%";
         },
       },
+      // 图例移到底部、饼图居中：避免左右分栏时 graphic 文字定位偏移压到圆环
       legend: hasData
         ? {
             type: "scroll",
-            orient: "vertical",
-            right: 4,
-            top: "middle",
+            orient: "horizontal",
+            left: "center",
+            bottom: 0,
             itemWidth: 10,
             itemHeight: 10,
-            itemGap: 8,
+            itemGap: 12,
             textStyle: { color: textColor, fontSize: 11 },
             data: result.list.map(function (item) { return item.name; }),
           }
@@ -865,11 +866,11 @@
       graphic: hasData
         ? [
             {
-              type: "text", left: "42%", top: "42%",
+              type: "text", left: "center", top: "42%",
               style: { text: "本期支出合计", fill: textColor, fontSize: 11, textAlign: "center" },
             },
             {
-              type: "text", left: "42%", top: "51%",
+              type: "text", left: "center", top: "51%",
               style: { text: moneySafe(result.total), fill: strongColor, fontSize: 16, fontWeight: 700, textAlign: "center" },
             },
           ]
@@ -878,8 +879,8 @@
         {
           type: "pie",
           name: "分类占比",
-          radius: ["45%", "70%"],
-          center: ["42%", "52%"],
+          radius: ["42%", "66%"],
+          center: ["50%", "50%"],
           avoidLabelOverlap: true,
           label: { show: false },
           labelLine: { show: false },
