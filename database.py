@@ -19,8 +19,18 @@ DB_PATH = Path(
     os.getenv("ZHZ_SQLITE_PATH") or (Path(__file__).resolve().parent / "records.db")
 ).resolve()
 
-# v0.13.1：迁移前的 DB 备份目录。**必须放在项目目录之外**（HANDOFF 红线：测试产物不进项目目录）
-MIGRATION_BACKUP_DIR = Path(r"D:\Project\temp\db-backup")
+# v0.13.1：迁移前的 DB 备份目录。**必须放在项目目录之外**（HANDOFF 红线：测试产物不进项目目录）。
+# v0.15.3：改为按平台取默认值 + 支持 ZHZ_MIGRATION_BACKUP_DIR 覆盖。
+# 原来写死 Windows 绝对路径，Linux 云端每次启动都会在 /opt/zhihuizhang 下建一个
+# 名为 "D:\Project\temp\db-backup" 的字面量目录，备份实际落不进去（等于云端一直没有迁移前备份）。
+MIGRATION_BACKUP_DIR = Path(
+    os.getenv("ZHZ_MIGRATION_BACKUP_DIR")
+    or (
+        "/opt/backups/db"
+        if os.name == "posix"
+        else r"D:\Project\temp\db-backup"
+    )
+)
 
 # 本进程已做过的迁移备份文件路径（避免重复 init_db 时堆出一串同样的备份）
 _MIGRATION_BACKUP_FILE = ""
@@ -760,6 +770,65 @@ def _seed_income_categories(conn, user_id=None):
 # 破坏 v0.13 起就承诺过的口径。
 TAXONOMY_MIGRATION_KEY = "taxonomy_v0140"
 
+# v0.15.3：默认分类从 8 组扩到 20 组。分类是「按用户存在库里」的，v0.14.0 的补种标记
+# 已经用过一次，所以新分类对存量用户完全不可见（2026-11-18 终审的阻断项）。
+# 这里**只补本轮新增的这批名字**——刻意不重跑全量补种，否则用户主动删掉的旧分类
+# （娱乐 / 电影 / 游戏等）会在升级后被复活，违反 v0.13 起「删了就不再冒出来」的承诺。
+TAXONOMY_V0153_MIGRATION_KEY = "taxonomy_v0153"
+V0153_NEW_DEFAULT_CATEGORIES = frozenset(
+    {
+        "教育",
+        "学费",
+        "书籍",
+        "培训课程",
+        "宠物",
+        "宠物食品",
+        "宠物医疗",
+        "宠物用品",
+        "运动",
+        "健身",
+        "运动装备",
+        "场馆场地",
+        "美容",
+        "护肤美妆",
+        "理发",
+        "医美",
+        "数码",
+        "手机",
+        "电脑",
+        "影音配件",
+        "汽车",
+        "保养维修",
+        "洗车美容",
+        "配件改装",
+        "年检",
+        "通讯",
+        "话费",
+        "宽带",
+        "流量",
+        "订阅",
+        "会员订阅",
+        "软件服务",
+        "云存储",
+        "旅行",
+        "机票酒店",
+        "景点门票",
+        "旅行团",
+        "税费",
+        "个人所得税",
+        "印花税",
+        "其他税费",
+        "保险",
+        "意外保险",
+        "车辆保险",
+        "人寿保险",
+        "母婴",
+        "奶粉辅食",
+        "纸尿裤",
+        "玩具早教",
+    }
+)
+
 
 def _expense_category_map():
     """新体系里的支出分类位置：{名字: 父分类名}（一级分类父名是 None）。
@@ -946,6 +1015,65 @@ def _migrate_v0140_taxonomy(conn):
         flush=True,
     )
     return True
+
+
+def _migrate_v0153_new_categories(conn):
+    """v0.15.3：给存量用户补「本轮新增的」默认分类，返回本次新增条数（幂等）。
+
+    v0.14.0 的补种标记已经用过一次，`_seed_categories` 不会再给既有用户跑，
+    于是 20 组新分类对存量用户完全不可见（2026-11-18 终审阻断项）。
+    这里**只补 `V0153_NEW_DEFAULT_CATEGORIES` 里的名字**，理由见该常量的注释：
+    全量重跑会把用户主动删掉的旧分类复活，破坏「删了就不再冒出来」的承诺。
+
+    新插入的行 sort_order 按 id 回填，与既有分类「后建的排在后面」的习惯保持一致。
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "  name TEXT PRIMARY KEY, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+    )
+    done = conn.execute(
+        "SELECT 1 FROM schema_migrations WHERE name = ?",
+        (TAXONOMY_V0153_MIGRATION_KEY,),
+    ).fetchone()
+    if done is not None:
+        return 0
+
+    user_ids = [
+        row["id"]
+        for row in conn.execute(
+            "SELECT DISTINCT user_id AS id FROM categories ORDER BY user_id"
+        )
+    ]
+    added = 0
+    for uid in user_ids:
+        base = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) AS m FROM categories WHERE user_id = ?", (uid,)
+        ).fetchone()["m"]
+        for top_name, children in CATEGORY_SEEDS:
+            if top_name not in V0153_NEW_DEFAULT_CATEGORIES:
+                continue
+            top_id = _ensure_category(conn, top_name, None, "expense", uid)
+            for child_name in children:
+                _ensure_category(conn, child_name, top_id, "expense", uid)
+        fresh = conn.execute(
+            "SELECT COUNT(*) AS n FROM categories WHERE user_id = ? AND id > ?",
+            (uid, base),
+        ).fetchone()["n"]
+        if fresh:
+            # 新行的 sort_order 默认 0 会排到最前面，按 id 回填让它们自然排到末尾
+            conn.execute(
+                "UPDATE categories SET sort_order = id WHERE user_id = ? AND id > ?",
+                (uid, base),
+            )
+            added += fresh
+
+    conn.execute(
+        "INSERT OR REPLACE INTO schema_migrations (name) VALUES (?)",
+        (TAXONOMY_V0153_MIGRATION_KEY,),
+    )
+    if added:
+        print("[v0.15.3] 存量用户补种新默认分类 %d 条" % added, flush=True)
+    return added
 
 
 def ensure_category_templates(user_id=None):
@@ -2442,6 +2570,8 @@ def init_db():
             # 先清洗「213」这类脏分类、清理无引用的旧默认分类，再按新体系补种，
             # 这样迁移日志里「脏分类先转挂到其他、再删除」的顺序才是可验证的。
             _migrate_v0140_taxonomy(conn)
+            # v0.15.3：给存量用户补本轮新增的默认分类（只补新增项，不复活用户删过的）
+            _migrate_v0153_new_categories(conn)
             _seed_categories(conn, ADMIN_USER_ID)
             _seed_income_categories(conn, ADMIN_USER_ID)
             _seed_accounts(conn)

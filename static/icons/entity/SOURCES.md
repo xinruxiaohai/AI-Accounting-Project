@@ -96,8 +96,10 @@
 
 > 注：本文档上方「账户/分类」清单为 v0.15.2 另一版产物，与实际落盘文件名（`food` / `sports` / `books` / `home` / `fun` / `gas` / `telecom` / `donation` / `tag` 等）不一致，实际以 `static/icons/entity/**` 与 `script.js` 的 `ENTITY_ICON_FILES` 为准；已在交付说明中标注，待协调方统一校正。
 
-## 命名例外（v0.15.2）
+## 目录约定（v0.15.3 更正）
 
-- `acc-fund.svg` ← `mdi/chart-line` ← MIT（账户「基金」专用；与分类 `fund.svg`（Twemoji）key 重名，故加 `acc-` 前缀避免覆盖）。
-- `acc-insurance.svg` ← `mdi/shield-account` ← MIT（账户「保险」专用，同上）。
+- 账户图标与分类图标**分两个子目录**存：`account/<key>.svg` 与 `category/<key>.svg`，
+  同名 key（如 `fund`、`insurance`）天然不冲突，因此**不存在 `acc-` 前缀的命名例外**。
+- 早前文档写的 `acc-fund.svg` / `acc-insurance.svg` 从未落地，实际文件是
+  `static/icons/entity/account/fund.svg` 与 `static/icons/entity/account/insurance.svg`。
 - 账户 15 key 中 `wechat` / `alipay` / `unionpay` / `meituan` / `paypal` 为官方彩色 logo；`qq` / `tiktok` 为单色真字标注入品牌主色；`bank` / `creditcard` / `cash` / `wallet` / `coin` / `fund` / `stock` / `insurance` 为同色系通用矢量近似，无硬造品牌图。
