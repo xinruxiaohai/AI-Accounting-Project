@@ -2157,10 +2157,17 @@ function renderAccountGroups() {
         groupNameAttr +
         "</span>" +
         '<span class="account-group-meta">' +
+        // v0.15.4：数字与「个账户」拆成两个 span，纯为手机端把标题行显示成「(6)」；
+        // 桌面端两个 span 内联渲染，文本与改动前逐字一致（"6 个账户"）。
         '<span class="account-group-count">' +
+        '<span class="acc-count-n">' +
         group.accounts.length +
-        " 个账户</span>" +
-        '<span class="account-group-total">合计 ' +
+        "</span>" +
+        '<span class="acc-count-unit"> 个账户</span>' +
+        "</span>" +
+        // 同理：「合计 」单独包裹，手机端隐藏后只剩金额
+        '<span class="account-group-total">' +
+        '<span class="acc-total-prefix">合计 </span>' +
         totalText +
         "</span>" +
         "</span>" +

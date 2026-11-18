@@ -13,7 +13,7 @@
  */
 const CACHE_NAME = "ai-accounting-v0.15.4";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.15.4.2";
+const ASSET_VERSION = "0.15.4.3";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",
@@ -37,6 +37,8 @@ const PRECACHE_URLS = [
   "/static/user-feedback-v0142.js?v=" + ASSET_VERSION,
   // v0.15.4：设置页「最近登录设备」面板
   "/static/login-devices-v0154.js?v=" + ASSET_VERSION,
+  // v0.15.4：移动端资产页搜索浮层
+  "/static/mobile-assets-v0154.js?v=" + ASSET_VERSION,
   "/static/script.js",
   "/static/script.js?v=" + ASSET_VERSION,
   "/static/auth-v012.js?v=" + ASSET_VERSION,

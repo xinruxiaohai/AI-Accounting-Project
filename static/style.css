@@ -15087,3 +15087,546 @@ body.is-sidebar-collapsed #sidebar-toggle {
     text-overflow: ellipsis !important;
   }
 }
+
+/* ==================================================================
+ * v0.15.4 · 移动端资产页「高密度」视觉重构（只在 ≤575.98px 生效）
+ * ------------------------------------------------------------------
+ * 目标：把「一张卡一行」的松散堆叠压成 净资产卡 + 2×2 四宫格 + 折叠分组卡。
+ * 纪律：
+ *   1) 所有规则都关在手机断点里；桌面 1440×900 一行不沾。
+ *   2) 本轮新加的节点（顶栏搜索图标、面板图标按钮、计数/合计的包裹 span）
+ *      在桌面侧一律 display:none，所以桌面 DOM 多出来的是「不可见元素」，
+ *      布局与改前逐像素一致。
+ *   3) 颜色一律取主题变量（--surface / --text-strong / --text-muted / --text-dim），
+ *      变量值本身就等于参考稿的 #0f172a / #64748b / #94a3b8，五套皮肤 + 亮暗自动跟随。
+ *   4) 行高 / 圆角 / 字号全部按参考稿的数值写死，不做 calc 拼凑。
+ * ================================================================== */
+
+/* ---------- 0. 新节点桌面兜底 ---------- */
+.topbar-search-btn {
+  display: none;
+}
+
+@media (max-width: 575.98px) {
+
+  /* ================= A. 页面骨架 =================
+     原来 #page-assets 自带 24px 内边距，叠在 .content 的 12px 之上变成了 36px。
+     这里清零，左右边距统一由 .content 的 12px 决定，卡片宽度 = 366（390 视口）。 */
+  #page-assets {
+    padding: 0;
+  }
+
+  #page-assets .assets-split,
+  #page-assets .assets-left {
+    gap: 12px;
+    margin-top: 0;
+  }
+
+  /* ================= B. 净资产卡：150 → 120 ================= */
+  #page-assets .assets-left > .assets-hero {
+    min-height: 0;
+    height: 120px;
+    padding: 16px 18px;
+    border-radius: 20px;
+    justify-content: center;
+    gap: 0;
+  }
+
+  #page-assets .assets-hero-label {
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0.5px;
+    color: rgba(255, 255, 255, 0.72);
+  }
+
+  #page-assets .assets-hero-value {
+    margin-top: 2px;
+    font-size: 34px;
+    font-weight: 700;
+    line-height: 40px;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+
+  /* 副行：总资产 ¥xx · 总负债 ¥xx
+     原本是 .visually-hidden（Bootstrap 用 !important 压成 1px），这里整组反转回来。
+     两个 span 之间用 ::before 画「·」，不额外加 DOM。 */
+  #page-assets .assets-hero-sub,
+  #page-assets .assets-hero-sub.visually-hidden {
+    position: static !important;
+    display: flex !important;
+    align-items: baseline;
+    width: auto !important;
+    height: auto !important;
+    margin: 4px 0 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+    clip: auto !important;
+    clip-path: none !important;
+    white-space: nowrap !important;
+    font-size: 12px;
+    line-height: 16px;
+    color: rgba(255, 255, 255, 0.68);
+  }
+
+  #page-assets .assets-hero-sub > span {
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  #page-assets .assets-hero-sub > span + span::before {
+    content: "·";
+    margin: 0 6px;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  #page-assets .assets-hero-sub strong {
+    display: inline;
+    margin: 0 0 0 3px;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 右侧两个图标按钮：30 → 28 */
+  #page-assets .hero-icon-btn {
+    width: 28px;
+    height: 28px;
+    top: 10px;
+    right: 10px;
+  }
+
+  #page-assets .hero-icon-btn svg {
+    width: 15px;
+    height: 15px;
+  }
+
+  #page-assets #hero-bg-btn {
+    right: 44px;
+  }
+
+  /* 眼睛遮住金额时，副行数字也跟着变成圆点间距 */
+  #page-assets .assets-hero.is-masked .assets-hero-value,
+  #page-assets .assets-hero.is-masked .assets-hero-sub strong {
+    letter-spacing: 1.5px;
+  }
+
+  /* ================= C. 四项统计：四张卡 → 2×2 宫格 =================
+     外层白卡 padding 12 + gap 10；单格 78 高、浅灰底、标签左 / 金额右。 */
+  #page-assets .asset-stats {
+    /* 14933 那条「窄屏一律单列」给 .asset-stats 加了 !important，
+       这里必须同权重加码：选择器多一个 #id，!important 才压得住。 */
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 16px;
+    background: var(--surface, #fff);
+  }
+
+  #page-assets .asset-stat {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 78px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--surface-2, #f7f8fa);
+    text-align: left;
+  }
+
+  /* 手机上不要那个「浮起来」的 hover（触屏没有 hover，只在点击后残留） */
+  #page-assets .asset-stat:hover {
+    border-color: transparent;
+    box-shadow: none;
+    transform: none;
+  }
+
+  #page-assets .asset-stat:active {
+    background: var(--surface-3, #f1f5f9);
+  }
+
+  #page-assets .asset-stat-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--text-muted, #64748b);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #page-assets .asset-stat-value {
+    flex: 0 0 auto;
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 22px;
+    color: var(--text-strong, #0f172a);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 手机格子里放不下「借入（待还）」+ 17px 金额（166 宽 − 24 内边距 = 142），
+     括号里的语义提示收起，只留「借入 / 借出 / 待报销 / 已报销」四个短标签；
+     桌面端这两个 span 正常显示，文案与改前一致。 */
+  #page-assets .stat-note {
+    display: none;
+  }
+
+  /* ================= D. 「我的账户」标题行 + 三个图标按钮 ================= */
+  #page-assets .accounts-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  #page-assets .accounts-panel:hover {
+    box-shadow: none;
+  }
+
+  #page-assets .accounts-panel > .panel-head {
+    height: 40px;
+    min-height: 40px;
+    padding: 0 2px;
+    border: 0;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #page-assets .accounts-panel > .panel-head .panel-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-strong, #0f172a);
+  }
+
+  #page-assets .accounts-panel .panel-tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* 28×28 圆形浅灰底，图标 16 —— 批量 / 分类 / 新增一律同尺寸。
+     文字用 font-size:0 收掉（保留在无障碍树里当名字），图标用伪元素蒙版画：
+     script.js 会用 textContent 改写「批量管理 / 退出批量」，插进 DOM 的
+     svg / span 会被整段冲掉，只有 CSS 画的图标不会被改写影响。 */
+  #page-assets .accounts-panel .panel-tools .btn {
+    display: inline-grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-3, #f1f5f9);
+    color: var(--text-main, #1f2937);
+    box-shadow: none;
+    font-size: 0;
+    line-height: 1;
+  }
+
+  #page-assets .accounts-panel .panel-tools .btn:active,
+  #page-assets .accounts-panel .panel-tools .btn.is-active {
+    background: var(--line, #e6ebf2);
+  }
+
+  #page-assets .accounts-panel .panel-tools .btn::before {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 16px;
+    background-color: currentColor;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-size: 16px 16px;
+    mask-size: 16px 16px;
+  }
+
+  /* 批量管理：多选方框 + 勾 + 右下角豁口 */
+  #page-assets #accounts-batch-toggle::before {
+    -webkit-mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='3.5' width='12' height='12' rx='3'/%3E%3Cpath d='m6.5 9 2 2.4 4-5'/%3E%3Cpath d='M8.5 20.5h9a3 3 0 0 0 3-3v-9'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='3.5' width='12' height='12' rx='3'/%3E%3Cpath d='m6.5 9 2 2.4 4-5'/%3E%3Cpath d='M8.5 20.5h9a3 3 0 0 0 3-3v-9'/%3E%3C/svg%3E");
+  }
+
+  /* 分类管理：文件夹 */
+  #page-assets #open-category-btn::before {
+    -webkit-mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 7.2A2.2 2.2 0 0 1 5.7 5h3.4l2 2.4h7.2A2.2 2.2 0 0 1 20.5 9.6v7.2a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 7.2A2.2 2.2 0 0 1 5.7 5h3.4l2 2.4h7.2A2.2 2.2 0 0 1 20.5 9.6v7.2a2.2 2.2 0 0 1-2.2 2.2H5.7a2.2 2.2 0 0 1-2.2-2.2z'/%3E%3C/svg%3E");
+  }
+
+  /* 新增账户：加号 */
+  #page-assets #open-account-btn::before {
+    -webkit-mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 5.5v13M5.5 12h13'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 5.5v13M5.5 12h13'/%3E%3C/svg%3E");
+  }
+
+  /* ================= E. 账户列表：分组卡 ================= */
+  #page-assets .accounts-panel > .account-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0;
+    max-height: none;
+    overflow: visible;
+    overscroll-behavior: auto;
+  }
+
+  #page-assets .accounts-panel .account-group {
+    margin: 0;
+    border-radius: 16px;
+    background: var(--surface, #fff);
+    overflow: hidden;
+  }
+
+  /* 标题行：高度 44，名称 15/600 + (6) 13/浅灰，右侧合计 16/600 + 箭头 */
+  #page-assets .accounts-panel .account-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    height: 44px;
+    padding: 0 16px;
+    border-radius: 0;
+    font-size: 15px;
+  }
+
+  #page-assets .accounts-panel .account-group-head[data-group-toggle]:hover {
+    background: transparent;
+  }
+
+  #page-assets .accounts-panel .account-group-head[data-group-toggle]:active {
+    background: var(--surface-2, #f7f8fa);
+  }
+
+  #page-assets .accounts-panel .account-group-head[data-group-toggle]:focus-visible {
+    outline: 2px solid var(--brand-blue);
+    outline-offset: -2px;
+  }
+
+  #page-assets .accounts-panel .account-group-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0;
+    color: var(--text-strong, #0f172a);
+  }
+
+  /* display:contents 让「计数」和「合计」变成标题行的直接 flex 子项，
+     这样计数能紧跟分组名（左），合计被 margin-left:auto 推到右侧 —— 不用改 DOM 顺序。 */
+  #page-assets .accounts-panel .account-group-meta {
+    display: contents;
+  }
+
+  #page-assets .accounts-panel .account-group-count {
+    flex: 0 0 auto;
+    margin-left: 4px;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-dim, #94a3b8);
+  }
+
+  #page-assets .accounts-panel .acc-count-unit {
+    display: none;
+  }
+
+  #page-assets .accounts-panel .acc-count-n::before {
+    content: "(";
+  }
+
+  #page-assets .accounts-panel .acc-count-n::after {
+    content: ")";
+  }
+
+  #page-assets .accounts-panel .account-group-total {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-strong, #0f172a);
+    font-variant-numeric: tabular-nums;
+  }
+
+  #page-assets .accounts-panel .acc-total-prefix {
+    display: none;
+  }
+
+  #page-assets .accounts-panel .account-group-chevron {
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin-left: 6px;
+  }
+
+  #page-assets .accounts-panel .account-group-chevron svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  #page-assets .accounts-panel .account-list {
+    gap: 0;
+  }
+
+  /* 账户行：46 高 / 0 16 内边距 / 0.5px 极浅分隔线（末行无）
+     选择器特意带上 .accounts-panel —— mobile-stack-v0152.css 里
+     `#page-assets .account-row{min-height:56px;padding:10px 12px}` 与这里同源于 id，
+     不提高一级优先级会被它盖掉（它后加载）。 */
+  #page-assets .accounts-panel .account-row {
+    height: 46px;
+    min-height: 0;
+    padding: 0 16px;
+    gap: 12px;
+    border: 0;
+    border-bottom: 0.5px solid rgba(15, 23, 42, 0.06);
+    border-radius: 0;
+    background: transparent;
+  }
+
+  #page-assets .accounts-panel .account-row:last-child {
+    border-bottom: 0;
+  }
+
+  #page-assets .accounts-panel .account-row:hover {
+    background: transparent;
+  }
+
+  #page-assets .accounts-panel .account-row:active {
+    background: var(--surface-2, #f7f8fa);
+  }
+
+  #page-assets .accounts-panel .account-row.active,
+  #page-assets .accounts-panel .account-row.active:hover {
+    background: var(--brand-soft, rgba(37, 99, 235, 0.1));
+    box-shadow: inset 3px 0 0 var(--brand-blue);
+  }
+
+  /* 图标 36 圆形；entity-badge 的尺寸由内联 --badge-size 控制，用 !important 盖掉 */
+  #page-assets .accounts-panel .account-row-icon {
+    display: grid;
+    place-items: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    overflow: hidden;
+  }
+
+  #page-assets .accounts-panel .account-row-icon .entity-badge {
+    --badge-size: 36px !important;
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 50%;
+  }
+
+  #page-assets .accounts-panel .account-row-main {
+    display: flex;
+    align-items: center;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* 账户名：单行省略。
+     15074 那段 v0.15.2 的「允许两行」用 !important 写了 -webkit-line-clamp:2，
+     46px 的行只容得下一行，这里用「更高优先级 + !important」把它压回单行。 */
+  #page-assets .accounts-panel .account-row-name {
+    display: block !important;
+    -webkit-line-clamp: none !important;
+    -webkit-box-orient: initial !important;
+    min-width: 0;
+    max-width: 100%;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 20px;
+    color: var(--text-main, #1f2937);
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  /* 单行行高放不下第二行副标题；分组名已经在标题行里，持仓提示进二级页看 */
+  #page-assets .accounts-panel .account-row-sub {
+    display: none;
+  }
+
+  #page-assets .accounts-panel .account-row-balance {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 20px;
+    color: var(--text-strong, #0f172a);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ================= F. 顶部搜索：收起为图标 + 浮层 ================= */
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+  }
+
+  .topbar-search-btn {
+    display: grid;
+    place-items: center;
+  }
+
+  .topbar-search {
+    display: none;
+  }
+
+  /* 展开态：钉在顶栏下方的浮层，不占文档流，所以首屏高度不被它吃掉 */
+  .topbar-search.is-open {
+    display: flex;
+    position: fixed;
+    z-index: 1045;
+    /* 展开时这一段被 JS 挪到 body 下，left/right 就是视口坐标；
+       width 必须显式 auto，否则会吃到顶栏那条 width:100% */
+    /* top 由 JS 按顶栏实际下沿写入（marquee 公告条会把顶栏推下去），这里只留兜底 */
+    top: calc(env(safe-area-inset-top, 0px) + 88px);
+    left: 12px;
+    right: 12px;
+    width: auto;
+    box-sizing: border-box;
+    padding: 6px;
+    border-radius: 14px;
+    background: var(--surface, #fff);
+    box-shadow: 0 14px 36px rgba(15, 23, 42, 0.18), 0 0 0 1px var(--line);
+  }
+
+  .topbar-search.is-open .form-control {
+    height: 40px;
+    font-size: 14px;
+    background: var(--surface-2, #f7f8fa);
+  }
+
+  .topbar-search.is-open .form-control:focus {
+    background: var(--surface, #fff);
+  }
+
+  .topbar-search.is-open .search-icon {
+    left: 18px;
+  }
+
+  /* ================= G. 深色档微调 ================= */
+  [data-theme="dark"] #page-assets .accounts-panel .account-row {
+    border-bottom-color: rgba(255, 255, 255, 0.07);
+  }
+
+  [data-theme="dark"] #page-assets .accounts-panel .account-group-head[data-group-toggle]:active,
+  [data-theme="dark"] #page-assets .accounts-panel .account-row:active,
+  [data-theme="dark"] #page-assets .asset-stat:active {
+    background: var(--surface-3);
+  }
+}
