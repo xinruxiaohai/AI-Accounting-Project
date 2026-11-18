@@ -7,34 +7,34 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json?v=0.15.4.3">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.4.3">
+  <link rel="manifest" href="/manifest.json?v=0.15.4.4">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.4.4">
   <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.4.3">
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.4.4">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.15.4.3">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/style.css?v=0.15.4.4">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.15.4.4">
   <!-- v0.15：顶部临时通知跑马灯（首页 / 登录页 / 注册页共用，叠在 auth-gate 之上） -->
-  <link rel="stylesheet" href="/static/v0143.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/v0143.css?v=0.15.4.4">
   <!-- v0.15：手机号绑定 / 修改弹窗（磨砂玻璃） -->
-  <link rel="stylesheet" href="/static/v01432.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/v01432.css?v=0.15.4.4">
   <!-- v0.15：移动端 UI 优化末尾覆盖层（暖色强调 / 头像入口 / 筛选折叠） -->
-  <link rel="stylesheet" href="/static/v01435.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/v01435.css?v=0.15.4.4">
   <!-- v0.15.1：六套主题配色令牌 + 可访问性覆盖层（不 bump 版本串） -->
-  <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15.4.4">
   <!-- v0.15.3 · Agent A：设置弹窗定尺（920×680）+ 侧边栏图标尺寸，只覆盖不重写 -->
-  <link rel="stylesheet" href="/static/settings-v0152.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/settings-v0152.css?v=0.15.4.4">
   <!-- BIZ-V0151 业务专项覆盖层（月度结账 / 周期模板 / 报销进阶） -->
-  <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15.4.4">
   <!-- v0.15.2：账户与分类实体图标 logo 呈现层（放在最后覆盖 object-fit） -->
-  <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15.4.4">
   <!-- v0.15.2 · Agent A：移动端页面栈（账户 → 全屏二级页），桌面端一条规则都不生效 -->
-  <link rel="stylesheet" href="/static/mobile-stack-v0152.css?v=0.15.4.3">
+  <link rel="stylesheet" href="/static/mobile-stack-v0152.css?v=0.15.4.4">
   <!-- v0.15.5：图表页新增「收支对比 / 累计结余」两张卡片的局部样式。
        只作用于这两个 id，不改 style.css 里的既有规则；颜色一律取主题变量。 -->
   <style>
@@ -48,6 +48,7 @@
       }
     }
     #page-charts #chart-compare-card .chart-canvas,
+    #page-charts #chart-category-card .chart-canvas,
     #page-charts #chart-cumulative-card .chart-canvas {
       height: 320px;
     }
@@ -66,6 +67,7 @@
     }
     @media (max-width: 900px) {
       #page-charts #chart-compare-card .chart-canvas,
+      #page-charts #chart-category-card .chart-canvas,
       #page-charts #chart-cumulative-card .chart-canvas {
         height: 258px;
       }
@@ -806,6 +808,7 @@
             <button class="chart-subnav-item active" type="button" data-chart-section="overview">收支总览</button>
             <button class="chart-subnav-item" type="button" data-chart-section="trend">极值趋势</button>
             <button class="chart-subnav-item" type="button" data-chart-section="compare">收支对比</button>
+            <button class="chart-subnav-item" type="button" data-chart-section="category">分类占比</button>
             <button class="chart-subnav-item" type="button" data-chart-section="cumulative">累计结余</button>
             <button class="chart-subnav-item" type="button" data-chart-section="summary">汇总表</button>
           </aside>
@@ -863,6 +866,15 @@
                 <span class="chart-summary-sub" id="chart-compare-sub"></span>
               </div>
               <div class="chart-canvas" id="chart-compare-main"></div>
+            </div>
+
+            <!-- v0.15.4：分类占比（本期支出按一级分类聚合的环形图，颜色走 pieColors()） -->
+            <div class="chart-card panel" id="chart-category-card">
+              <div class="chart-card-head">
+                <h3>分类占比</h3>
+                <span class="chart-summary-sub" id="chart-category-sub"></span>
+              </div>
+              <div class="chart-canvas" id="chart-category-main"></div>
             </div>
 
             <!-- v0.15.5：周期内逐桶累加（收入 - 支出）的结余曲线 -->
@@ -3031,25 +3043,25 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.15.4.3"></script>
-<script src="/static/access-guard.js?v=0.15.4.3"></script>
+<script src="/static/auth-v012.js?v=0.15.4.4"></script>
+<script src="/static/access-guard.js?v=0.15.4.4"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.15.4.3"></script>
+<script src="/static/script.js?v=0.15.4.4"></script>
 <!-- v0.15.2 · Agent A：包装 script.js 的 selectAccount，实现移动端页面栈（不改 script.js 本体） -->
-<script src="/static/mobile-stack-v0152.js?v=0.15.4.3" defer></script>
+<script src="/static/mobile-stack-v0152.js?v=0.15.4.4" defer></script>
   <!-- BIZ-V0151 业务专项：独立 JS，避免与 F 并行期的 script.js 冲突 -->
-  <script src="/static/biz-v0151.js?v=0.15.4.3"></script>
+  <script src="/static/biz-v0151.js?v=0.15.4.4"></script>
 <!-- v0.15：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
-<script src="/static/marquee-v0143.js?v=0.15.4.3" defer></script>
-<script src="/static/charts-v013.js?v=0.15.4.3"></script>
+<script src="/static/marquee-v0143.js?v=0.15.4.4" defer></script>
+<script src="/static/charts-v013.js?v=0.15.4.4"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.15.4.3"></script>
+<script src="/static/invest-v0133.js?v=0.15.4.4"></script>
 <!-- v0.14.2：我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后）；v0.15.3 起权限管理面板已从用户端移除 -->
-<script src="/static/user-feedback-v0142.js?v=0.15.4.3"></script>
+<script src="/static/user-feedback-v0142.js?v=0.15.4.4"></script>
 <!-- v0.15.4：设置页「最近登录设备」面板（按需加载，独立于 script.js） -->
-<script src="/static/login-devices-v0154.js?v=0.15.4.3"></script>
+<script src="/static/login-devices-v0154.js?v=0.15.4.4"></script>
 <!-- v0.15.4：移动端资产页 —— 顶栏搜索收成图标 + 点开浮层（只在 ≤575.98px 生效） -->
-<script src="/static/mobile-assets-v0154.js?v=0.15.4.3"></script>
+<script src="/static/mobile-assets-v0154.js?v=0.15.4.4"></script>
 
 </body>
 </html>

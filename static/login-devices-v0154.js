@@ -11,6 +11,12 @@
  *    （所以这里用 XHR 而不是 window.fetch：auth-v012 给 fetch 包了一层，
  *      断网 / 5xx 会弹全局搞笑 toast，放在设置页里太吵。）
  * 3) 「当前设备」只在 UA 比对成立时标，且只标第一条；比对上不就不标，不硬猜。
+ *
+ * v0.15.4 退出设备：
+ * - GET 返回带 id，每行右侧一个 ×（24px 圆形，移动端靠 padding 撑到 32 热区）。
+ * - 确认走项目统一 confirmAction()（Promise 风格，禁用原生 alert/confirm）；
+ *   成功 DELETE /api/user/login-devices/<id>，失败 Toast + 保留该行。
+ * - 这里用 XHR 而不是 window.fetch：auth-v012 给 fetch 包了一层会弹全局 toast。
  */
 (function () {
   "use strict";
@@ -25,13 +31,17 @@
     empty: "暂无记录",
     unknownCity: "未知地区",
     unknownDevice: "未知设备",
-    current: "当前设备"
+    current: "当前设备",
+    revokeLabel: "退出该设备",
+    revokeSuccess: "已退出该设备",
+    revokeFail: "操作失败，请稍后重试",
   };
   var WEEK = 86400000;
 
   var listEl = null;
-  var state = { inflight: false, loaded: false, lastAt: 0 };
+  var state = { inflight: false, loaded: false, lastAt: 0, devices: [], revoking: false };
   var current = null;         // UA 自报的家门，懒算一次
+  var REVOKE_LOCK_MS = 400;   // 确认后 0.4s 内按钮 disabled，防连点重复删除
 
   /* ---------------- 静默请求（同 theme 同步一套写法） ---------------- */
 
@@ -40,9 +50,9 @@
   }
 
   function silentRequest(method, url, done) {
-    if (!url || navigator.onLine === false) { done(null); return; }
+    if (!url || navigator.onLine === false) { done(null, 0); return; }
     var xhr;
-    try { xhr = new XMLHttpRequest(); } catch (error) { done(null); return; }
+    try { xhr = new XMLHttpRequest(); } catch (error) { done(null, 0); return; }
     try {
       xhr.open(method, url, true);
       xhr.timeout = 8000;
@@ -54,11 +64,34 @@
         if (xhr.status >= 200 && xhr.status < 300) {
           try { body = JSON.parse(xhr.responseText || "null"); } catch (error) { body = null; }
         }
-        done(body);
+        done(body, xhr.status);
       };
-      xhr.onerror = xhr.ontimeout = xhr.onabort = function () { done(null); };
+      xhr.onerror = xhr.ontimeout = xhr.onabort = function () { done(null, 0); };
       xhr.send(null);
-    } catch (error) { done(null); }
+    } catch (error) { done(null, 0); }
+  }
+
+  /* ---------------- 轻提示（复用 script.js 的全局 toast，缺席则静默） ---------------- */
+
+  function notify(text, kind) {
+    try {
+      if (typeof window.toast === "function") {
+        window.toast(text, kind || "success", { exclusive: true, duration: 2200 });
+      }
+    } catch (error) { /* toast 本身不能让设备面板崩掉 */ }
+  }
+
+  /** 项目统一确认弹窗（Promise<boolean>）；节点缺失时宁可不删，也不退回原生 confirm */
+  function confirmRevoke(text) {
+    if (typeof window.confirmAction === "function") {
+      return window.confirmAction({
+        title: TEXT.revokeLabel,
+        text: text,
+        confirmText: "确认退出",
+        danger: true,
+      });
+    }
+    return Promise.resolve(false);
   }
 
   /* ---------------- UA 归一：只认「操作系统」和「浏览器」两档 ---------------- */
@@ -171,6 +204,8 @@
   function itemRow(item, index) {
     var li = document.createElement("li");
     li.className = "login-device-item";
+    li.setAttribute("data-device-id", item.id == null ? "" : String(item.id));
+    li.__deviceItem = item;
 
     var icon = document.createElement("span");
     icon.className = "login-device-icon";
@@ -204,12 +239,27 @@
     main.appendChild(meta);
     li.appendChild(icon);
     li.appendChild(main);
+
+    /* 退出按钮：没有 id 的记录不渲染（后端没给 id 就没法 DELETE） */
+    if (item.id != null && String(item.id)) {
+      var revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "login-device-revoke";
+      revoke.setAttribute("data-device-id", String(item.id));
+      revoke.setAttribute("aria-label", TEXT.revokeLabel);
+      revoke.title = TEXT.revokeLabel;
+      revoke.innerHTML =
+        '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true">' +
+        '<path d="M4 4l8 8M12 4l-8 8"></path></svg>';
+      li.appendChild(revoke);
+    }
     return li;
   }
 
   function render(devices) {
     if (!listEl) { return; }
     clearList();
+    state.devices = devices;
     if (!devices.length) {
       listEl.appendChild(stateRow(TEXT.empty));
       return;
@@ -217,6 +267,56 @@
     for (var i = 0; i < devices.length; i += 1) {
       listEl.appendChild(itemRow(devices[i], i));
     }
+  }
+
+  /* ---------------- 退出设备 ---------------- */
+
+  /**
+   * 删掉一行并同步内存缓存：淡出 → 移除 → 空了就显示「暂无记录」。
+   * 不从服务端重拉，避免刚删的记录因为 30s 缓存又冒出来。
+   */
+  function removeRow(li, deviceId) {
+    li.classList.add("is-revoking");
+    window.setTimeout(function () {
+      if (li.parentNode === listEl) { listEl.removeChild(li); }
+      state.devices = state.devices.filter(function (item) {
+        return String(item.id) !== String(deviceId);
+      });
+      if (!state.devices.length) {
+        clearList();
+        listEl.appendChild(stateRow(TEXT.empty));
+      }
+    }, 220);
+  }
+
+  function revokeDevice(button, li) {
+    if (state.revoking || button.disabled) { return; }
+    var deviceId = button.getAttribute("data-device-id");
+    if (!deviceId) { return; }
+    var item = li.__deviceItem || null;
+    var label = item ? labelOf(item) : TEXT.unknownDevice;
+    var city = item ? (String(item.city || "").trim() || TEXT.unknownCity) : TEXT.unknownCity;
+
+    var accepted = confirmRevoke("退出「" + label + " · " + city + "」？该设备需要重新登录。");
+    if (!accepted || typeof accepted.then !== "function") { return; }
+    accepted.then(function (ok) {
+      if (!ok) { return; }              // 取消：不发任何请求
+      state.revoking = true;
+      button.disabled = true;           // 0.4s 防重复点击
+      window.setTimeout(function () {
+        state.revoking = false;
+        button.disabled = false;
+      }, REVOKE_LOCK_MS);
+
+      silentRequest("DELETE", API + "/" + encodeURIComponent(deviceId), function (body, status) {
+        if (status >= 200 && status < 300) {
+          removeRow(li, deviceId);
+          notify(TEXT.revokeSuccess, "success");
+        } else {
+          notify(TEXT.revokeFail, "error");  // 失败保留该行
+        }
+      });
+    });
   }
 
   function normalize(raw) {
@@ -227,8 +327,9 @@
     for (var i = 0; i < devices.length && picked.length < MAX_ITEMS; i += 1) {
       var item = devices[i];
       if (!item || typeof item !== "object") { continue; }
-      /* 只挑三样进内存，其余字段（ip / 坐标 / 指纹）连读都不读 */
+      /* 设备 id 只用于 DELETE 的 URL，不进任何可见文本 */
       picked.push({
+        id: item.id,
         device: item.device,
         browser: item.browser,
         city: item.city,
@@ -288,6 +389,17 @@
         if (accountPaneOpen()) { load(false); }
       });
     }
+
+    /* 3) 退出按钮：事件委托，连点靠 state.revoking + button.disabled 双重拦截 */
+    listEl.addEventListener("click", function (event) {
+      var button = event.target && event.target.closest
+        ? event.target.closest(".login-device-revoke") : null;
+      if (!button || !listEl.contains(button)) { return; }
+      event.preventDefault();
+      event.stopPropagation();
+      var li = button.closest(".login-device-item");
+      if (li) { revokeDevice(button, li); }
+    });
   }
 
   if (document.readyState === "loading") {

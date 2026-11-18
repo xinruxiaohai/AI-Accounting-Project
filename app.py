@@ -1083,8 +1083,24 @@ def user_update_theme():
 @app.route("/api/user/login-devices", methods=["GET"])
 @login_required
 def user_login_devices():
-    """历史登录设备：按 last_at 倒序、最多 10 条，只回短名与时间。"""
+    """历史登录设备：按 last_at 倒序、最多 10 条；id 是 key 里的 16 位指纹段。"""
     return jsonify(devices=database.list_login_devices(g.current_user["id"]))
+
+
+@app.route("/api/user/login-devices/<path:device_id>", methods=["DELETE"])
+@login_required
+def user_delete_login_device(device_id):
+    """退出指定设备：只删当前 uid 名下的记录（越权自然落到 404）。
+
+    `<path:...>` 是为了让带斜杠的畸形 id（如 ../../etc）也能进到校验分支拿到 400，
+    而不是被路由层丢成 404；校验通过后 key 仍由 uid + id 拼成，SQL 全程用占位符。
+    """
+    if not database.is_valid_login_device_id(device_id):
+        return jsonify(error="设备 ID 不合法"), 400
+    deleted = database.delete_login_device(g.current_user["id"], device_id)
+    if not deleted:
+        return jsonify(error="设备不存在"), 404
+    return jsonify(ok=True)
 
 
 def _parse_datetime(value):

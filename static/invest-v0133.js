@@ -2540,7 +2540,7 @@ const INVEST_KLINE_PERIODS = [
   { id: "month", label: "月K" },
 ];
 const INVEST_KLINE_LIMITS = { day: 240, week: 180, month: 120 };
-const INVEST_KLINE_STYLE = "/static/invest-kline-v0143.css?v=0.15.4.2";
+const INVEST_KLINE_STYLE = "/static/invest-kline-v0143.css?v=0.15.4.4";
 const INVEST_UP_COLOR = "#e2483d";
 const INVEST_DOWN_COLOR = "#17a06a";
 // 场外基金净值折线的主色：与弹窗内 --ik 紫保持一致。

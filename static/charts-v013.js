@@ -59,6 +59,8 @@
     // v0.15.5：收支对比柱状图 / 累计结余折线，各自一个 ECharts 实例
     compareChart: null,
     cumulativeChart: null,
+    // v0.15.4：分类占比环形图实例
+    categoryChart: null,
     records: null,
     loading: false,
   };
@@ -768,6 +770,132 @@
     pageState.compareChart.setOption(compareOption(buckets), true);
   }
 
+  /* ===================== v0.15.4：分类占比环形图 ===================== */
+
+  /**
+   * 本期支出按一级分类（record.category）聚合：降序取前 8，其余并「其他」，
+   * 最多 9 片。只认 date 落在 range 内的 expense，金额一律取正数的绝对值求和。
+   */
+  function categorySlices(records, range) {
+    var startIso = isoDate(range.start);
+    var endIso = isoDate(range.end);
+    var groups = {};
+    var total = 0;
+    (records || []).forEach(function (record) {
+      if (!record || record.type !== "expense") { return; }
+      var dateText = recordDateText(record);
+      if (!dateText || dateText < startIso || dateText > endIso) { return; }
+      var name = String(record.category || "未分类").trim() || "未分类";
+      var amount = Math.abs(Number(record.amount || 0));
+      groups[name] = (groups[name] || 0) + amount;
+      total += amount;
+    });
+    var list = Object.keys(groups).map(function (name) {
+      return { name: name, value: Number(groups[name].toFixed(2)) };
+    });
+    list.sort(function (a, b) { return b.value - a.value; });
+    if (list.length > 8) {
+      var rest = list.slice(7).reduce(function (sum, item) { return sum + item.value; }, 0);
+      list = list.slice(0, 7).concat([{ name: "其他", value: Number(rest.toFixed(2)) }]);
+    }
+    return { list: list, total: Number(total.toFixed(2)) };
+  }
+
+  /** 分类色板：直接复用 script.js 的 pieColors()（内部走 __chartColors()），切主题会变。 */
+  function categoryColors(count) {
+    var palette = [];
+    if (typeof window.pieColors === "function") {
+      try { palette = window.pieColors() || []; } catch (error) { palette = []; }
+    }
+    if (!palette.length) {
+      var tokens = chartTokens();
+      palette = [tokens.expense, tokens.brand, tokens.transfer].filter(Boolean);
+    }
+    var result = [];
+    for (var i = 0; i < count; i += 1) {
+      result.push(palette[i % palette.length]);
+    }
+    return result;
+  }
+
+  function categoryOption(result) {
+    var palette = chartTokens();
+    var textColor = palette.text || "#475569";
+    var strongColor = palette.strong || "#1e293b";
+    var surfaceColor = palette.surface || "#ffffff";
+    var hasData = result.list.length > 0 && result.total > 0;
+    var colors = categoryColors(result.list.length);
+    var data = result.list.map(function (item, index) {
+      return { name: item.name, value: item.value, itemStyle: { color: colors[index] } };
+    });
+    return {
+      backgroundColor: "transparent",
+      color: colors,
+      tooltip: {
+        trigger: "item",
+        formatter: function (params) {
+          var pct = result.total > 0 ? ((params.value / result.total) * 100).toFixed(1) : "0.0";
+          return params.name + " · " + moneySafe(params.value) + " · " + pct + "%";
+        },
+      },
+      legend: hasData
+        ? {
+            type: "scroll",
+            orient: "vertical",
+            right: 4,
+            top: "middle",
+            itemWidth: 10,
+            itemHeight: 10,
+            itemGap: 8,
+            textStyle: { color: textColor, fontSize: 11 },
+            data: result.list.map(function (item) { return item.name; }),
+          }
+        : { show: false },
+      graphic: hasData
+        ? [
+            {
+              type: "text", left: "center", top: "42%",
+              style: { text: "本期支出合计", fill: textColor, fontSize: 11, textAlign: "center" },
+            },
+            {
+              type: "text", left: "center", top: "51%",
+              style: { text: moneySafe(result.total), fill: strongColor, fontSize: 16, fontWeight: 700, textAlign: "center" },
+            },
+          ]
+        : emptyGraphic("这段时间还没有支出记录", textColor),
+      series: [
+        {
+          type: "pie",
+          name: "分类占比",
+          radius: ["45%", "70%"],
+          center: ["42%", "52%"],
+          avoidLabelOverlap: true,
+          label: { show: false },
+          labelLine: { show: false },
+          itemStyle: { borderColor: surfaceColor, borderWidth: 2 },
+          emphasis: { scale: true, scaleSize: 4, label: { show: false } },
+          data: data,
+        },
+      ],
+    };
+  }
+
+  function renderCategory(range) {
+    var element = $("chart-category-main");
+    var sub = $("chart-category-sub");
+    if (sub) {
+      sub.textContent = (range && range.label) || "";
+    }
+    if (!element || typeof window.echarts === "undefined") {
+      return;
+    }
+    if (!pageState.categoryChart) {
+      pageState.categoryChart = window.echarts.init(element, null, { renderer: "canvas" });
+    }
+    pageState.categoryChart.resize();
+    pageState.categoryChart.setOption(categoryOption(categorySlices(pageState.records || [], range)), true);
+  }
+
   function renderCumulative(buckets) {
     var element = $("chart-cumulative-main");
     var badge = $("chart-cumulative-end");
@@ -889,6 +1017,8 @@
     // v0.15.5：两张新图跟着周期 / 翻页 / 换肤一起重绘
     renderCompare(buckets, range);
     renderCumulative(buckets);
+    // v0.15.4：分类占比同样吃 range（start/end 过滤）+ palette（换肤重算）
+    renderCategory(range);
     renderSummary(buckets, range);
     syncPeriodButtons();
     syncSeriesButtons();
@@ -960,6 +1090,7 @@
       overview: "chart-overview",
       trend: "chart-trend-card",
       compare: "chart-compare-card",
+      category: "chart-category-card",
       cumulative: "chart-cumulative-card",
       summary: "chart-summary-card",
     };
@@ -1025,7 +1156,8 @@
         return;
       }
       // v0.15.5：三个实例一起 resize，否则新加的两张图会留在旧尺寸上被拉伸
-      [pageState.chart, pageState.compareChart, pageState.cumulativeChart].forEach(
+      // v0.15.4：分类占比实例一并 resize
+      [pageState.chart, pageState.compareChart, pageState.cumulativeChart, pageState.categoryChart].forEach(
         function (instance) {
           if (instance) {
             instance.resize();

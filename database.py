@@ -7173,15 +7173,38 @@ def record_login_device(uid, device, browser, city):
     return payload
 
 
+def is_valid_login_device_id(device_id):
+    """设备 id 只接受 sha1 前缀那样的 16 位十六进制；先校验再拼 key，绝不拼进 SQL。"""
+    return isinstance(device_id, str) and bool(
+        re.fullmatch(r"[0-9a-fA-F]{16}", device_id)
+    )
+
+
+def delete_login_device(uid, device_id):
+    """只删当前 uid 名下的设备：key 由「当前登录 uid + 已校验的 id」拼出，返回是否删到。"""
+    if not is_valid_login_device_id(device_id):
+        return False
+    key = _login_device_prefix(uid) + device_id.lower()
+    conn = get_conn()
+    try:
+        with conn:
+            cursor = conn.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 def list_login_devices(uid, limit=MAX_LOGIN_DEVICES):
-    """对外只回 device / browser / city / last_at：绝不带 IP、经纬度、UA 原文、token。"""
+    """对外回 id（key 里的指纹段）+ device / browser / city / last_at；绝不带 IP、UA、token。"""
     rows = _login_device_rows(uid)
+    prefix = _login_device_prefix(uid)
     try:
         keep = max(1, int(limit))
     except (TypeError, ValueError):
         keep = MAX_LOGIN_DEVICES
     return [
         {
+            "id": str(row["key"])[len(prefix):],
             "device": row["device"],
             "browser": row["browser"],
             "city": row["city"],
