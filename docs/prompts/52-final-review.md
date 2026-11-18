@@ -27,7 +27,7 @@
 | 本地主库 | `D:\Project\project01 AI-Accounting\records.db`，md5 必须保持 `211d49e67eaf25c9383b2d6d116e18a7` |
 | 云端 | `8.134.12.135`，目录 `/opt/zhihuizhang`，systemd 服务 `zhihuizhang` |
 | 云端端口 | gunicorn `127.0.0.1:5000`，nginx 反代 80（**不是 8000**） |
-| SSH 私钥 | `D:\文件\密码\id_rsa`，必须带 `-o StrictHostKeyChecking=accept-new` |
+| SSH 私钥 | `<SSH_KEY_PATH>`（本地路径，不随包分发），必须带 `-o StrictHostKeyChecking=accept-new` |
 | 产物目录 | `D:\Project\temp\final-review\`（报告 + 截图，唯一可写） |
 | 隔离服务启动器 | `D:\Project\temp\entity-icons\serve.py`（已设 `ZHZ_SQLITE_PATH`，端口 5077） |
 | CDP 参考脚本 | `D:\Project\temp\entity-icons\cdp.mjs`（登录注入 + 视口 + 截图，59/59 跑通） |

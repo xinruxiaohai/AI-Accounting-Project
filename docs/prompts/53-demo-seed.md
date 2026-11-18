@@ -20,7 +20,7 @@
 | 云端服务器 | `8.134.12.135` |
 | 云端目录 | `/opt/zhihuizhang` |
 | 服务 | systemd `zhihuizhang`（gunicorn `127.0.0.1:5000`，nginx 反代 80） |
-| SSH | `ssh -i "D:/文件/密码/id_rsa" -o StrictHostKeyChecking=accept-new root@8.134.12.135` |
+| SSH | `ssh -i "<SSH_KEY_PATH>" -o StrictHostKeyChecking=accept-new root@8.134.12.135` |
 | 对公网 API | `http://8.134.12.135` |
 | 演示账号 | `test@test.com` / `test1234`，云端 **UID = 3**（体验官） |
 | 真实截图源 | `D:\Project\temp\ai-qa-v0152-vision\inbox\`（31 张：微信/支付宝/银行短信/退款/无关图） |
@@ -45,7 +45,7 @@
 ## 三、第 0 步：备份（不做就别往下走）
 
 ```bash
-ssh -i "D:/文件/密码/id_rsa" -o StrictHostKeyChecking=accept-new root@8.134.12.135 \
+ssh -i "<SSH_KEY_PATH>" -o StrictHostKeyChecking=accept-new root@8.134.12.135 \
   "cp /opt/zhihuizhang/records.db /opt/backups/records_pre_seed_$(date +%Y%m%d-%H%M%S).db && \
    ls -lh /opt/backups/records_pre_seed_*.db | tail -1 && md5sum /opt/zhihuizhang/records.db"
 ```

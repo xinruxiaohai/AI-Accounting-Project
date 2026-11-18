@@ -19,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | 云端 | `8.134.12.135`，`/opt/zhihuizhang`，`systemctl zhihuizhang` |
-| 私钥 | `D:\文件\密码\id_rsa`，ssh 必须 `-o StrictHostKeyChecking=accept-new` |
+| 私钥 | `<SSH_KEY_PATH>`（本地路径，不随包分发），ssh 必须 `-o StrictHostKeyChecking=accept-new` |
 | Python | 云端 `/opt/zhihuizhang/venv/bin/python` |
 | 数据库 | `/opt/zhihuizhang/records.db`（SQLite，**生产库**） |
 | 服务端口 | gunicorn `127.0.0.1:5000`，nginx 80 |
