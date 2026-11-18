@@ -2543,6 +2543,47 @@ const INVEST_KLINE_LIMITS = { day: 240, week: 180, month: 120 };
 const INVEST_KLINE_STYLE = "/static/invest-kline-v0143.css?v=0.15.3";
 const INVEST_UP_COLOR = "#e2483d";
 const INVEST_DOWN_COLOR = "#17a06a";
+// 场外基金净值折线的主色：与弹窗内 --ik 紫保持一致。
+// 用字面量而不是 echarts.graphic.LinearGradient —— 本文件不假设全局 echarts.graphic 已注入。
+const INVEST_NAV_LINE_COLOR = "#4f46e5";
+
+/* K 线弹窗的栅格竖排预算（自上而下：价格图 → 日期标签区 → 间隙 → 缩放条）
+ * 三者互不重叠是硬约束，全部由画布实测高度推导，禁止写死像素顶边。
+ * 日期标签 rotate 42 + fontSize 10 时，单个 "2026-11-18" 旋转后的包围盒约 49×45，
+ * 因此标签区要 ≥ margin 10 + 文本 45 + 余量，此处取 64；相邻标签水平间距取 54 才不相交。 */
+const INVEST_KLINE_GRID_LEFT = 62;
+const INVEST_KLINE_GRID_RIGHT = 18;
+const INVEST_KLINE_GRID_TOP = 24;
+const INVEST_KLINE_LABEL_ZONE = 64;
+const INVEST_KLINE_STACK_GAP = 10;
+const INVEST_KLINE_SLIDER_MARGIN = 12;
+const INVEST_KLINE_SLIDER_HEIGHT = 20;
+const INVEST_KLINE_LABEL_GAP = 54;
+
+/**
+ * 按「当前窗口内每个数据点的可用像素」反推 axisLabel.interval。
+ * interval = N 表示每 N+1 个点画一个标签，因此 N+1 必须能装下 INVEST_KLINE_LABEL_GAP。
+ * 数据点少 / 画布宽时返回 0（每个点都画）。周/月 K 同样适用。
+ */
+function investKlineLabelInterval(pointCount, plotWidth, fromPct, toPct) {
+  const count = Number(pointCount) || 0;
+  const width = Number(plotWidth) || 0;
+  if (count < 2 || width <= 0) {
+    return 0;
+  }
+  const from = Number.isFinite(Number(fromPct)) ? Number(fromPct) : 0;
+  const to = Number.isFinite(Number(toPct)) ? Number(toPct) : 100;
+  const span = Math.min(1, Math.max(0.001, Math.abs(to - from) / 100));
+  // 视窗内实际可见点数（dataZoom 只留一段时按窗口算，避免缩放后标签反而变稀）
+  const visible = Math.max(2, count * span);
+  const pxPerPoint = width / (visible - 1);
+  if (!Number.isFinite(pxPerPoint) || pxPerPoint <= 0) {
+    return 0;
+  }
+  const need = Math.ceil(INVEST_KLINE_LABEL_GAP / pxPerPoint);
+  return Math.max(0, need - 1);
+}
+
 // 自动同步间隔：30 分钟（测试里可以改 window.INVEST_SYNC_INTERVAL_MS 做短周期验证）
 const INVEST_QUOTE_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 // 手动刷新防抖：1.2 秒内的第二次点击直接吃掉
@@ -2560,6 +2601,9 @@ const investKline = {
   seq: 0,
   visible: false,
   cache: {},
+  // 当前生效的日期标签抽稀间隔（0 = 每个点都画），缩放时按窗口重算
+  labelInterval: 0,
+  syncingLabel: false,
 };
 
 const investQuoteSync = {
@@ -2818,6 +2862,10 @@ function investKlineOption(points, payload) {
     points.some(function (point) {
       return investKlineNum(point.volume) > 0;
     });
+  // 场外基金每天只有单位净值一个价：open=high=low=close，蜡烛实体高度恒为 0，
+  // 画出来只能是一条影线（视觉上就是红色/绿色小短横）。这是「用蜡烛图表达单值序列」
+  // 的模型错误，不是渲染 bug —— 净值序列必须改折线。
+  const isFundNav = source === "eastmoney-fund";
   const dates = points.map(function (point) {
     return String(point.date || "");
   });
@@ -2844,15 +2892,19 @@ function investKlineOption(points, payload) {
   // 画布高度：CSS 已把 #invest-kline-chart 钉成固定高度（桌面 420 / 移动 360），读不到时兜底 420
   const chartEl = document.getElementById("invest-kline-chart");
   const canvasHeight = chartEl && chartEl.clientHeight ? chartEl.clientHeight : 420;
-  const GRID_LEFT = 62;
-  const GRID_RIGHT = 18;
-  const GRID_TOP = 24;
-  // rotate:42 日期标签的垂直占位（margin 10 + 字面投影 + 安全余量）
-  const LABEL_ZONE = 52;
-  const SLIDER_BOTTOM = 10;
-  const SLIDER_HEIGHT = 18;
-  // 副图底边距：给 slider 上方留白，保证 grid[1] 底边永远在 slider 顶边之上
-  const VOLUME_BOTTOM = 62;
+  const canvasWidth = chartEl && chartEl.clientWidth ? chartEl.clientWidth : 854;
+  const GRID_LEFT = INVEST_KLINE_GRID_LEFT;
+  const GRID_RIGHT = INVEST_KLINE_GRID_RIGHT;
+  const GRID_TOP = INVEST_KLINE_GRID_TOP;
+  // rotate:42 日期标签的垂直占位（margin 10 + 旋转后文本高 45 + 余量）
+  const LABEL_ZONE = INVEST_KLINE_LABEL_ZONE;
+  const SLIDER_BOTTOM = INVEST_KLINE_SLIDER_MARGIN;
+  const SLIDER_HEIGHT = INVEST_KLINE_SLIDER_HEIGHT;
+  // slider 顶边：价格图底边 + 标签区 + 间隙 必须止步于此，三段才不互相压
+  const SLIDER_TOP = canvasHeight - SLIDER_BOTTOM - SLIDER_HEIGHT;
+  const PLOT_WIDTH = Math.max(canvasWidth - GRID_LEFT - GRID_RIGHT, 80);
+  // 日期标签按「窗口宽度 ÷ 可见点数」抽稀，任意缩放/周期都不重叠
+  const labelInterval = investKlineLabelInterval(dates.length, PLOT_WIDTH, start, 100);
 
   // 停牌 / 净值无波动（open=close=high=low 全同）时，主图 scale:true 会算成 min==max 的空轴，
   // min/max 各加 ±0.5% 呼吸空间；全 0 的极端值退化为 ±0.5 绝对值
@@ -2879,28 +2931,26 @@ function investKlineOption(points, payload) {
   }
 
   // grid 布局：按画布实测高度分配「主图 / 日期标签 / 副图 / 缩放条」，自上而下互不重叠。
-  // 副图高度 ≈ 画布 16%（36~72px 夹紧）；单图模式主图底边 = 缩放条顶边再往上留一个标签区。
+  // 统一定义（自下而上）：slider 占画布底部 SLIDER_MARGIN..+SLIDER_HEIGHT，顶边 = SLIDER_TOP；
+  // 价格图底边必须 ≤ SLIDER_TOP - 标签区(STACK_GAP 之外仍留 LABEL_ZONE)，
+  // 保证「价格图底边 — 间隙(放日期标签) — slider」三段互不相交。
   const grids = [];
   if (hasVolume) {
     const volumeHeight = Math.round(Math.min(Math.max(canvasHeight * 0.16, 36), 72));
-    const volumeTop = canvasHeight - VOLUME_BOTTOM - volumeHeight;
+    const volumeTop = SLIDER_TOP - INVEST_KLINE_STACK_GAP - volumeHeight;
     const mainHeight = Math.max(volumeTop - LABEL_ZONE - GRID_TOP, 60);
     grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: GRID_TOP, height: mainHeight });
     grids.push({
       left: GRID_LEFT,
       right: GRID_RIGHT,
-      bottom: VOLUME_BOTTOM,
+      top: volumeTop,
       height: volumeHeight,
     });
   } else {
-    const mainHeight = Math.max(
-      canvasHeight - GRID_TOP - (SLIDER_BOTTOM + SLIDER_HEIGHT + LABEL_ZONE + 4),
-      60
-    );
+    const mainHeight = Math.max(SLIDER_TOP - LABEL_ZONE - INVEST_KLINE_STACK_GAP - GRID_TOP, 60);
     grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: GRID_TOP, height: mainHeight });
   }
 
-  const sparseLabels = points.length > 180;
   const xAxisMain = {
     type: "category",
     data: dates,
@@ -2909,15 +2959,15 @@ function investKlineOption(points, payload) {
     axisLine: { lineStyle: { color: "#cbd5e1" } },
     axisTick: { show: false },
     splitLine: { show: false },
-    // 日期刻度完整保留（年-月-日），旋转 + hideOverlap 防重叠；
-    // 点数超过 180 时按 auto 间隔抽稀，避免刻度挤成一团
+    // 日期刻度完整保留（年-月-日）。rotate 42 + hideOverlap 只是兜底，
+    // 真正防重叠靠 interval：按窗口宽度 ÷ 可见点数抽稀，保证相邻标签包围盒不相交
     axisLabel: {
       color: "#64748b",
       fontSize: 10,
       rotate: 42,
       hideOverlap: true,
       margin: 10,
-      interval: sparseLabels ? "auto" : undefined,
+      interval: labelInterval,
     },
   };
   const xAxisSub = {
@@ -2950,6 +3000,60 @@ function investKlineOption(points, payload) {
     axisLabel: { show: false },
   };
 
+  // 三个 series 只构造一次，避免三元里重复三份蜡烛配置
+  const candleSeries = {
+    name: "K线",
+    type: "candlestick",
+    data: candles,
+    itemStyle: {
+      color: INVEST_UP_COLOR,
+      color0: INVEST_DOWN_COLOR,
+      borderColor: INVEST_UP_COLOR,
+      borderColor0: INVEST_DOWN_COLOR,
+    },
+    barMaxWidth: 14,
+  };
+  const volumeSeries = {
+    name: "成交量",
+    type: "bar",
+    xAxisIndex: 1,
+    yAxisIndex: 1,
+    data: volumes,
+    barMaxWidth: 14,
+  };
+  // 场外基金净值折线：单值序列的正确表达。平时不画点（240 个点会糊成一条粗线），
+  // hover 时 ECharts 自己补一个高亮点；面积渐变用对象写法（{type:"linear",...}），不依赖全局 echarts.graphic。
+  const navSeries = {
+    name: "单位净值",
+    type: "line",
+    data: points.map(function (point) {
+      return investKlineNum(point.close);
+    }),
+    // 单点（净值刚成立）时折线画不出来，退化成显示一个点
+    showSymbol: points.length <= 1,
+    symbol: "circle",
+    symbolSize: 6,
+    connectNulls: true,
+    smooth: false,
+    lineStyle: { width: 2, color: INVEST_NAV_LINE_COLOR },
+    itemStyle: { color: INVEST_NAV_LINE_COLOR, borderColor: "#ffffff", borderWidth: 2 },
+    areaStyle: {
+      color: {
+        type: "linear",
+        x: 0,
+        y: 0,
+        x2: 0,
+        y2: 1,
+        colorStops: [
+          { offset: 0, color: "rgba(79,70,229,0.26)" },
+          { offset: 0.6, color: "rgba(79,70,229,0.09)" },
+          { offset: 1, color: "rgba(79,70,229,0.01)" },
+        ],
+      },
+    },
+    emphasis: { focus: "none" },
+  };
+
   return {
     animation: false,
     backgroundColor: "transparent",
@@ -2965,8 +3069,11 @@ function investKlineOption(points, payload) {
       formatter: function (params) {
         const list = Array.isArray(params) ? params : [params];
         let index = -1;
+        // 坑：以前只认 candlestick 取 dataIndex，基金改 line 后这里会找不到索引、
+        // tooltip 整块空白。折线（净值）与蜡烛都要能取到。
         for (let i = 0; i < list.length; i += 1) {
-          if (list[i] && list[i].seriesType === "candlestick") {
+          const type = list[i] && list[i].seriesType;
+          if (type === "candlestick" || type === "line") {
             index = list[i].dataIndex;
             break;
           }
@@ -2980,22 +3087,37 @@ function investKlineOption(points, payload) {
         const diff = investKlineNum(point.close) - prevClose;
         const percent = prevClose > 0 ? (diff / prevClose) * 100 : 0;
         const color = diff >= 0 ? INVEST_UP_COLOR : INVEST_DOWN_COLOR;
-        const rows = [
-          ["日期", String(point.date || "")],
-          ["开盘", investKlinePriceText(point.open)],
-          ["最高", investKlinePriceText(point.high)],
-          ["最低", investKlinePriceText(point.low)],
-          ["收盘", investKlinePriceText(point.close)],
-          [
-            "涨跌幅",
-            '<span style="color:' +
-              color +
-              ';font-weight:600">' +
-              (diff >= 0 ? "+" : "") +
-              percent.toFixed(2) +
-              "%</span>",
-          ],
-        ];
+        // 场外基金只有单位净值一个价，列开/高/低只会出现 4 个相同数字，误导性比信息量大
+        const rows = isFundNav
+          ? [
+              ["日期", String(point.date || "")],
+              ["单位净值", investKlinePriceText(point.close)],
+              [
+                "涨跌幅",
+                '<span style="color:' +
+                  color +
+                  ';font-weight:600">' +
+                  (diff >= 0 ? "+" : "") +
+                  percent.toFixed(2) +
+                  "%</span>",
+              ],
+            ]
+          : [
+              ["日期", String(point.date || "")],
+              ["开盘", investKlinePriceText(point.open)],
+              ["最高", investKlinePriceText(point.high)],
+              ["最低", investKlinePriceText(point.low)],
+              ["收盘", investKlinePriceText(point.close)],
+              [
+                "涨跌幅",
+                '<span style="color:' +
+                  color +
+                  ';font-weight:600">' +
+                  (diff >= 0 ? "+" : "") +
+                  percent.toFixed(2) +
+                  "%</span>",
+              ],
+            ];
         if (hasVolume) {
           rows.push(["成交量", investKlineVolumeText(point.volume)]);
         }
@@ -3024,54 +3146,83 @@ function investKlineOption(points, payload) {
         xAxisIndex: hasVolume ? [0, 1] : [0],
         start: start,
         end: 100,
-        // slider 钉死在画布最底部，不与任何 grid 重叠
+        // 钉死在画布底部，且左右与价格图对齐：不铺满到画布边缘，也不越过 grid 右边
         bottom: SLIDER_BOTTOM,
         height: SLIDER_HEIGHT,
-        borderColor: "rgba(15,23,42,0.08)",
-        fillerColor: "rgba(67,56,202,0.12)",
-        handleStyle: { color: "#6366f1" },
-        moveHandleSize: 4,
+        left: GRID_LEFT,
+        right: GRID_RIGHT,
+        borderRadius: 3,
+        borderColor: "rgba(15,23,42,0.10)",
+        backgroundColor: "transparent",
+        // 灰色横带的真凶：dataBackground 默认 #d2dbee@0.2 会把整条轨道铺成灰条，
+        // 净值曲线近乎水平时这块灰尤其明显。改成主题紫的低透明度预览。
+        dataBackground: {
+          lineStyle: { color: "rgba(79,70,229,0.35)", width: 1 },
+          areaStyle: { color: "rgba(79,70,229,0.06)" },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: "rgba(79,70,229,0.55)", width: 1 },
+          areaStyle: { color: "rgba(79,70,229,0.10)" },
+        },
+        fillerColor: "rgba(79,70,229,0.10)",
+        handleStyle: { color: "#ffffff", borderColor: "#6366f1", borderWidth: 1 },
+        // 轨道顶部那条 #D2DBEE 灰条就是 moveHandle，压到 3px 并换成主题色
+        moveHandleSize: 3,
+        moveHandleStyle: { color: "rgba(79,70,229,0.30)" },
         textStyle: { color: "#94a3b8", fontSize: 10 },
+        brushSelect: false,
       },
     ],
     series: hasVolume
-      ? [
-          {
-            name: "K线",
-            type: "candlestick",
-            data: candles,
-            itemStyle: {
-              color: INVEST_UP_COLOR,
-              color0: INVEST_DOWN_COLOR,
-              borderColor: INVEST_UP_COLOR,
-              borderColor0: INVEST_DOWN_COLOR,
-            },
-            barMaxWidth: 14,
-          },
-          {
-            name: "成交量",
-            type: "bar",
-            xAxisIndex: 1,
-            yAxisIndex: 1,
-            data: volumes,
-            barMaxWidth: 14,
-          },
-        ]
-      : [
-          {
-            name: "K线",
-            type: "candlestick",
-            data: candles,
-            itemStyle: {
-              color: INVEST_UP_COLOR,
-              color0: INVEST_DOWN_COLOR,
-              borderColor: INVEST_UP_COLOR,
-              borderColor0: INVEST_DOWN_COLOR,
-            },
-            barMaxWidth: 14,
-          },
-        ],
+      ? [candleSeries, volumeSeries]
+      : isFundNav
+        ? [navSeries]
+        : [candleSeries],
   };
+}
+
+/**
+ * 缩放后重算日期标签抽稀间隔。
+ * interval 只在构建 option 时算一次的话，用户拖 slider / 滚轮缩放后可见点数变了，
+ * 标签又会挤在一起；所以在 dataZoom 事件里按「当前窗口」重算，值没变就不 setOption。
+ */
+function investKlineSyncLabelInterval() {
+  const chart = investKline.chart;
+  const points = investKline.points || [];
+  if (!chart || points.length < 2) {
+    return;
+  }
+  const option = chart.getOption() || {};
+  const zoom = (option.dataZoom || [])[0] || {};
+  const from = typeof zoom.start === "number" ? zoom.start : 0;
+  const to = typeof zoom.end === "number" ? zoom.end : 100;
+  const chartWidth = chart.getWidth ? chart.getWidth() : 0;
+  const plotWidth = Math.max(chartWidth - INVEST_KLINE_GRID_LEFT - INVEST_KLINE_GRID_RIGHT, 80);
+  const next = investKlineLabelInterval(points.length, plotWidth, from, to);
+  if (next === investKline.labelInterval) {
+    return;
+  }
+  investKline.labelInterval = next;
+  // 只改 axisLabel，不动 dataZoom，避免和用户正在拖动的状态打架
+  chart.setOption({ xAxis: [{ axisLabel: { interval: next } }] });
+}
+
+function investKlineBindZoomLabelSync(chart) {
+  if (!chart || chart.__ikLabelSyncBound) {
+    return;
+  }
+  chart.__ikLabelSyncBound = true;
+  chart.on("dataZoom", function () {
+    if (investKline.syncingLabel) {
+      return;
+    }
+    investKline.syncingLabel = true;
+    try {
+      investKlineSyncLabelInterval();
+    } finally {
+      investKline.syncingLabel = false;
+    }
+  });
 }
 
 function investKlineRender(payload) {
@@ -3099,8 +3250,12 @@ function investKlineRender(payload) {
     return;
   }
   wrap.classList.remove("is-loading", "is-empty");
-  chart.setOption(investKlineOption(points, payload), true);
+  const option = investKlineOption(points, payload);
+  chart.setOption(option, true);
   chart.resize();
+  // 记住本次的抽稀间隔，供 dataZoom 事件判断「是否需要重算」
+  investKline.labelInterval = option.xAxis[0].axisLabel.interval;
+  investKlineBindZoomLabelSync(chart);
 
   const noteEl = document.getElementById("ik-note");
   if (noteEl) {
