@@ -56,6 +56,9 @@
     anchor: new Date(),
     series: "expense",
     chart: null,
+    // v0.15.5：收支对比柱状图 / 累计结余折线，各自一个 ECharts 实例
+    compareChart: null,
+    cumulativeChart: null,
     records: null,
     loading: false,
   };
@@ -453,6 +456,337 @@
     pageState.chart.setOption(trendOption(buckets, pageState.series), true);
   }
 
+  /* ===================== v0.15.5：收支对比 / 累计结余 ===================== */
+
+  /** 统一取色出口：优先 __chartColors()（含 dark 布尔），退回 chartPalette() */
+  function chartTokens() {
+    if (typeof window.__chartColors === "function") {
+      return window.__chartColors() || {};
+    }
+    if (typeof chartPalette === "function") {
+      return chartPalette() || {};
+    }
+    return {};
+  }
+
+  /** 柱宽自适应：>20 桶（月）收窄到 12，10-20 桶（年）用 22，≤10 桶（季 / 周）放大到 34 */
+  function compareBarWidth(bucketCount) {
+    if (bucketCount > 20) {
+      return 12;
+    }
+    if (bucketCount >= 10) {
+      return 22;
+    }
+    return 34;
+  }
+
+  function amountAxisLabel(value) {
+    return Math.abs(value) >= 10000 ? value / 10000 + "w" : String(value);
+  }
+
+  function emptyGraphic(text, color) {
+    return [
+      {
+        type: "text",
+        left: "center",
+        top: "middle",
+        style: { text: text, fill: color, fontSize: 12 },
+      },
+    ];
+  }
+
+  /**
+   * 收支对比柱状图。柱数 == 当前周期桶数（年 12 / 季 3 / 月 28-31 / 周 7），
+   * 这样四个周期切换时图表的「密度」肉眼可辨，而不是同一条折线换个形状。
+   */
+  function compareOption(buckets) {
+    var palette = chartTokens();
+    var textColor = palette.text || "#475569";
+    var strongColor = palette.strong || "#1e293b";
+    var gridLine = palette.line || "#e6ebf2";
+    var incomeColor = seriesColor("income");
+    var expenseColor = seriesColor("expense");
+    var barWidth = compareBarWidth(buckets.length);
+
+    var labels = buckets.map(function (bucket) {
+      return bucket.label;
+    });
+    var incomeValues = buckets.map(function (bucket) {
+      return bucket.income;
+    });
+    var expenseValues = buckets.map(function (bucket) {
+      return bucket.expense;
+    });
+    var hasData = buckets.some(function (bucket) {
+      return bucket.income > 0 || bucket.expense > 0;
+    });
+
+    return {
+      animationDuration: 520,
+      legend: {
+        data: ["收入", "支出"],
+        top: 0,
+        right: 0,
+        itemWidth: 10,
+        itemHeight: 10,
+        itemGap: 14,
+        icon: "roundRect",
+        textStyle: { color: textColor, fontSize: 11 },
+      },
+      grid: { left: 12, right: 16, top: 36, bottom: 6, containLabel: true },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: palette.surface || "#ffffff",
+        borderColor: gridLine,
+        borderWidth: 1,
+        textStyle: { color: strongColor, fontSize: 12 },
+        axisPointer: { type: "shadow" },
+        formatter: function (params) {
+          if (!params || !params.length) {
+            return "";
+          }
+          var income = 0;
+          var expense = 0;
+          var lines = [
+            "<div style='font-weight:600;margin-bottom:4px'>" + params[0].axisValue + "</div>",
+          ];
+          params.forEach(function (point) {
+            var value = Number(point.value || 0);
+            if (point.seriesName === "收入") {
+              income = value;
+            } else if (point.seriesName === "支出") {
+              expense = value;
+            }
+            lines.push(point.marker + point.seriesName + "：" + moneySafe(value));
+          });
+          lines.push(
+            "<div style='margin-top:2px;color:" +
+              textColor +
+              "'>结余：" +
+              moneySafe(Number((income - expense).toFixed(2))) +
+              "</div>"
+          );
+          return lines.join("");
+        },
+      },
+      xAxis: {
+        type: "category",
+        data: labels,
+        axisLine: { lineStyle: { color: gridLine } },
+        axisTick: { show: false },
+        axisLabel: {
+          color: textColor,
+          fontSize: 11,
+          hideOverlap: true,
+          interval: "auto",
+        },
+      },
+      yAxis: {
+        type: "value",
+        splitLine: { lineStyle: { color: gridLine, type: "dashed" } },
+        axisLabel: {
+          color: textColor,
+          fontSize: 11,
+          formatter: amountAxisLabel,
+        },
+      },
+      series: [
+        {
+          name: "收入",
+          type: "bar",
+          data: incomeValues,
+          barMaxWidth: barWidth,
+          barGap: "18%",
+          barCategoryGap: "32%",
+          itemStyle: { color: incomeColor, borderRadius: [3, 3, 0, 0] },
+          emphasis: { focus: "series" },
+        },
+        {
+          name: "支出",
+          type: "bar",
+          data: expenseValues,
+          barMaxWidth: barWidth,
+          itemStyle: { color: expenseColor, borderRadius: [3, 3, 0, 0] },
+          emphasis: { focus: "series" },
+        },
+      ],
+      graphic: hasData ? [] : emptyGraphic("这段时间还没有收支记录", textColor),
+    };
+  }
+
+  /**
+   * 累计结余折线：周期内逐桶累加 (收入 - 支出)。
+   * 末值恒等于「该周期收入合计 - 支出合计」，与顶部总览卡片的结余同源。
+   */
+  function cumulativeOption(buckets) {
+    var palette = chartTokens();
+    var textColor = palette.text || "#475569";
+    var strongColor = palette.strong || "#1e293b";
+    var gridLine = palette.line || "#e6ebf2";
+    var netColor = seriesColor("net");
+    var chartDark = palette.dark === true;
+
+    var labels = [];
+    var values = [];
+    var running = 0;
+    buckets.forEach(function (bucket) {
+      labels.push(bucket.label);
+      running += bucket.income - bucket.expense;
+      // 每桶只对齐到分，不做中间截断：末值不会被逐步取整拉开
+      values.push(Number(running.toFixed(2)));
+    });
+    var lastValue = values.length ? values[values.length - 1] : 0;
+    var hasData = buckets.some(function (bucket) {
+      return bucket.income > 0 || bucket.expense > 0;
+    });
+
+    return {
+      animationDuration: 520,
+      // 右侧留白给末点 endLabel，避免金额贴着画布边缘被裁掉
+      grid: { left: 12, right: 74, top: 26, bottom: 6, containLabel: true },
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: palette.surface || "#ffffff",
+        borderColor: gridLine,
+        borderWidth: 1,
+        textStyle: { color: strongColor, fontSize: 12 },
+        axisPointer: { type: "line", lineStyle: { color: gridLine, type: "dashed" } },
+        formatter: function (params) {
+          if (!params || !params.length) {
+            return "";
+          }
+          var point = params[0];
+          var bucket = buckets[point.dataIndex] || { income: 0, expense: 0, net: 0 };
+          return (
+            "<div style='font-weight:600;margin-bottom:4px'>" +
+            point.axisValue +
+            "</div>" +
+            "当期结余：" +
+            moneySafe(bucket.net) +
+            "<div style='margin-top:2px;color:" +
+            textColor +
+            "'>累计结余：" +
+            moneySafe(point.value) +
+            "</div>"
+          );
+        },
+      },
+      xAxis: {
+        type: "category",
+        data: labels,
+        boundaryGap: false,
+        axisLine: { lineStyle: { color: gridLine } },
+        axisTick: { show: false },
+        axisLabel: {
+          color: textColor,
+          fontSize: 11,
+          hideOverlap: true,
+          interval: "auto",
+        },
+      },
+      yAxis: {
+        type: "value",
+        splitLine: { lineStyle: { color: gridLine, type: "dashed" } },
+        axisLabel: {
+          color: textColor,
+          fontSize: 11,
+          formatter: amountAxisLabel,
+        },
+      },
+      series: [
+        {
+          name: "累计结余",
+          type: "line",
+          smooth: 0.28,
+          showSymbol: true,
+          symbol: "circle",
+          symbolSize: 5,
+          data: values,
+          lineStyle: { width: 2.4, color: netColor },
+          itemStyle: {
+            color: netColor,
+            borderColor: palette.surface || "#ffffff",
+            borderWidth: 1.5,
+          },
+          areaStyle: {
+            color: {
+              type: "linear",
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: hexToRgba(netColor, chartDark ? 0.26 : 0.24) },
+                { offset: 1, color: hexToRgba(netColor, chartDark ? 0.01 : 0.02) },
+              ],
+            },
+          },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: { type: "dashed", width: 1.2, color: gridLine },
+            label: {
+              show: true,
+              position: "insideEndTop",
+              color: textColor,
+              fontSize: 10,
+              formatter: "0",
+            },
+            data: [{ yAxis: 0 }],
+          },
+          // 末点直接标金额；负结余走支出红，正结余走收入绿
+          endLabel: {
+            show: true,
+            distance: 6,
+            fontSize: 10.5,
+            fontWeight: 600,
+            color: lastValue < 0 ? seriesColor("expense") : seriesColor("income"),
+            formatter: function (params) {
+              return moneySafe(params.value);
+            },
+          },
+          emphasis: { focus: "series" },
+        },
+      ],
+      graphic: hasData ? [] : emptyGraphic("这段时间还没有收支记录", textColor),
+    };
+  }
+
+  function renderCompare(buckets, range) {
+    var element = $("chart-compare-main");
+    var sub = $("chart-compare-sub");
+    if (sub) {
+      sub.textContent = (range && range.label) || "";
+    }
+    if (!element || typeof window.echarts === "undefined") {
+      return;
+    }
+    if (!pageState.compareChart) {
+      pageState.compareChart = window.echarts.init(element, null, { renderer: "canvas" });
+    }
+    pageState.compareChart.resize();
+    pageState.compareChart.setOption(compareOption(buckets), true);
+  }
+
+  function renderCumulative(buckets) {
+    var element = $("chart-cumulative-main");
+    var badge = $("chart-cumulative-end");
+    var totals = totalsOf(buckets);
+    if (badge) {
+      badge.textContent = "期末累计 " + moneySafe(totals.net);
+      badge.classList.toggle("is-negative", totals.net < 0);
+      badge.classList.toggle("is-positive", totals.net > 0);
+    }
+    if (!element || typeof window.echarts === "undefined") {
+      return;
+    }
+    if (!pageState.cumulativeChart) {
+      pageState.cumulativeChart = window.echarts.init(element, null, { renderer: "canvas" });
+    }
+    pageState.cumulativeChart.resize();
+    pageState.cumulativeChart.setOption(cumulativeOption(buckets), true);
+  }
+
   function renderSummary(buckets, range) {
     var body = $("chart-summary-body");
     var sub = $("chart-summary-sub");
@@ -552,6 +886,9 @@
     renderPeriodLabel(range);
     renderOverview(totalsOf(buckets));
     renderTrend(buckets);
+    // v0.15.5：两张新图跟着周期 / 翻页 / 换肤一起重绘
+    renderCompare(buckets, range);
+    renderCumulative(buckets);
     renderSummary(buckets, range);
     syncPeriodButtons();
     syncSeriesButtons();
@@ -622,6 +959,8 @@
     var map = {
       overview: "chart-overview",
       trend: "chart-trend-card",
+      compare: "chart-compare-card",
+      cumulative: "chart-cumulative-card",
       summary: "chart-summary-card",
     };
     var target = $(map[section] || "chart-overview");
@@ -682,9 +1021,17 @@
     });
 
     window.addEventListener("resize", function () {
-      if (pageState.chart && $("page-charts") && $("page-charts").classList.contains("active")) {
-        pageState.chart.resize();
+      if (!($("page-charts") && $("page-charts").classList.contains("active"))) {
+        return;
       }
+      // v0.15.5：三个实例一起 resize，否则新加的两张图会留在旧尺寸上被拉伸
+      [pageState.chart, pageState.compareChart, pageState.cumulativeChart].forEach(
+        function (instance) {
+          if (instance) {
+            instance.resize();
+          }
+        }
+      );
     });
 
     // 深浅色切换后 ECharts 的配色得重算一遍。

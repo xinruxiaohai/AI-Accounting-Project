@@ -128,6 +128,115 @@
   }
 }
 
+/* ---------- 二·五、v0.15.4 最近登录设备 ----------
+   结构：span.settings-label + ul#login-device-list + p.settings-hint
+   → 外面这层 .settings-block 必须与 .settings-group 同排版，否则 label 与列表会贴在一起。
+   只做「一行设备 + 一行城市·时间」的列表，全部用主题变量取色，五套主题 + 亮暗自动跟上。 */
+#settings-modal .settings-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 0;
+}
+
+.login-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, #e6e8ee);
+  border-radius: 10px;
+  background: var(--surface-2, #f8fafc);
+  overflow: hidden;
+}
+
+.login-device-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 12px;
+}
+
+.login-device-item + .login-device-item {
+  border-top: 1px solid var(--line, #e6e8ee);
+}
+
+.login-device-icon {
+  flex: 0 0 20px;
+  width: 20px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.login-device-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* 标题行：设备名优先省略，标签永不收缩 */
+.login-device-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-main, #1f2937);
+}
+
+.login-device-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.login-device-tag {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  color: var(--brand-blue-ink, #1d4ed8);
+  background: var(--brand-soft, rgba(37, 99, 235, 0.12));
+}
+
+.login-device-meta {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted, #6b7280);
+}
+
+/* 加载中 / 失败 / 空列表共用一行，高度与一条设备接近，避免弹窗内容跳动 */
+.login-device-state {
+  padding: 14px 12px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted, #6b7280);
+}
+
+/* 手机（≤768px）：设置弹窗全屏，列表左右各让 1px 内边距，防文字顶边 */
+@media (max-width: 768px) {
+  .login-device-item {
+    padding: 10px;
+  }
+}
+
 /* ---------- 三、侧边栏导航图标：18 → 20px ----------
    5 个图标要在一眼之内区分「房子 / 钱包 / 清单 / 折线 / 人像」，
    18px 下线宽 1.8 只剩 1.3px，糊成一团就是用户说的「像占位」。

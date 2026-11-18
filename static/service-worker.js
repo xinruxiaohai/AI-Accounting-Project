@@ -13,7 +13,7 @@
  */
 const CACHE_NAME = "ai-accounting-v0.15.4";
 const CACHE_PREFIX = "ai-accounting-";
-const ASSET_VERSION = "0.15.4";
+const ASSET_VERSION = "0.15.4.2";
 const PRECACHE_URLS = [
   "/",
   "/manifest.json",
@@ -30,9 +30,13 @@ const PRECACHE_URLS = [
   // v0.15：移动端 UI 优化末尾覆盖层（头像入口 / 筛选折叠 / 暖色强调）
   "/static/v01435.css",
   "/static/v01435.css?v=" + ASSET_VERSION,
+  // v0.15.4：设置弹窗定尺 + 最近登录设备列表样式
+  "/static/settings-v0152.css?v=" + ASSET_VERSION,
   "/static/marquee-v0143.js?v=" + ASSET_VERSION,
   "/static/admin-v0142.js?v=" + ASSET_VERSION,
   "/static/user-feedback-v0142.js?v=" + ASSET_VERSION,
+  // v0.15.4：设置页「最近登录设备」面板
+  "/static/login-devices-v0154.js?v=" + ASSET_VERSION,
   "/static/script.js",
   "/static/script.js?v=" + ASSET_VERSION,
   "/static/auth-v012.js?v=" + ASSET_VERSION,

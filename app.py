@@ -4,7 +4,9 @@ import difflib
 import functools
 import hashlib
 import hmac
+import importlib
 import io
+import ipaddress
 import json
 import os
 import random
@@ -687,6 +689,9 @@ def auth_login():
         password,
         database.update_user_password,
     )
+    # v0.15.4：登录成功顺手记一条历史设备。内部已 try/except，
+    # 记设备失败（离线库缺失、表写失败等）只打日志，绝不影响登录返回。
+    _record_login_device(user["id"])
     return jsonify(token=_issue_token(user), user=_public_user(user))
 
 
@@ -836,6 +841,250 @@ def auth_me():
 def auth_sms_login():
     """短信登录占位：接口先占住，等接短信服务商后再实现。"""
     return jsonify(error="短信登录即将上线，先用邮箱密码登录", code="not_implemented"), 501
+
+
+# ---------------- v0.15.4：主题跨设备同步 + 历史登录设备 ----------------
+#
+# 主题存 app_settings 的 user_theme:<uid>，设备存 login_device:<uid>:<指纹16位>，
+# 零 DDL（见 database.py 同名区块）。设备解析只输出中文短名，响应里绝不带
+# IP / 经纬度 / UA 原文 / token —— 隐私口径写死在这里，前端拿不到原始信息。
+
+# 城市靠 ip2region 离线库；xdb 缺失、库没装、查询报错一律降级「未知地区」，
+# 绝不抛错、绝不影响登录（任务书里的硬性降级要求）。
+IP2REGION_XDB_PATH = os.environ.get("ZHZ_IP2REGION_XDB") or os.path.join(
+    BASE_DIR, "data", "ip2region.xdb"
+)
+_IP2REGION_STATE = {"loaded": False, "searcher": None}
+_IP2REGION_LOCK = threading.Lock()
+
+
+def _strip_ip(raw):
+    """归一化 IP：去掉方括号、端口、%zone 与 IPv6 映射前缀 ::ffff:。"""
+    text = str(raw or "").strip()
+    if not text or text.lower() == "unknown":
+        return ""
+    if text.startswith("["):
+        end = text.find("]")
+        if end > 0:
+            text = text[1:end]
+    elif text.count(":") == 1:
+        # nginx 有时写 1.2.3.4:5678，只留主机部分
+        host, _, port = text.partition(":")
+        if port.isdigit():
+            text = host
+    text = text.split("%", 1)[0]
+    if text.lower().startswith("::ffff:"):
+        text = text[7:]
+    return text
+
+
+def _client_ip():
+    """真实 IP：X-Forwarded-For 首个 > X-Real-IP > request.remote_addr。"""
+    forwarded = request.headers.get("X-Forwarded-For") or ""
+    for part in forwarded.split(","):
+        candidate = _strip_ip(part)
+        if candidate:
+            return candidate
+    return _strip_ip(request.headers.get("X-Real-IP")) or _strip_ip(
+        request.remote_addr
+    )
+
+
+def _is_internal_ip(ip):
+    """内网 / 回环 / 链路本地 / 保留地址：这些查离线库没有意义，直接算「本机」。"""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return bool(
+        addr.is_private
+        or addr.is_loopback
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
+
+
+def _build_ip2region_searcher(xdb_path):
+    """兼容两种绑定：py-ip2region 的 Searcher(version, path, ...) 与老版 BtreeSearcher(path)。
+
+    任何一步失败都返回 None，由调用方降级成「未知地区」，这里绝不向登录链路抛错。
+    """
+    modules = []
+    for module_name in ("ip2region.searcher", "ip2region.util", "ip2region"):
+        try:
+            modules.append(importlib.import_module(module_name))
+        except Exception:
+            continue
+    if not modules:
+        return None
+
+    version = None
+    try:
+        util_mod = importlib.import_module("ip2region.util")
+        version = util_mod.version_from_header(util_mod.load_header_from_file(xdb_path))
+    except Exception:
+        version = None
+
+    for module in modules:
+        for attr in ("Searcher", "BtreeSearcher", "MemorySearcher", "ContentSearcher"):
+            factory = getattr(module, attr, None)
+            if factory is None:
+                continue
+            if version is not None:
+                try:
+                    return factory(version, xdb_path, None, None)
+                except Exception:
+                    pass
+            try:
+                return factory(xdb_path)
+            except Exception:
+                continue
+    return None
+
+
+def _load_ip2region_searcher():
+    """惰性加载 + 进程内缓存；xdb 不在就直接返回 None（不重试、不阻塞请求）。"""
+    if _IP2REGION_STATE["loaded"]:
+        return _IP2REGION_STATE["searcher"]
+    with _IP2REGION_LOCK:
+        if not _IP2REGION_STATE["loaded"]:
+            searcher = None
+            try:
+                if os.path.isfile(IP2REGION_XDB_PATH):
+                    searcher = _build_ip2region_searcher(IP2REGION_XDB_PATH)
+                else:
+                    app.logger.warning(
+                        "[v0.15.4][ip2region][降级] 缺少离线库 %s，城市回退「未知地区」",
+                        IP2REGION_XDB_PATH,
+                    )
+            except Exception as exc:
+                app.logger.warning("[v0.15.4][ip2region][降级] %s", exc)
+                searcher = None
+            _IP2REGION_STATE["searcher"] = searcher
+            _IP2REGION_STATE["loaded"] = True
+    return _IP2REGION_STATE["searcher"]
+
+
+def _ip2region_city(ip):
+    """查城市短名；查不到 / 库异常返回空串，由 _ip_to_city 统一兜底。"""
+    searcher = _load_ip2region_searcher()
+    if searcher is None:
+        return ""
+    try:
+        region = searcher.search(ip)
+    except Exception as exc:
+        app.logger.warning("[v0.15.4][ip2region][查询失败] %s: %s", ip, exc)
+        return ""
+    if isinstance(region, dict):
+        region = region.get("region") or ""
+    text = str(region or "")
+    if "|" not in text:
+        return ""
+    # ip2region 有两种五段格式，靠第 2 段区分：
+    #   v2：中国|0|广东省|东莞市|电信      → 省在第 3 段、市在第 4 段
+    #   v3：中国|江苏省|南京市|0|CN        → 省在第 2 段、市在第 3 段（ISP 后置，第 5 段是国家码）
+    parts = [part.strip() for part in text.split("|")]
+    if len(parts) > 3 and parts[1] not in ("", "0"):
+        province = parts[1]
+        city = parts[2]
+    else:
+        province = parts[2] if len(parts) > 2 else ""
+        city = parts[3] if len(parts) > 3 else ""
+    name = city if city and city != "0" else province
+    if not name or name == "0":
+        name = parts[0] if parts and parts[0] != "0" else ""
+    if name.endswith("市"):
+        name = name[:-1]
+    return name
+
+
+def _ip_to_city(raw_ip):
+    """IP → 中文城市：内网「本机」，查不到「未知地区」（永不抛错）。"""
+    ip = _strip_ip(raw_ip)
+    if not ip:
+        return "未知地区"
+    if _is_internal_ip(ip):
+        return "本机"
+    return _ip2region_city(ip) or "未知地区"
+
+
+def _parse_user_agent(ua):
+    """UA → (中文设备短名, 中文浏览器短名)。原文不落库、不回传。"""
+    lowered = str(ua or "").lower()
+    if "iphone" in lowered or "ipod" in lowered:
+        device = "iPhone"
+    elif "ipad" in lowered:
+        device = "iPad"
+    elif "android" in lowered:
+        device = "Android 手机"
+    elif "windows" in lowered:
+        device = "Windows 电脑"
+    elif "macintosh" in lowered or "mac os x" in lowered:
+        device = "Mac 电脑"
+    else:
+        device = "未知设备"
+
+    # Edge 的 UA 也含 Chrome/ 与 Safari/，必须从最具体往后判
+    if "edg/" in lowered or "edga/" in lowered or "edgios/" in lowered:
+        browser = "Edge"
+    elif "chrome/" in lowered or "crios/" in lowered:
+        browser = "Chrome"
+    elif "firefox/" in lowered or "fxios/" in lowered:
+        browser = "Firefox"
+    elif "safari/" in lowered:
+        browser = "Safari"
+    else:
+        browser = "未知浏览器"
+    return device, browser
+
+
+def _record_login_device(uid):
+    """登录成功时记一条设备记录；任何异常只打日志，绝不影响登录。"""
+    try:
+        device, browser = _parse_user_agent(request.headers.get("User-Agent"))
+        city = _ip_to_city(_client_ip())
+        database.record_login_device(uid, device, browser, city)
+    except Exception as exc:
+        app.logger.warning("[v0.15.4][登录设备记录][跳过] uid=%s: %s", uid, exc)
+
+
+@app.route("/api/user/theme", methods=["GET"])
+@login_required
+def user_get_theme():
+    """读当前账号的主题（跨设备同步）；未设置返回 classic + light。"""
+    return jsonify(database.get_user_theme(g.current_user["id"]))
+
+
+@app.route("/api/user/theme", methods=["PUT"])
+@login_required
+def user_update_theme():
+    """写主题：skin / mode 必须在枚举内，否则 400；只传一个时另一个保持不变。"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(error="请求体必须是 JSON 对象"), 400
+
+    current = database.get_user_theme(g.current_user["id"])
+    skin = data.get("skin", current["skin"])
+    mode = data.get("mode", current["mode"])
+    if not isinstance(skin, str) or skin not in database.THEME_SKINS:
+        return jsonify(
+            error="skin 只能是 " + " / ".join(database.THEME_SKINS)
+        ), 400
+    if not isinstance(mode, str) or mode not in database.THEME_MODES:
+        return jsonify(
+            error="mode 只能是 " + " / ".join(database.THEME_MODES)
+        ), 400
+
+    database.set_user_theme(g.current_user["id"], skin, mode)
+    return jsonify(ok=True)
+
+
+@app.route("/api/user/login-devices", methods=["GET"])
+@login_required
+def user_login_devices():
+    """历史登录设备：按 last_at 倒序、最多 10 条，只回短名与时间。"""
+    return jsonify(devices=database.list_login_devices(g.current_user["id"]))
 
 
 def _parse_datetime(value):

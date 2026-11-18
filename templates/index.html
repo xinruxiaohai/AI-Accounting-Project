@@ -7,34 +7,109 @@
   <meta name="description" content="智汇账 · 您的 AI 资产管家：一分钟记清每一笔，预算、日历、图表与资产一屏掌握。">
   <meta name="theme-color" content="#2563eb">
   <!-- PWA：可从浏览器「安装」到桌面，离线也能打开基本界面 -->
-  <link rel="manifest" href="/manifest.json?v=0.15.4">
-  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.4">
+  <link rel="manifest" href="/manifest.json?v=0.15.4.2">
+  <link rel="icon" type="image/png" href="/static/images/logo-main.png?v=0.15.4.2">
   <!-- v0.13.7：苹果设备添加桌面固定用主 Logo（1024 源图，iOS 自行缩放）；v0.14.0 图标路径加版本号刷新缓存 -->
-  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.4">
+  <link rel="apple-touch-icon" href="/static/images/logo-main.png?v=0.15.4.2">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="智汇账">
   <!-- Bootstrap 5 已下载到 static/vendor，本地引用，断网也能用 -->
   <link rel="stylesheet" href="/static/vendor/bootstrap.min.css">
   <!-- 自己的样式放在 Bootstrap 之后，才能覆盖它 -->
-  <link rel="stylesheet" href="/static/style.css?v=0.15.4">
-  <link rel="stylesheet" href="/static/v0142.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/style.css?v=0.15.4.2">
+  <link rel="stylesheet" href="/static/v0142.css?v=0.15.4.2">
   <!-- v0.15：顶部临时通知跑马灯（首页 / 登录页 / 注册页共用，叠在 auth-gate 之上） -->
-  <link rel="stylesheet" href="/static/v0143.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/v0143.css?v=0.15.4.2">
   <!-- v0.15：手机号绑定 / 修改弹窗（磨砂玻璃） -->
-  <link rel="stylesheet" href="/static/v01432.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/v01432.css?v=0.15.4.2">
   <!-- v0.15：移动端 UI 优化末尾覆盖层（暖色强调 / 头像入口 / 筛选折叠） -->
-  <link rel="stylesheet" href="/static/v01435.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/v01435.css?v=0.15.4.2">
   <!-- v0.15.1：六套主题配色令牌 + 可访问性覆盖层（不 bump 版本串） -->
-  <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/v0151-theme.css?v=0.15.4.2">
   <!-- v0.15.3 · Agent A：设置弹窗定尺（920×680）+ 侧边栏图标尺寸，只覆盖不重写 -->
-  <link rel="stylesheet" href="/static/settings-v0152.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/settings-v0152.css?v=0.15.4.2">
   <!-- BIZ-V0151 业务专项覆盖层（月度结账 / 周期模板 / 报销进阶） -->
-  <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/biz-v0151.css?v=0.15.4.2">
   <!-- v0.15.2：账户与分类实体图标 logo 呈现层（放在最后覆盖 object-fit） -->
-  <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/entity-icons-v0152.css?v=0.15.4.2">
   <!-- v0.15.2 · Agent A：移动端页面栈（账户 → 全屏二级页），桌面端一条规则都不生效 -->
-  <link rel="stylesheet" href="/static/mobile-stack-v0152.css?v=0.15.4">
+  <link rel="stylesheet" href="/static/mobile-stack-v0152.css?v=0.15.4.2">
+  <!-- v0.15.5：图表页新增「收支对比 / 累计结余」两张卡片的局部样式。
+       只作用于这两个 id，不改 style.css 里的既有规则；颜色一律取主题变量。 -->
+  <style>
+    /* v0.15.5 关键修复：.chart-main 在桌面端是「高度固定 + overflow-y:auto」的滚动列，
+       而 .chart-card 作为 flex 子项默认 flex-shrink:1 —— 面板从 3 块变 5 块后，
+       每块被压到 137px（scrollHeight 376 被 overflow:hidden 裁掉），图表只剩一条缝。
+       锁死为不收缩，让这一列按内容真实高度滚动。移动端是单列自然高，不受影响。 */
+    @media (min-width: 901px) {
+      #page-charts .chart-main > .panel {
+        flex: 0 0 auto;
+      }
+    }
+    #page-charts #chart-compare-card .chart-canvas,
+    #page-charts #chart-cumulative-card .chart-canvas {
+      height: 320px;
+    }
+    .chart-card-end {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--color-transfer-strong);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+    .chart-card-end.is-positive {
+      color: var(--color-income);
+    }
+    .chart-card-end.is-negative {
+      color: var(--color-expense);
+    }
+    @media (max-width: 900px) {
+      #page-charts #chart-compare-card .chart-canvas,
+      #page-charts #chart-cumulative-card .chart-canvas {
+        height: 258px;
+      }
+      .chart-card-end {
+        font-size: 11.5px;
+      }
+    }
+  </style>
+  <!-- v0.15.4 · 首帧前的主题预置（治「先白后暗」）
+       ------------------------------------------------------------------
+       真正的主题控制器在下面设置弹窗里（约 1620 行），要等解析到那里才执行；
+       这份模板 160KB + 340KB CSS，实测首次绘制在 ~104ms、控制器 ~133ms，
+       中间那 29ms 就是用户能看见的白闪。
+       这里只做一件事：把 localStorage 里已有的皮肤/模式提前打到 <html> 上，
+       让首帧就吃到正确的 CSS 变量。没存过就什么都不写（保持既有默认行为，
+       交给 script.js 与控制器去初始化），绝不在这里猜「跟随系统」。
+       取值与 LEGACY 映射必须与控制器里的 readStored() 完全一致。 -->
+  <script>
+  (function () {
+    "use strict";
+    var SKINS = { classic: 1, amber: 1, mint: 1, violet: 1, midnight: 1 };
+    var LEGACY = {
+      light: ["classic", "light"], dark: ["classic", "dark"],
+      amber: ["amber", "light"], mint: ["mint", "light"],
+      violet: ["violet", "light"], midnight: ["midnight", "dark"]
+    };
+    var skin = "";
+    var mode = "";
+    try {
+      var raw = localStorage.getItem("ai-accounting-v0151-theme");
+      if (raw && LEGACY[raw]) { skin = LEGACY[raw][0]; mode = LEGACY[raw][1]; }
+      else if (raw && SKINS[raw]) { skin = raw; }
+      var savedMode = localStorage.getItem("ai-accounting-v0151-mode");
+      if (savedMode === "light" || savedMode === "dark") { mode = savedMode; }
+    } catch (error) { return; }
+    var root = document.documentElement;
+    if (!root) { return; }
+    if (skin) { root.setAttribute("data-skin", skin); }
+    if (mode) {
+      root.setAttribute("data-mode", mode);
+      root.setAttribute("data-theme", mode);
+    }
+  })();
+  </script>
 </head>
 <body>
 
@@ -718,6 +793,8 @@
           <aside class="chart-subnav" aria-label="图表子菜单">
             <button class="chart-subnav-item active" type="button" data-chart-section="overview">收支总览</button>
             <button class="chart-subnav-item" type="button" data-chart-section="trend">极值趋势</button>
+            <button class="chart-subnav-item" type="button" data-chart-section="compare">收支对比</button>
+            <button class="chart-subnav-item" type="button" data-chart-section="cumulative">累计结余</button>
             <button class="chart-subnav-item" type="button" data-chart-section="summary">汇总表</button>
           </aside>
           <div class="chart-main">
@@ -764,6 +841,25 @@
                 </div>
               </div>
               <div class="chart-canvas" id="chart-trend-main"></div>
+            </div>
+
+            <!-- v0.15.5：收支对比（收入 + 支出双柱并列）。柱数 == 当前周期桶数，
+                 年 12 / 季 3 / 月 28-31 / 周 7，是四个周期「看出来不一样」的关键 -->
+            <div class="chart-card panel" id="chart-compare-card">
+              <div class="chart-card-head">
+                <h3>收支对比</h3>
+                <span class="chart-summary-sub" id="chart-compare-sub"></span>
+              </div>
+              <div class="chart-canvas" id="chart-compare-main"></div>
+            </div>
+
+            <!-- v0.15.5：周期内逐桶累加（收入 - 支出）的结余曲线 -->
+            <div class="chart-card panel" id="chart-cumulative-card">
+              <div class="chart-card-head">
+                <h3>累计结余</h3>
+                <span class="chart-card-end" id="chart-cumulative-end">期末累计 ¥0.00</span>
+              </div>
+              <div class="chart-canvas" id="chart-cumulative-main"></div>
             </div>
 
             <div class="chart-card panel" id="chart-summary-card">
@@ -1583,8 +1679,90 @@
             var root = document.documentElement;
             var state = { skin: "classic", mode: "light", ready: false, applying: false };
 
+            /* ---------- v0.15.4：主题跨设备同步 ----------
+               原则：本地值先渲染（绝不为等接口而留白），登录态下再拉服务端兜底；
+               用户改动先落本地、再 300ms 防抖回写服务端。
+               接口契约：GET/PUT /api/user/theme  {"skin":"amber","mode":"light"}
+               失败一律当纯本地模式，静默（不 toast、不 console.error）。 */
+            var API_THEME = "/api/user/theme";
+            var TOKEN_KEY = "ai_accounting_token";
+            var PUSH_DELAY = 300;
+            var sync = {
+              timer: 0,        // 防抖句柄
+              pending: false,  // 有未发出的改动
+              pushing: false,  // 正在「应用服务端值」，此期间 apply 不许回写
+              touched: false,  // 用户本次会话是否手动改过（防止迟到的 GET 覆盖用户选择）
+              source: "local"  // local | server，仅用于排查/验收
+            };
+
             function has(map, key) {
               return !!key && Object.prototype.hasOwnProperty.call(map, key);
+            }
+
+            function readToken() {
+              try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (error) { return ""; }
+            }
+
+            /** 静默请求：故意不用 window.fetch —— auth-v012 把它包了一层，
+                断网/5xx 会弹全局 toast 并写 console，主题同步必须毫无存在感。
+                任何异常都在内部吞掉，绝不向外抛。 */
+            function silentRequest(method, url, payload, done) {
+              if (!url || navigator.onLine === false) { done(null); return; }
+              var xhr;
+              try { xhr = new XMLHttpRequest(); } catch (error) { done(null); return; }
+              try {
+                xhr.open(method, url, true);
+                xhr.timeout = 8000;
+                xhr.setRequestHeader("Accept", "application/json");
+                if (payload) { xhr.setRequestHeader("Content-Type", "application/json"); }
+                var token = readToken();
+                if (token) { xhr.setRequestHeader("Authorization", "Bearer " + token); }
+                xhr.onload = function () {
+                  var body = null;
+                  if (xhr.status >= 200 && xhr.status < 300) {
+                    try { body = JSON.parse(xhr.responseText || "null"); } catch (error) { body = null; }
+                  }
+                  done(body);
+                };
+                xhr.onerror = xhr.ontimeout = xhr.onabort = function () { done(null); };
+                xhr.send(payload ? JSON.stringify(payload) : null);
+              } catch (error) { done(null); }
+            }
+
+            function schedulePush() {
+              sync.touched = true;
+              sync.pending = true;
+              if (sync.timer) { window.clearTimeout(sync.timer); }
+              /* 300ms 防抖：连点 5 次只发最后一条，避免把接口打成一串 */
+              sync.timer = window.setTimeout(function () {
+                sync.timer = 0;
+                flushPush();
+              }, PUSH_DELAY);
+            }
+
+            function flushPush() {
+              if (!sync.pending) { return; }
+              sync.pending = false;
+              if (!readToken()) { return; }  // 未登录：纯本地模式，不打扰服务端
+              silentRequest("PUT", API_THEME, { skin: state.skin, mode: state.mode }, function () {
+                /* 成功与否都不回滚：本地已生效，服务端下次 GET 会自然对齐 */
+              });
+            }
+
+            /** 登录态下拉一次服务端值；与本地不同才应用（并已在 apply 里回写 localStorage） */
+            function pullServer() {
+              if (!readToken()) { return; }
+              silentRequest("GET", API_THEME, null, function (body) {
+                if (!body || typeof body !== "object") { return; }
+                var skin = has(SKINS, body.skin) ? body.skin : "";
+                var mode = body.mode === "dark" ? "dark" : (body.mode === "light" ? "light" : "");
+                if (!skin || !mode) { return; }   // 服务端没存过 / 值不合法 → 保持本地
+                if (skin === state.skin && mode === state.mode) { return; }
+                if (sync.touched) { return; }     // 请求在途时用户已改过，不抢
+                sync.source = "server";
+                sync.pushing = true;              // 应用服务端值不回写，避免回环 PUT
+                try { apply(skin, mode, true); } finally { sync.pushing = false; }
+              });
             }
 
             function readStored() {
@@ -1648,6 +1826,9 @@
                 /* script.js 的顶栏日月图标与「我的」页三态单选读的是另一把键，顺带写一次保持一致。
                    这里直接 setItem、不调 applyTheme()：否则它会按 system 再算一遍深浅，把刚选的模式抢走。 */
                 try { localStorage.setItem("ai-accounting-theme", mode); } catch (error) { /* ignore */ }
+                /* v0.15.4：本地写成功后再异步回写账号（防抖 300ms）。
+                   sync.pushing 为真说明这次是「服务端值落地」，不能再 PUT 回去。 */
+                if (!sync.pushing) { schedulePush(); }
               }
               syncUi();
               if (typeof renderCharts === "function") {
@@ -1754,6 +1935,9 @@
               var lock = function () {
                 apply(state.skin, state.mode, false);
                 state.ready = true;
+                /* 本地已渲染完毕，此刻再问服务端：顺序保证「不闪烁」——
+                   任何人眼可见的换色都发生在首帧之后，且只发生一次。 */
+                pullServer();
               };
               if (document.readyState === "complete") {
                 window.setTimeout(lock, 0);
@@ -1764,9 +1948,19 @@
 
             /* 供验收脚本读取当前状态（只读，不对外暴露写入口） */
             window.__zhzTheme = {
-              state: function () { return { skin: state.skin, mode: state.mode }; },
+              state: function () {
+                return { skin: state.skin, mode: state.mode, ready: state.ready, source: sync.source };
+              },
+              /* pendingPush: 是否还有没发出去的改动（防抖窗口内） */
+              pendingPush: function () { return sync.pending; },
               apply: function (skin, mode) { apply(skin, mode, true); }
             };
+
+            /* 离开页面前把防抖窗口里那一次补发掉（只补一次，不重发已发出的） */
+            window.addEventListener("pagehide", function () {
+              if (sync.timer) { window.clearTimeout(sync.timer); sync.timer = 0; }
+              flushPush();
+            });
 
             if (document.readyState === "loading") {
               document.addEventListener("DOMContentLoaded", init, true);
@@ -1861,6 +2055,14 @@
             <button class="btn btn-outline-primary w-100" type="button" id="settings-change-password-btn"
                     data-bs-toggle="modal" data-bs-target="#change-password-modal">修改密码</button>
             <p class="settings-hint">点开后输入旧密码与新密码，浏览器不会自动填充旧密码。</p>
+          </div>
+
+          <!-- v0.15.4：最近登录设备（只读，最多 5 条；设备类型 / 城市 / 时间三样，
+               刻意不展示 IP、经纬度、街道与设备唯一标识） -->
+          <div class="settings-block">
+            <span class="settings-label">最近登录设备</span>
+            <ul class="login-device-list" id="login-device-list"></ul>
+            <p class="settings-hint">仅显示设备类型与城市，用于帮你识别异常登录。</p>
           </div>
 
           <div class="settings-group settings-danger">
@@ -2817,21 +3019,23 @@
 <script src="/static/vendor/echarts.min.js"></script>
 <!-- Sortable：分类 / 账户拖拽排序，本地引入 -->
 <script src="/static/vendor/sortable.min.js"></script>
-<script src="/static/auth-v012.js?v=0.15.4"></script>
-<script src="/static/access-guard.js?v=0.15.4"></script>
+<script src="/static/auth-v012.js?v=0.15.4.2"></script>
+<script src="/static/access-guard.js?v=0.15.4.2"></script>
 <!-- 业务逻辑：切页、三栏看板、账单表格、记账弹窗、资产页、分类管理、日历、通知、主题 -->
-<script src="/static/script.js?v=0.15.4"></script>
+<script src="/static/script.js?v=0.15.4.2"></script>
 <!-- v0.15.2 · Agent A：包装 script.js 的 selectAccount，实现移动端页面栈（不改 script.js 本体） -->
-<script src="/static/mobile-stack-v0152.js?v=0.15.4" defer></script>
+<script src="/static/mobile-stack-v0152.js?v=0.15.4.2" defer></script>
   <!-- BIZ-V0151 业务专项：独立 JS，避免与 F 并行期的 script.js 冲突 -->
-  <script src="/static/biz-v0151.js?v=0.15.4"></script>
+  <script src="/static/biz-v0151.js?v=0.15.4.2"></script>
 <!-- v0.15：全局跑马灯。放在 script.js 之后，才能拿到 window.__zhRefresh -->
-<script src="/static/marquee-v0143.js?v=0.15.4" defer></script>
-<script src="/static/charts-v013.js?v=0.15.4"></script>
+<script src="/static/marquee-v0143.js?v=0.15.4.2" defer></script>
+<script src="/static/charts-v013.js?v=0.15.4.2"></script>
 <!-- v0.13.3：投资账户双视图看板（持仓 / 流水），依赖 script.js 的公共设施，必须放在它之后 -->
-<script src="/static/invest-v0133.js?v=0.15.4"></script>
+<script src="/static/invest-v0133.js?v=0.15.4.2"></script>
 <!-- v0.14.2：我的反馈对话流（依赖 script.js 的工单列表，必须放在它之后）；v0.15.3 起权限管理面板已从用户端移除 -->
-<script src="/static/user-feedback-v0142.js?v=0.15.4"></script>
+<script src="/static/user-feedback-v0142.js?v=0.15.4.2"></script>
+<!-- v0.15.4：设置页「最近登录设备」面板（按需加载，独立于 script.js） -->
+<script src="/static/login-devices-v0154.js?v=0.15.4.2"></script>
 
 </body>
 </html>

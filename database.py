@@ -7043,6 +7043,154 @@ def update_help_content(
     return get_help_raw()
 
 
+# ---------------- v0.15.4：主题跨设备同步 + 历史登录设备（复用 app_settings，零 DDL） ----------------
+#
+# 存储方案是既定契约：只用现有的 app_settings(key TEXT PRIMARY KEY, value TEXT)，
+# 不建表、不加列、不动 records / notifications，也不碰 Base.metadata。
+#   user_theme:<uid>                 → {"skin": "amber", "mode": "light"}
+#   login_device:<uid>:<指纹 16 位>   → {"device": "...", "browser": "...", "city": "...", "last_at": "..."}
+# 指纹 = sha1(device|browser|city)[:16]：同一台设备的 key 恒定，重复登录只刷新 last_at。
+
+THEME_SKINS = ("classic", "amber", "mint", "violet", "midnight")
+THEME_MODES = ("light", "dark")
+DEFAULT_THEME = {"skin": "classic", "mode": "light"}
+MAX_LOGIN_DEVICES = 10
+
+
+def _theme_key(uid):
+    return "user_theme:%d" % int(uid)
+
+
+def _login_device_prefix(uid):
+    return "login_device:%d:" % int(uid)
+
+
+def login_device_fingerprint(device, browser, city):
+    """sha1("设备|浏览器|城市") 前 16 位。"""
+    raw = "%s|%s|%s" % (device or "", browser or "", city or "")
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_setting_json(key, default=None):
+    """读 app_settings 里的 JSON；缺失 / 脏数据一律回落 default（绝不抛错）。"""
+    try:
+        raw = get_app_setting(key, "")
+    except Exception:
+        return default
+    if not raw:
+        return default
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return default
+    return data if isinstance(data, dict) else default
+
+
+def get_user_theme(uid):
+    """读跨设备主题；值缺失 / 非枚举值回落到 classic + light。"""
+    data = _load_setting_json(_theme_key(uid), {}) or {}
+    skin = data.get("skin")
+    mode = data.get("mode")
+    return {
+        "skin": skin if skin in THEME_SKINS else DEFAULT_THEME["skin"],
+        "mode": mode if mode in THEME_MODES else DEFAULT_THEME["mode"],
+    }
+
+
+def set_user_theme(uid, skin, mode):
+    """写主题（枚举校验）；非法值抛 RecordError，由路由转 400。"""
+    if not isinstance(skin, str) or skin not in THEME_SKINS:
+        raise RecordError("skin 只能是 %s" % " / ".join(THEME_SKINS))
+    if not isinstance(mode, str) or mode not in THEME_MODES:
+        raise RecordError("mode 只能是 %s" % " / ".join(THEME_MODES))
+    set_app_setting(
+        _theme_key(uid),
+        json.dumps({"skin": skin, "mode": mode}, ensure_ascii=False),
+    )
+    return {"skin": skin, "mode": mode}
+
+
+def _login_device_rows(uid):
+    """读出某用户全部设备记录（含内部 key），按 last_at 倒序。"""
+    prefix = _login_device_prefix(uid)
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM app_settings WHERE key LIKE ?", (prefix + "%",)
+        ).fetchall()
+    finally:
+        conn.close()
+
+    devices = []
+    for row in rows:
+        key = row["key"]
+        if not str(key)[len(prefix):]:
+            continue
+        data = _load_setting_json(key, None)
+        if data is None:
+            continue
+        devices.append(
+            {
+                "key": key,
+                "device": str(data.get("device") or "未知设备"),
+                "browser": str(data.get("browser") or "未知浏览器"),
+                "city": str(data.get("city") or "未知地区"),
+                "last_at": str(data.get("last_at") or ""),
+            }
+        )
+    devices.sort(key=lambda item: item["last_at"], reverse=True)
+    return devices
+
+
+def _prune_login_devices(uid, keep=MAX_LOGIN_DEVICES):
+    """只留最近 keep 条：避免「每次换城市就多一条」把 app_settings 撑大。"""
+    rows = _login_device_rows(uid)
+    stale = rows[keep:]
+    if not stale:
+        return
+    conn = get_conn()
+    try:
+        with conn:
+            for row in stale:
+                conn.execute("DELETE FROM app_settings WHERE key = ?", (row["key"],))
+    finally:
+        conn.close()
+
+
+def record_login_device(uid, device, browser, city):
+    """登录成功时记设备：同一指纹只刷新 last_at，不新增记录。"""
+    key = _login_device_prefix(uid) + login_device_fingerprint(device, browser, city)
+    previous = _load_setting_json(key, {}) or {}
+    payload = {
+        # 同设备重复登录保留首次识别结果，只把最后登录时间往后推
+        "device": previous.get("device") or device,
+        "browser": previous.get("browser") or browser,
+        "city": previous.get("city") or city,
+        "last_at": _feedback_now(),
+    }
+    set_app_setting(key, json.dumps(payload, ensure_ascii=False))
+    _prune_login_devices(uid)
+    return payload
+
+
+def list_login_devices(uid, limit=MAX_LOGIN_DEVICES):
+    """对外只回 device / browser / city / last_at：绝不带 IP、经纬度、UA 原文、token。"""
+    rows = _login_device_rows(uid)
+    try:
+        keep = max(1, int(limit))
+    except (TypeError, ValueError):
+        keep = MAX_LOGIN_DEVICES
+    return [
+        {
+            "device": row["device"],
+            "browser": row["browser"],
+            "city": row["city"],
+            "last_at": row["last_at"],
+        }
+        for row in rows[:keep]
+    ]
+
+
 # 用户反馈：问题描述上限、联系方式类型白名单、10 秒防刷
 MAX_FEEDBACK_LENGTH = 2000
 MAX_FEEDBACK_CONTACT_LENGTH = 100
